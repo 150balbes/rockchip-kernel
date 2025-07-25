@@ -40,7 +40,6 @@ enum ksm_test_name {
 	CHECK_KSM_NUMA_MERGE,
 	KSM_MERGE_TIME,
 	KSM_MERGE_TIME_HUGE_PAGES,
-	KSM_UNMERGE_TIME,
 	KSM_COW_TIME
 };
 
@@ -109,10 +108,7 @@ static void print_help(void)
 	       " -P evaluate merging time and speed.\n"
 	       "    For this test, the size of duplicated memory area (in MiB)\n"
 	       "    must be provided using -s option\n"
-	       " -H evaluate merging time and speed of area allocated mostly with huge pages\n"
-	       "    For this test, the size of duplicated memory area (in MiB)\n"
-	       "    must be provided using -s option\n"
-	       " -D evaluate unmerging time and speed when disabling KSM.\n"
+				 " -H evaluate merging time and speed of area allocated mostly with huge pages\n"
 	       "    For this test, the size of duplicated memory area (in MiB)\n"
 	       "    must be provided using -s option\n"
 	       " -C evaluate the time required to break COW of merged pages.\n\n");
@@ -189,16 +185,6 @@ static int ksm_merge_pages(void *addr, size_t size, struct timespec start_time, 
 	if (ksm_do_scan(2, start_time, timeout))
 		return 1;
 
-	return 0;
-}
-
-static int ksm_unmerge_pages(void *addr, size_t size,
-			     struct timespec start_time, int timeout)
-{
-	if (madvise(addr, size, MADV_UNMERGEABLE)) {
-		perror("madvise");
-		return 1;
-	}
 	return 0;
 }
 
@@ -484,7 +470,7 @@ static int ksm_merge_hugepages_time(int mapping, int prot, int timeout, size_t m
 	if (map_ptr_orig == MAP_FAILED)
 		err(2, "initial mmap");
 
-	if (madvise(map_ptr, len + HPAGE_SIZE, MADV_HUGEPAGE))
+	if (madvise(map_ptr, len, MADV_HUGEPAGE))
 		err(2, "MADV_HUGEPAGE");
 
 	pagemap_fd = open("/proc/self/pagemap", O_RDONLY);
@@ -550,53 +536,6 @@ static int ksm_merge_time(int mapping, int prot, int timeout, size_t map_size)
 		goto err_out;
 	}
 	if (ksm_merge_pages(map_ptr, map_size, start_time, timeout))
-		goto err_out;
-	if (clock_gettime(CLOCK_MONOTONIC_RAW, &end_time)) {
-		perror("clock_gettime");
-		goto err_out;
-	}
-
-	scan_time_ns = (end_time.tv_sec - start_time.tv_sec) * NSEC_PER_SEC +
-		       (end_time.tv_nsec - start_time.tv_nsec);
-
-	printf("Total size:    %lu MiB\n", map_size / MB);
-	printf("Total time:    %ld.%09ld s\n", scan_time_ns / NSEC_PER_SEC,
-	       scan_time_ns % NSEC_PER_SEC);
-	printf("Average speed:  %.3f MiB/s\n", (map_size / MB) /
-					       ((double)scan_time_ns / NSEC_PER_SEC));
-
-	munmap(map_ptr, map_size);
-	return KSFT_PASS;
-
-err_out:
-	printf("Not OK\n");
-	munmap(map_ptr, map_size);
-	return KSFT_FAIL;
-}
-
-static int ksm_unmerge_time(int mapping, int prot, int timeout, size_t map_size)
-{
-	void *map_ptr;
-	struct timespec start_time, end_time;
-	unsigned long scan_time_ns;
-
-	map_size *= MB;
-
-	map_ptr = allocate_memory(NULL, prot, mapping, '*', map_size);
-	if (!map_ptr)
-		return KSFT_FAIL;
-	if (clock_gettime(CLOCK_MONOTONIC_RAW, &start_time)) {
-		perror("clock_gettime");
-		goto err_out;
-	}
-	if (ksm_merge_pages(map_ptr, map_size, start_time, timeout))
-		goto err_out;
-
-	if (clock_gettime(CLOCK_MONOTONIC_RAW, &start_time)) {
-		perror("clock_gettime");
-		goto err_out;
-	}
-	if (ksm_unmerge_pages(map_ptr, map_size, start_time, timeout))
 		goto err_out;
 	if (clock_gettime(CLOCK_MONOTONIC_RAW, &end_time)) {
 		perror("clock_gettime");
@@ -705,7 +644,7 @@ int main(int argc, char *argv[])
 	bool merge_across_nodes = KSM_MERGE_ACROSS_NODES_DEFAULT;
 	long size_MB = 0;
 
-	while ((opt = getopt(argc, argv, "ha:p:l:z:m:s:MUZNPCHD")) != -1) {
+	while ((opt = getopt(argc, argv, "ha:p:l:z:m:s:MUZNPCH")) != -1) {
 		switch (opt) {
 		case 'a':
 			prot = str_to_prot(optarg);
@@ -761,9 +700,6 @@ int main(int argc, char *argv[])
 			break;
 		case 'H':
 			test_name = KSM_MERGE_TIME_HUGE_PAGES;
-			break;
-		case 'D':
-			test_name = KSM_UNMERGE_TIME;
 			break;
 		case 'C':
 			test_name = KSM_COW_TIME;
@@ -825,14 +761,6 @@ int main(int argc, char *argv[])
 		}
 		ret = ksm_merge_hugepages_time(MAP_PRIVATE | MAP_ANONYMOUS, prot,
 				ksm_scan_limit_sec, size_MB);
-		break;
-	case KSM_UNMERGE_TIME:
-		if (size_MB == 0) {
-			printf("Option '-s' is required.\n");
-			return KSFT_FAIL;
-		}
-		ret = ksm_unmerge_time(MAP_PRIVATE | MAP_ANONYMOUS, prot,
-				       ksm_scan_limit_sec, size_MB);
 		break;
 	case KSM_COW_TIME:
 		ret = ksm_cow_time(MAP_PRIVATE | MAP_ANONYMOUS, prot, ksm_scan_limit_sec,

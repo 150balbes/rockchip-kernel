@@ -25,6 +25,7 @@
 #include <linux/sched/task_stack.h>
 
 #include <linux/delay.h>
+#include <linux/notifier.h>
 #include <linux/panic_notifier.h>
 #include <linux/ptrace.h>
 #include <linux/screen_info.h>
@@ -36,7 +37,6 @@
 #include <linux/dma-map-ops.h>
 #include <linux/pci.h>
 #include <clocksource/hyperv_timer.h>
-#include <asm/mshyperv.h>
 #include "hyperv_vmbus.h"
 
 struct vmbus_dynid {
@@ -68,73 +68,52 @@ static int hyperv_report_reg(void)
 	return !sysctl_record_panic_msg || !hv_panic_page;
 }
 
-/*
- * The panic notifier below is responsible solely for unloading the
- * vmbus connection, which is necessary in a panic event.
- *
- * Notice an intrincate relation of this notifier with Hyper-V
- * framebuffer panic notifier exists - we need vmbus connection alive
- * there in order to succeed, so we need to order both with each other
- * [see hvfb_on_panic()] - this is done using notifiers' priorities.
- */
-static int hv_panic_vmbus_unload(struct notifier_block *nb, unsigned long val,
+static int hyperv_panic_event(struct notifier_block *nb, unsigned long val,
 			      void *args)
 {
-	vmbus_initiate_unload(true);
-	return NOTIFY_DONE;
-}
-static struct notifier_block hyperv_panic_vmbus_unload_block = {
-	.notifier_call	= hv_panic_vmbus_unload,
-	.priority	= INT_MIN + 1, /* almost the latest one to execute */
-};
-
-static int hv_die_panic_notify_crash(struct notifier_block *self,
-				     unsigned long val, void *args);
-
-static struct notifier_block hyperv_die_report_block = {
-	.notifier_call = hv_die_panic_notify_crash,
-};
-static struct notifier_block hyperv_panic_report_block = {
-	.notifier_call = hv_die_panic_notify_crash,
-};
-
-/*
- * The following callback works both as die and panic notifier; its
- * goal is to provide panic information to the hypervisor unless the
- * kmsg dumper is used [see hv_kmsg_dump()], which provides more
- * information but isn't always available.
- *
- * Notice that both the panic/die report notifiers are registered only
- * if we have the capability HV_FEATURE_GUEST_CRASH_MSR_AVAILABLE set.
- */
-static int hv_die_panic_notify_crash(struct notifier_block *self,
-				     unsigned long val, void *args)
-{
 	struct pt_regs *regs;
-	bool is_die;
 
-	/* Don't notify Hyper-V unless we have a die oops event or panic. */
-	if (self == &hyperv_panic_report_block) {
-		is_die = false;
-		regs = current_pt_regs();
-	} else { /* die event */
-		if (val != DIE_OOPS)
-			return NOTIFY_DONE;
-
-		is_die = true;
-		regs = ((struct die_args *)args)->regs;
-	}
+	vmbus_initiate_unload(true);
 
 	/*
-	 * Hyper-V should be notified only once about a panic/die. If we will
-	 * be calling hv_kmsg_dump() later with kmsg data, don't do the
-	 * notification here.
+	 * Hyper-V should be notified only once about a panic.  If we will be
+	 * doing hv_kmsg_dump() with kmsg data later, don't do the notification
+	 * here.
 	 */
-	if (hyperv_report_reg())
-		hyperv_report_panic(regs, val, is_die);
-
+	if (ms_hyperv.misc_features & HV_FEATURE_GUEST_CRASH_MSR_AVAILABLE
+	    && hyperv_report_reg()) {
+		regs = current_pt_regs();
+		hyperv_report_panic(regs, val, false);
+	}
 	return NOTIFY_DONE;
 }
+
+static int hyperv_die_event(struct notifier_block *nb, unsigned long val,
+			    void *args)
+{
+	struct die_args *die = args;
+	struct pt_regs *regs = die->regs;
+
+	/* Don't notify Hyper-V if the die event is other than oops */
+	if (val != DIE_OOPS)
+		return NOTIFY_DONE;
+
+	/*
+	 * Hyper-V should be notified only once about a panic.  If we will be
+	 * doing hv_kmsg_dump() with kmsg data later, don't do the notification
+	 * here.
+	 */
+	if (hyperv_report_reg())
+		hyperv_report_panic(regs, val, true);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block hyperv_die_block = {
+	.notifier_call = hyperv_die_event,
+};
+static struct notifier_block hyperv_panic_block = {
+	.notifier_call = hyperv_panic_event,
+};
 
 static const char *fb_mmio_name = "fb_range";
 static struct resource *fb_mmio;
@@ -1525,7 +1504,7 @@ static int vmbus_bus_init(void)
 	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "hyperv/vmbus:online",
 				hv_synic_init, hv_synic_cleanup);
 	if (ret < 0)
-		goto err_cpuhp;
+		goto err_alloc;
 	hyperv_cpuhp_online = ret;
 
 	ret = vmbus_connect();
@@ -1559,17 +1538,16 @@ static int vmbus_bus_init(void)
 		if (hyperv_crash_ctl & HV_CRASH_CTL_CRASH_NOTIFY_MSG)
 			hv_kmsg_dump_register();
 
-		register_die_notifier(&hyperv_die_report_block);
-		atomic_notifier_chain_register(&panic_notifier_list,
-						&hyperv_panic_report_block);
+		register_die_notifier(&hyperv_die_block);
 	}
 
 	/*
-	 * Always register the vmbus unload panic notifier because we
-	 * need to shut the VMbus channel connection on panic.
+	 * Always register the panic notifier because we need to unload
+	 * the VMbus channel connection to prevent any VMbus
+	 * activity after the VM panics.
 	 */
 	atomic_notifier_chain_register(&panic_notifier_list,
-			       &hyperv_panic_vmbus_unload_block);
+			       &hyperv_panic_block);
 
 	vmbus_request_offers();
 
@@ -1577,9 +1555,8 @@ static int vmbus_bus_init(void)
 
 err_connect:
 	cpuhp_remove_state(hyperv_cpuhp_online);
-err_cpuhp:
-	hv_synic_free();
 err_alloc:
+	hv_synic_free();
 	if (vmbus_irq == -1) {
 		hv_remove_vmbus_handler();
 	} else {
@@ -2262,7 +2239,7 @@ static acpi_status vmbus_walk_resources(struct acpi_resource *res, void *ctx)
 	return AE_OK;
 }
 
-static void vmbus_acpi_remove(struct acpi_device *device)
+static int vmbus_acpi_remove(struct acpi_device *device)
 {
 	struct resource *cur_res;
 	struct resource *next_res;
@@ -2279,6 +2256,8 @@ static void vmbus_acpi_remove(struct acpi_device *device)
 			kfree(cur_res);
 		}
 	}
+
+	return 0;
 }
 
 static void vmbus_reserve_fb(void)
@@ -2473,7 +2452,8 @@ static int vmbus_acpi_add(struct acpi_device *device)
 	 * Some ancestor of the vmbus acpi device (Gen1 or Gen2
 	 * firmware) is the VMOD that has the mmio ranges. Get that.
 	 */
-	for (ancestor = acpi_dev_parent(device); ancestor;
+	for (ancestor = acpi_dev_parent(device);
+	     ancestor && ancestor->handle != ACPI_ROOT_OBJECT;
 	     ancestor = acpi_dev_parent(ancestor)) {
 		result = acpi_walk_resources(ancestor->handle, METHOD_NAME__CRS,
 					     vmbus_walk_resources, NULL);
@@ -2820,17 +2800,15 @@ static void __exit vmbus_exit(void)
 
 	if (ms_hyperv.misc_features & HV_FEATURE_GUEST_CRASH_MSR_AVAILABLE) {
 		kmsg_dump_unregister(&hv_kmsg_dumper);
-		unregister_die_notifier(&hyperv_die_report_block);
-		atomic_notifier_chain_unregister(&panic_notifier_list,
-						&hyperv_panic_report_block);
+		unregister_die_notifier(&hyperv_die_block);
 	}
 
 	/*
-	 * The vmbus panic notifier is always registered, hence we should
+	 * The panic notifier is always registered, hence we should
 	 * also unconditionally unregister it here as well.
 	 */
 	atomic_notifier_chain_unregister(&panic_notifier_list,
-					&hyperv_panic_vmbus_unload_block);
+					 &hyperv_panic_block);
 
 	free_page((unsigned long)hv_panic_page);
 	unregister_sysctl_table(hv_ctl_table_hdr);

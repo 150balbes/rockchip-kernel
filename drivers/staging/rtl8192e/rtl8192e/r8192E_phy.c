@@ -522,8 +522,9 @@ static bool _rtl92e_bb_config_para_file(struct net_device *dev)
 		rtStatus  = rtl92e_check_bb_and_rf(dev,
 						   (enum hw90_block)eCheckItem,
 						   (enum rf90_radio_path)0);
-		if (!rtStatus)
+		if (!rtStatus) {
 			return rtStatus;
+		}
 	}
 	rtl92e_set_bb_reg(dev, rFPGA0_RFMOD, bCCKEn|bOFDMEn, 0x0);
 	_rtl92e_phy_config_bb(dev, BaseBand_Config_PHY_REG);
@@ -1008,16 +1009,16 @@ static void _rtl92e_cck_tx_power_track_bw_switch_tssi(struct net_device *dev)
 
 	switch (priv->CurrentChannelBW) {
 	case HT_CHANNEL_WIDTH_20:
-		priv->cck_present_attn =
+		priv->CCKPresentAttentuation =
 			priv->CCKPresentAttentuation_20Mdefault +
 			    priv->CCKPresentAttentuation_difference;
 
-		if (priv->cck_present_attn >
+		if (priv->CCKPresentAttentuation >
 		    (CCKTxBBGainTableLength-1))
-			priv->cck_present_attn =
+			priv->CCKPresentAttentuation =
 					 CCKTxBBGainTableLength-1;
-		if (priv->cck_present_attn < 0)
-			priv->cck_present_attn = 0;
+		if (priv->CCKPresentAttentuation < 0)
+			priv->CCKPresentAttentuation = 0;
 
 		if (priv->rtllib->current_network.channel == 14 &&
 		    !priv->bcck_in_ch14) {
@@ -1033,16 +1034,16 @@ static void _rtl92e_cck_tx_power_track_bw_switch_tssi(struct net_device *dev)
 		break;
 
 	case HT_CHANNEL_WIDTH_20_40:
-		priv->cck_present_attn =
+		priv->CCKPresentAttentuation =
 			priv->CCKPresentAttentuation_40Mdefault +
 			priv->CCKPresentAttentuation_difference;
 
-		if (priv->cck_present_attn >
+		if (priv->CCKPresentAttentuation >
 		    (CCKTxBBGainTableLength - 1))
-			priv->cck_present_attn =
+			priv->CCKPresentAttentuation =
 					 CCKTxBBGainTableLength-1;
-		if (priv->cck_present_attn < 0)
-			priv->cck_present_attn = 0;
+		if (priv->CCKPresentAttentuation < 0)
+			priv->CCKPresentAttentuation = 0;
 
 		if (priv->rtllib->current_network.channel == 14 &&
 		    !priv->bcck_in_ch14) {
@@ -1303,8 +1304,8 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 				       enum rt_rf_power_state rf_power_state)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	struct rt_pwr_save_ctrl *psc = (struct rt_pwr_save_ctrl *)
-					(&priv->rtllib->pwr_save_ctrl);
+	struct rt_pwr_save_ctrl *pPSC = (struct rt_pwr_save_ctrl *)
+					(&(priv->rtllib->PowerSaveControl));
 	bool bResult = true;
 	u8	i = 0, QueueID = 0;
 	struct rtl8192_tx_ring  *ring = NULL;
@@ -1318,12 +1319,13 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 		switch (rf_power_state) {
 		case rf_on:
 			if ((priv->rtllib->rf_power_state == rf_off) &&
-			     RT_IN_PS_LEVEL(psc, RT_RF_OFF_LEVL_HALT_NIC)) {
+			     RT_IN_PS_LEVEL(pPSC, RT_RF_OFF_LEVL_HALT_NIC)) {
 				bool rtstatus;
 				u32 InitilizeCount = 3;
 
 				do {
 					InitilizeCount--;
+					priv->RegRfOff = false;
 					rtstatus = rtl92e_enable_nic(dev);
 				} while (!rtstatus && (InitilizeCount > 0));
 
@@ -1335,14 +1337,14 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 					return false;
 				}
 
-				RT_CLEAR_PS_LEVEL(psc,
+				RT_CLEAR_PS_LEVEL(pPSC,
 						  RT_RF_OFF_LEVL_HALT_NIC);
 			} else {
 				rtl92e_writeb(dev, ANAPAR, 0x37);
 				mdelay(1);
 				rtl92e_set_bb_reg(dev, rFPGA0_AnalogParameter1,
 						 0x4, 0x1);
-				priv->hw_rf_off_action = 0;
+				priv->bHwRfOffAction = 0;
 
 				rtl92e_set_bb_reg(dev, rFPGA0_XA_RFInterfaceOE,
 						  BIT4, 0x1);
@@ -1377,8 +1379,9 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 					i++;
 				}
 
-				if (i >= MAX_DOZE_WAITING_TIMES_9x)
+				if (i >= MAX_DOZE_WAITING_TIMES_9x) {
 					break;
+				}
 			}
 			rtl92e_set_rf_off(dev);
 			break;
@@ -1395,15 +1398,16 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 					i++;
 				}
 
-				if (i >= MAX_DOZE_WAITING_TIMES_9x)
+				if (i >= MAX_DOZE_WAITING_TIMES_9x) {
 					break;
+				}
 			}
 
-			if (psc->RegRfPsLevel & RT_RF_OFF_LEVL_HALT_NIC &&
-			    !RT_IN_PS_LEVEL(psc, RT_RF_OFF_LEVL_HALT_NIC)) {
+			if (pPSC->RegRfPsLevel & RT_RF_OFF_LEVL_HALT_NIC &&
+			    !RT_IN_PS_LEVEL(pPSC, RT_RF_OFF_LEVL_HALT_NIC)) {
 				rtl92e_disable_nic(dev);
-				RT_SET_PS_LEVEL(psc, RT_RF_OFF_LEVL_HALT_NIC);
-			} else if (!(psc->RegRfPsLevel &
+				RT_SET_PS_LEVEL(pPSC, RT_RF_OFF_LEVL_HALT_NIC);
+			} else if (!(pPSC->RegRfPsLevel &
 				   RT_RF_OFF_LEVL_HALT_NIC)) {
 				rtl92e_set_rf_off(dev);
 			}
@@ -1450,7 +1454,7 @@ bool rtl92e_set_rf_power_state(struct net_device *dev,
 	bool bResult = false;
 
 	if (rf_power_state == priv->rtllib->rf_power_state &&
-	    priv->hw_rf_off_action == 0) {
+	    priv->bHwRfOffAction == 0) {
 		return bResult;
 	}
 

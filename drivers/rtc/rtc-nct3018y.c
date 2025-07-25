@@ -452,7 +452,8 @@ static const struct rtc_class_ops nct3018y_rtc_ops = {
 	.ioctl		= nct3018y_ioctl,
 };
 
-static int nct3018y_probe(struct i2c_client *client)
+static int nct3018y_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct nct3018y *nct3018y;
 	int err, flags;
@@ -540,7 +541,7 @@ static struct i2c_driver nct3018y_driver = {
 		.name	= "rtc-nct3018y",
 		.of_match_table = of_match_ptr(nct3018y_of_match),
 	},
-	.probe_new	= nct3018y_probe,
+	.probe		= nct3018y_probe,
 	.id_table	= nct3018y_id,
 };
 

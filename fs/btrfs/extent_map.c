@@ -3,7 +3,6 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-#include "messages.h"
 #include "ctree.h"
 #include "volumes.h"
 #include "extent_map.h"
@@ -28,9 +27,12 @@ void __cold extent_map_exit(void)
 	kmem_cache_destroy(extent_map_cache);
 }
 
-/*
- * Initialize the extent tree @tree.  Should be called for each new inode or
- * other user of the extent_map interface.
+/**
+ * extent_map_tree_init - initialize extent map tree
+ * @tree:		tree to initialize
+ *
+ * Initialize the extent tree @tree.  Should be called for each new inode
+ * or other user of the extent_map interface.
  */
 void extent_map_tree_init(struct extent_map_tree *tree)
 {
@@ -39,9 +41,12 @@ void extent_map_tree_init(struct extent_map_tree *tree)
 	rwlock_init(&tree->lock);
 }
 
-/*
- * Allocate a new extent_map structure.  The new structure is returned with a
- * reference count of one and needs to be freed using free_extent_map()
+/**
+ * alloc_extent_map - allocate new extent map structure
+ *
+ * Allocate a new extent_map structure.  The new structure is
+ * returned with a reference count of one and needs to be
+ * freed using free_extent_map()
  */
 struct extent_map *alloc_extent_map(void)
 {
@@ -56,9 +61,12 @@ struct extent_map *alloc_extent_map(void)
 	return em;
 }
 
-/*
- * Drop the reference out on @em by one and free the structure if the reference
- * count hits zero.
+/**
+ * free_extent_map - drop reference count of an extent_map
+ * @em:		extent map being released
+ *
+ * Drops the reference out on @em by one and free the structure
+ * if the reference count hits zero.
  */
 void free_extent_map(struct extent_map *em)
 {
@@ -73,7 +81,7 @@ void free_extent_map(struct extent_map *em)
 	}
 }
 
-/* Do the math around the end of an extent, handling wrapping. */
+/* simple helper to do math around the end of an extent, handling wrap */
 static u64 range_end(u64 start, u64 len)
 {
 	if (start + len < start)
@@ -129,8 +137,8 @@ static int tree_insert(struct rb_root_cached *root, struct extent_map *em)
 }
 
 /*
- * Search through the tree for an extent_map with a given offset.  If it can't
- * be found, try to find some neighboring extents
+ * search through the tree for an extent_map with a given offset.  If
+ * it can't be found, try to find some neighboring extents
  */
 static struct rb_node *__tree_search(struct rb_root *root, u64 offset,
 				     struct rb_node **prev_or_next_ret)
@@ -182,7 +190,7 @@ static struct rb_node *__tree_search(struct rb_root *root, u64 offset,
 	return NULL;
 }
 
-/* Check to see if two extent_map structs are adjacent and safe to merge. */
+/* check to see if two extent_map structs are adjacent and safe to merge */
 static int mergable_maps(struct extent_map *prev, struct extent_map *next)
 {
 	if (test_bit(EXTENT_FLAG_PINNED, &prev->flags))
@@ -280,9 +288,8 @@ static void try_merge_map(struct extent_map_tree *tree, struct extent_map *em)
 	}
 }
 
-/*
- * Unpin an extent from the cache.
- *
+/**
+ * unpin_extent_cache - unpin an extent from the cache
  * @tree:	tree to unpin the extent in
  * @start:	logical offset in the file
  * @len:	length of the extent
@@ -385,7 +392,7 @@ static void extent_map_device_clear_bits(struct extent_map *em, unsigned bits)
 	}
 }
 
-/*
+/**
  * Add new extent map to the extent tree
  *
  * @tree:	tree to insert new map in
@@ -444,9 +451,8 @@ __lookup_extent_mapping(struct extent_map_tree *tree,
 	return em;
 }
 
-/*
- * Lookup extent_map that intersects @start + @len range.
- *
+/**
+ * lookup_extent_mapping - lookup extent_map
  * @tree:	tree to lookup in
  * @start:	byte offset to start the search
  * @len:	length of the lookup range
@@ -462,9 +468,8 @@ struct extent_map *lookup_extent_mapping(struct extent_map_tree *tree,
 	return __lookup_extent_mapping(tree, start, len, 1);
 }
 
-/*
- * Find a nearby extent map intersecting @start + @len (not an exact search).
- *
+/**
+ * search_extent_mapping - find a nearby extent map
  * @tree:	tree to lookup in
  * @start:	byte offset to start the search
  * @len:	length of the lookup range
@@ -480,14 +485,13 @@ struct extent_map *search_extent_mapping(struct extent_map_tree *tree,
 	return __lookup_extent_mapping(tree, start, len, 0);
 }
 
-/*
- * Remove an extent_map from the extent tree.
- *
+/**
+ * remove_extent_mapping - removes an extent_map from the extent tree
  * @tree:	extent tree to remove from
  * @em:		extent map being removed
  *
- * Remove @em from @tree.  No reference counts are dropped, and no checks
- * are done to see if the range is in use.
+ * Removes @em from @tree.  No reference counts are dropped, and no checks
+ * are done to see if the range is in use
  */
 void remove_extent_mapping(struct extent_map_tree *tree, struct extent_map *em)
 {
@@ -527,6 +531,35 @@ static struct extent_map *next_extent_map(const struct extent_map *em)
 	if (!next)
 		return NULL;
 	return container_of(next, struct extent_map, rb_node);
+}
+
+/*
+ * Get the extent map that immediately follows another one.
+ *
+ * @tree:       The extent map tree that the extent map belong to.
+ *              Holding read or write access on the tree's lock is required.
+ * @em:         An extent map from the given tree. The caller must ensure that
+ *              between getting @em and between calling this function, the
+ *              extent map @em is not removed from the tree - for example, by
+ *              holding the tree's lock for the duration of those 2 operations.
+ *
+ * Returns the extent map that immediately follows @em, or NULL if @em is the
+ * last extent map in the tree.
+ */
+struct extent_map *btrfs_next_extent_map(const struct extent_map_tree *tree,
+					 const struct extent_map *em)
+{
+	struct extent_map *next;
+
+	/* The lock must be acquired either in read mode or write mode. */
+	lockdep_assert_held(&tree->lock);
+	ASSERT(extent_map_in_tree(em));
+
+	next = next_extent_map(em);
+	if (next)
+		refcount_inc(&next->refs);
+
+	return next;
 }
 
 static struct extent_map *prev_extent_map(struct extent_map *em)
@@ -581,8 +614,8 @@ static noinline int merge_extent_mapping(struct extent_map_tree *em_tree,
 	return add_extent_mapping(em_tree, em, 0);
 }
 
-/*
- * Add extent mapping into em_tree.
+/**
+ * Add extent mapping into em_tree
  *
  * @fs_info:  the filesystem
  * @em_tree:  extent tree into which we want to insert the extent mapping
@@ -608,13 +641,6 @@ int btrfs_add_extent_mapping(struct btrfs_fs_info *fs_info,
 {
 	int ret;
 	struct extent_map *em = *em_in;
-
-	/*
-	 * Tree-checker should have rejected any inline extent with non-zero
-	 * file offset. Here just do a sanity check.
-	 */
-	if (em->block_start == EXTENT_MAP_INLINE)
-		ASSERT(em->start == 0);
 
 	ret = add_extent_mapping(em_tree, em, 0);
 	/* it is possible that someone inserted the extent into the tree
@@ -758,12 +784,16 @@ void btrfs_drop_extent_map_range(struct btrfs_inode *inode, u64 start, u64 end,
 
 		if (skip_pinned && test_bit(EXTENT_FLAG_PINNED, &em->flags)) {
 			start = em_end;
-			if (end != (u64)-1)
-				len = start + len - em_end;
 			goto next;
 		}
 
+		flags = em->flags;
 		clear_bit(EXTENT_FLAG_PINNED, &em->flags);
+		/*
+		 * In case we split the extent map, we want to preserve the
+		 * EXTENT_FLAG_LOGGING flag on our extent map, but we don't want
+		 * it on the new extent maps.
+		 */
 		clear_bit(EXTENT_FLAG_LOGGING, &flags);
 		modified = !list_empty(&em->list);
 
@@ -774,7 +804,6 @@ void btrfs_drop_extent_map_range(struct btrfs_inode *inode, u64 start, u64 end,
 		if (em->start >= start && em_end <= end)
 			goto remove_em;
 
-		flags = em->flags;
 		gen = em->generation;
 		compressed = test_bit(EXTENT_FLAG_COMPRESSED, &em->flags);
 
@@ -822,8 +851,8 @@ void btrfs_drop_extent_map_range(struct btrfs_inode *inode, u64 start, u64 end,
 				if (!split)
 					goto remove_em;
 			}
-			split->start = start + len;
-			split->len = em_end - (start + len);
+			split->start = end;
+			split->len = em_end - end;
 			split->block_start = em->block_start;
 			split->flags = flags;
 			split->compress_type = em->compress_type;
@@ -838,7 +867,7 @@ void btrfs_drop_extent_map_range(struct btrfs_inode *inode, u64 start, u64 end,
 					split->block_len = em->block_len;
 					split->orig_start = em->orig_start;
 				} else {
-					const u64 diff = start + len - em->start;
+					const u64 diff = end - em->start;
 
 					split->block_len = split->len;
 					split->block_start += diff;

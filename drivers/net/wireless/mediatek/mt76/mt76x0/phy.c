@@ -595,7 +595,10 @@ mt76x0_phy_get_target_power(struct mt76x02_dev *dev, u8 tx_mode,
 	case 0:
 		/* cck rates */
 		tx_rate = (info[0] & 0x60) >> 5;
-		*target_power = cur_power + dev->rate_power.cck[tx_rate];
+		if (tx_rate > 3)
+			return -EINVAL;
+
+		*target_power = cur_power + dev->mt76.rate_power.cck[tx_rate];
 		*target_pa_power = mt76x0_phy_get_rf_pa_mode(dev, 0, tx_rate);
 		break;
 	case 1: {
@@ -632,7 +635,7 @@ mt76x0_phy_get_target_power(struct mt76x02_dev *dev, u8 tx_mode,
 			return -EINVAL;
 		}
 
-		*target_power = cur_power + dev->rate_power.ofdm[index];
+		*target_power = cur_power + dev->mt76.rate_power.ofdm[index];
 		*target_pa_power = mt76x0_phy_get_rf_pa_mode(dev, 0, index + 4);
 		break;
 	}
@@ -642,7 +645,7 @@ mt76x0_phy_get_target_power(struct mt76x02_dev *dev, u8 tx_mode,
 		if (tx_rate > 9)
 			return -EINVAL;
 
-		*target_power = cur_power + dev->rate_power.vht[tx_rate];
+		*target_power = cur_power + dev->mt76.rate_power.vht[tx_rate];
 		*target_pa_power = mt76x0_phy_get_rf_pa_mode(dev, 1, tx_rate);
 		break;
 	default:
@@ -651,7 +654,7 @@ mt76x0_phy_get_target_power(struct mt76x02_dev *dev, u8 tx_mode,
 		if (tx_rate > 9)
 			return -EINVAL;
 
-		*target_power = cur_power + dev->rate_power.ht[tx_rate];
+		*target_power = cur_power + dev->mt76.rate_power.ht[tx_rate];
 		*target_pa_power = mt76x0_phy_get_rf_pa_mode(dev, 1, tx_rate);
 		break;
 	}
@@ -838,7 +841,7 @@ static void mt76x0_phy_tssi_calibrate(struct mt76x02_dev *dev)
 
 void mt76x0_phy_set_txpower(struct mt76x02_dev *dev)
 {
-	struct mt76x02_rate_power *t = &dev->rate_power;
+	struct mt76_rate_power *t = &dev->mt76.rate_power;
 	s8 info;
 
 	mt76x0_get_tx_power_per_rate(dev, dev->mphy.chandef.chan, t);

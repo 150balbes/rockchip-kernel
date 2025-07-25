@@ -13,10 +13,10 @@
 #include <linux/kvm.h>
 #include <linux/kvm_types.h>
 #include <linux/spinlock.h>
+#include <asm/csr.h>
 #include <asm/hwcap.h>
 #include <asm/kvm_vcpu_fp.h>
 #include <asm/kvm_vcpu_insn.h>
-#include <asm/kvm_vcpu_sbi.h>
 #include <asm/kvm_vcpu_timer.h>
 
 #define KVM_MAX_VCPUS			1024
@@ -95,6 +95,10 @@ struct kvm_arch {
 	struct kvm_guest_timer timer;
 };
 
+struct kvm_sbi_context {
+	int return_handled;
+};
+
 struct kvm_cpu_trap {
 	unsigned long sepc;
 	unsigned long scause;
@@ -165,11 +169,6 @@ struct kvm_vcpu_arch {
 	/* ISA feature bits (similar to MISA) */
 	DECLARE_BITMAP(isa, RISCV_ISA_EXT_MAX);
 
-	/* Vendor, Arch, and Implementation details */
-	unsigned long mvendorid;
-	unsigned long marchid;
-	unsigned long mimpid;
-
 	/* SSCRATCH, STVEC, and SCOUNTEREN of Host */
 	unsigned long host_sscratch;
 	unsigned long host_stvec;
@@ -218,7 +217,7 @@ struct kvm_vcpu_arch {
 	struct kvm_csr_decode csr_decode;
 
 	/* SBI context */
-	struct kvm_vcpu_sbi_context sbi_context;
+	struct kvm_sbi_context sbi_context;
 
 	/* Cache pages needed to program page tables with spinlock held */
 	struct kvm_mmu_memory_cache mmu_page_cache;
@@ -327,5 +326,8 @@ void kvm_riscv_vcpu_sync_interrupts(struct kvm_vcpu *vcpu);
 bool kvm_riscv_vcpu_has_interrupts(struct kvm_vcpu *vcpu, unsigned long mask);
 void kvm_riscv_vcpu_power_off(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_power_on(struct kvm_vcpu *vcpu);
+
+int kvm_riscv_vcpu_sbi_return(struct kvm_vcpu *vcpu, struct kvm_run *run);
+int kvm_riscv_vcpu_sbi_ecall(struct kvm_vcpu *vcpu, struct kvm_run *run);
 
 #endif /* __RISCV_KVM_HOST_H__ */

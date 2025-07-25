@@ -392,6 +392,9 @@ int main(int argc, char *argv[])
 	int i, loops;
 #endif
 
+	/* Tell stdout not to buffer its content */
+	setbuf(stdout, NULL);
+
 #ifdef __x86_64__
 	/*
 	 * FIXME: the zero-memslot test fails on aarch64 and s390x because
@@ -404,7 +407,7 @@ int main(int argc, char *argv[])
 
 #ifdef __x86_64__
 	if (argc > 1)
-		loops = atoi_positive("Number of iterations", argv[1]);
+		loops = atoi(argv[1]);
 	else
 		loops = 10;
 

@@ -338,7 +338,8 @@ out:
 	return ret;
 }
 
-static int pa12203001_probe(struct i2c_client *client)
+static int pa12203001_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	struct pa12203001_data *data;
 	struct iio_dev *indio_dev;
@@ -474,7 +475,7 @@ static struct i2c_driver pa12203001_driver = {
 		.pm = &pa12203001_pm_ops,
 		.acpi_match_table = ACPI_PTR(pa12203001_acpi_match),
 	},
-	.probe_new = pa12203001_probe,
+	.probe = pa12203001_probe,
 	.remove = pa12203001_remove,
 	.id_table = pa12203001_id,
 

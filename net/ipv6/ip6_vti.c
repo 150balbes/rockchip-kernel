@@ -317,7 +317,7 @@ static int vti6_input_proto(struct sk_buff *skb, int nexthdr, __be32 spi,
 
 		ipv6h = ipv6_hdr(skb);
 		if (!ip6_tnl_rcv_ctl(t, &ipv6h->daddr, &ipv6h->saddr)) {
-			DEV_STATS_INC(t->dev, rx_dropped);
+			t->dev->stats.rx_dropped++;
 			rcu_read_unlock();
 			goto discard;
 		}
@@ -359,8 +359,8 @@ static int vti6_rcv_cb(struct sk_buff *skb, int err)
 	dev = t->dev;
 
 	if (err) {
-		DEV_STATS_INC(dev, rx_errors);
-		DEV_STATS_INC(dev, rx_dropped);
+		dev->stats.rx_errors++;
+		dev->stats.rx_dropped++;
 
 		return 0;
 	}
@@ -446,6 +446,7 @@ static int
 vti6_xmit(struct sk_buff *skb, struct net_device *dev, struct flowi *fl)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
+	struct net_device_stats *stats = &t->dev->stats;
 	struct dst_entry *dst = skb_dst(skb);
 	struct net_device *tdev;
 	struct xfrm_state *x;
@@ -505,7 +506,7 @@ vti6_xmit(struct sk_buff *skb, struct net_device *dev, struct flowi *fl)
 	tdev = dst->dev;
 
 	if (tdev == dev) {
-		DEV_STATS_INC(dev, collisions);
+		stats->collisions++;
 		net_warn_ratelimited("%s: Local routing loop detected!\n",
 				     t->parms.name);
 		goto tx_err_dst_release;
@@ -543,7 +544,7 @@ xmit:
 
 	return 0;
 tx_err_link_failure:
-	DEV_STATS_INC(dev, tx_carrier_errors);
+	stats->tx_carrier_errors++;
 	dst_link_failure(skb);
 tx_err_dst_release:
 	dst_release(dst);
@@ -554,6 +555,7 @@ static netdev_tx_t
 vti6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
+	struct net_device_stats *stats = &t->dev->stats;
 	struct flowi fl;
 	int ret;
 
@@ -568,12 +570,12 @@ vti6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 		    vti6_addr_conflict(t, ipv6_hdr(skb)))
 			goto tx_err;
 
-		xfrm_decode_session(skb, &fl, AF_INET6);
 		memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
+		xfrm_decode_session(skb, &fl, AF_INET6);
 		break;
 	case htons(ETH_P_IP):
-		xfrm_decode_session(skb, &fl, AF_INET);
 		memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
+		xfrm_decode_session(skb, &fl, AF_INET);
 		break;
 	default:
 		goto tx_err;
@@ -589,8 +591,8 @@ vti6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 
 tx_err:
-	DEV_STATS_INC(dev, tx_errors);
-	DEV_STATS_INC(dev, tx_dropped);
+	stats->tx_errors++;
+	stats->tx_dropped++;
 	kfree_skb(skb);
 	return NETDEV_TX_OK;
 }

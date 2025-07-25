@@ -1023,6 +1023,18 @@ static inline int cpufreq_table_find_index_c(struct cpufreq_policy *policy,
 						   efficiencies);
 }
 
+static inline bool cpufreq_is_in_limits(struct cpufreq_policy *policy, int idx)
+{
+	unsigned int freq;
+
+	if (idx < 0)
+		return false;
+
+	freq = policy->freq_table[idx].frequency;
+
+	return freq == clamp_val(freq, policy->min, policy->max);
+}
+
 static inline int cpufreq_frequency_table_target(struct cpufreq_policy *policy,
 						 unsigned int target_freq,
 						 unsigned int relation)
@@ -1056,7 +1068,8 @@ retry:
 		return 0;
 	}
 
-	if (idx < 0 && efficiencies) {
+	/* Limit frequency index to honor policy->min/max */
+	if (!cpufreq_is_in_limits(policy, idx) && efficiencies) {
 		efficiencies = false;
 		goto retry;
 	}
@@ -1110,10 +1123,10 @@ cpufreq_table_set_inefficient(struct cpufreq_policy *policy,
 }
 
 static inline int parse_perf_domain(int cpu, const char *list_name,
-				    const char *cell_name,
-				    struct of_phandle_args *args)
+				    const char *cell_name)
 {
 	struct device_node *cpu_np;
+	struct of_phandle_args args;
 	int ret;
 
 	cpu_np = of_cpu_device_node_get(cpu);
@@ -1121,44 +1134,41 @@ static inline int parse_perf_domain(int cpu, const char *list_name,
 		return -ENODEV;
 
 	ret = of_parse_phandle_with_args(cpu_np, list_name, cell_name, 0,
-					 args);
+					 &args);
 	if (ret < 0)
 		return ret;
 
 	of_node_put(cpu_np);
 
-	return 0;
+	return args.args[0];
 }
 
 static inline int of_perf_domain_get_sharing_cpumask(int pcpu, const char *list_name,
-						     const char *cell_name, struct cpumask *cpumask,
-						     struct of_phandle_args *pargs)
+						     const char *cell_name, struct cpumask *cpumask)
 {
+	int target_idx;
 	int cpu, ret;
-	struct of_phandle_args args;
 
-	ret = parse_perf_domain(pcpu, list_name, cell_name, pargs);
+	ret = parse_perf_domain(pcpu, list_name, cell_name);
 	if (ret < 0)
 		return ret;
 
+	target_idx = ret;
 	cpumask_set_cpu(pcpu, cpumask);
 
 	for_each_possible_cpu(cpu) {
 		if (cpu == pcpu)
 			continue;
 
-		ret = parse_perf_domain(cpu, list_name, cell_name, &args);
+		ret = parse_perf_domain(cpu, list_name, cell_name);
 		if (ret < 0)
 			continue;
 
-		if (pargs->np == args.np && pargs->args_count == args.args_count &&
-		    !memcmp(pargs->args, args.args, sizeof(args.args[0]) * args.args_count))
+		if (target_idx == ret)
 			cpumask_set_cpu(cpu, cpumask);
-
-		of_node_put(args.np);
 	}
 
-	return 0;
+	return target_idx;
 }
 #else
 static inline int cpufreq_boost_trigger_state(int state)
@@ -1188,8 +1198,7 @@ cpufreq_table_set_inefficient(struct cpufreq_policy *policy,
 }
 
 static inline int of_perf_domain_get_sharing_cpumask(int pcpu, const char *list_name,
-						     const char *cell_name, struct cpumask *cpumask,
-						     struct of_phandle_args *pargs)
+						     const char *cell_name, struct cpumask *cpumask)
 {
 	return -EOPNOTSUPP;
 }

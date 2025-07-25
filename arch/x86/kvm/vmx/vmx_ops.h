@@ -6,32 +6,18 @@
 
 #include <asm/vmx.h>
 
-#include "hyperv.h"
+#include "evmcs.h"
 #include "vmcs.h"
 #include "../x86.h"
 
 void vmread_error(unsigned long field, bool fault);
+__attribute__((regparm(0))) void vmread_error_trampoline(unsigned long field,
+							 bool fault);
 void vmwrite_error(unsigned long field, unsigned long value);
 void vmclear_error(struct vmcs *vmcs, u64 phys_addr);
 void vmptrld_error(struct vmcs *vmcs, u64 phys_addr);
 void invvpid_error(unsigned long ext, u16 vpid, gva_t gva);
 void invept_error(unsigned long ext, u64 eptp, gpa_t gpa);
-
-#ifndef CONFIG_CC_HAS_ASM_GOTO_OUTPUT
-/*
- * The VMREAD error trampoline _always_ uses the stack to pass parameters, even
- * for 64-bit targets.  Preserving all registers allows the VMREAD inline asm
- * blob to avoid clobbering GPRs, which in turn allows the compiler to better
- * optimize sequences of VMREADs.
- *
- * Declare the trampoline as an opaque label as it's not safe to call from C
- * code; there is no way to tell the compiler to pass params on the stack for
- * 64-bit targets.
- *
- * void vmread_error_trampoline(unsigned long field, bool fault);
- */
-extern unsigned long vmread_error_trampoline;
-#endif
 
 static __always_inline void vmcs_check16(unsigned long field)
 {
@@ -87,7 +73,7 @@ static __always_inline unsigned long __vmcs_readl(unsigned long field)
 
 #ifdef CONFIG_CC_HAS_ASM_GOTO_OUTPUT
 
-	asm_volatile_goto("1: vmread %[field], %[output]\n\t"
+	asm_goto_output("1: vmread %[field], %[output]\n\t"
 			  "jna %l[do_fail]\n\t"
 
 			  _ASM_EXTABLE(1b, %l[do_exception])
@@ -180,7 +166,7 @@ static __always_inline unsigned long vmcs_readl(unsigned long field)
 
 #define vmx_asm1(insn, op1, error_args...)				\
 do {									\
-	asm_volatile_goto("1: " __stringify(insn) " %0\n\t"		\
+	asm goto("1: " __stringify(insn) " %0\n\t"			\
 			  ".byte 0x2e\n\t" /* branch not taken hint */	\
 			  "jna %l[error]\n\t"				\
 			  _ASM_EXTABLE(1b, %l[fault])			\
@@ -197,7 +183,7 @@ fault:									\
 
 #define vmx_asm2(insn, op1, op2, error_args...)				\
 do {									\
-	asm_volatile_goto("1: "  __stringify(insn) " %1, %0\n\t"	\
+	asm goto("1: "  __stringify(insn) " %1, %0\n\t"			\
 			  ".byte 0x2e\n\t" /* branch not taken hint */	\
 			  "jna %l[error]\n\t"				\
 			  _ASM_EXTABLE(1b, %l[fault])			\

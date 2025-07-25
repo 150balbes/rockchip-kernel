@@ -277,18 +277,17 @@ void aio_port_reset(struct uniphier_aio_sub *sub)
 static int aio_port_set_ch(struct uniphier_aio_sub *sub)
 {
 	struct regmap *r = sub->aio->chip->regmap;
-	static const u32 slotsel_2ch[] = {
+	u32 slotsel_2ch[] = {
 		0, 0, 0, 0, 0,
 	};
-	static const u32 slotsel_multi[] = {
+	u32 slotsel_multi[] = {
 		OPORTMXTYSLOTCTR_SLOTSEL_SLOT0,
 		OPORTMXTYSLOTCTR_SLOTSEL_SLOT1,
 		OPORTMXTYSLOTCTR_SLOTSEL_SLOT2,
 		OPORTMXTYSLOTCTR_SLOTSEL_SLOT3,
 		OPORTMXTYSLOTCTR_SLOTSEL_SLOT4,
 	};
-	u32 mode;
-	const u32 *slotsel;
+	u32 mode, *slotsel;
 	int i;
 
 	switch (params_channels(&sub->params)) {
@@ -516,13 +515,13 @@ static int aio_port_set_clk(struct uniphier_aio_sub *sub)
 	struct uniphier_aio_chip *chip = sub->aio->chip;
 	struct device *dev = &sub->aio->chip->pdev->dev;
 	struct regmap *r = sub->aio->chip->regmap;
-	static const u32 v_pll[] = {
+	u32 v_pll[] = {
 		OPORTMXCTR2_ACLKSEL_A1, OPORTMXCTR2_ACLKSEL_F1,
 		OPORTMXCTR2_ACLKSEL_A2, OPORTMXCTR2_ACLKSEL_F2,
 		OPORTMXCTR2_ACLKSEL_A2PLL,
 		OPORTMXCTR2_ACLKSEL_RX1,
 	};
-	static const u32 v_div[] = {
+	u32 v_div[] = {
 		OPORTMXCTR2_DACCKSEL_1_2, OPORTMXCTR2_DACCKSEL_1_3,
 		OPORTMXCTR2_DACCKSEL_1_1, OPORTMXCTR2_DACCKSEL_2_3,
 	};

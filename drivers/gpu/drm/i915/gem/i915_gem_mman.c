@@ -235,6 +235,7 @@ static vm_fault_t i915_error_to_vmf_fault(int err)
 	case 0:
 	case -EAGAIN:
 	case -ENOSPC: /* transient failure to evict? */
+	case -ENOBUFS: /* temporarily out of fences? */
 	case -ERESTARTSYS:
 	case -EINTR:
 	case -EBUSY:
@@ -330,7 +331,7 @@ retry:
 	if (ret)
 		goto err_rpm;
 
-	ret = intel_gt_reset_lock_interruptible(ggtt->vm.gt, &srcu);
+	ret = intel_gt_reset_trylock(ggtt->vm.gt, &srcu);
 	if (ret)
 		goto err_pages;
 
@@ -369,7 +370,7 @@ retry:
 		if (vma == ERR_PTR(-ENOSPC)) {
 			ret = mutex_lock_interruptible(&ggtt->vm.mutex);
 			if (!ret) {
-				ret = i915_gem_evict_vm(&ggtt->vm, &ww);
+				ret = i915_gem_evict_vm(&ggtt->vm, &ww, NULL);
 				mutex_unlock(&ggtt->vm.mutex);
 			}
 			if (ret)
@@ -697,7 +698,7 @@ insert:
 	GEM_BUG_ON(lookup_mmo(obj, mmap_type) != mmo);
 out:
 	if (file)
-		drm_vma_node_allow(&mmo->vma_node, file);
+		drm_vma_node_allow_once(&mmo->vma_node, file);
 	return mmo;
 
 err:

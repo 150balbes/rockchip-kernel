@@ -504,14 +504,18 @@ static void xenfb_make_preferred_console(void)
 	if (console_set_on_cmdline)
 		return;
 
-	console_list_lock();
+	console_lock();
 	for_each_console(c) {
 		if (!strcmp(c->name, "tty") && c->index == 0)
 			break;
 	}
-	if (c)
-		console_force_preferred_locked(c);
-	console_list_unlock();
+	console_unlock();
+	if (c) {
+		unregister_console(c);
+		c->flags |= CON_CONSDEV;
+		c->flags &= ~CON_PRINTBUFFER; /* don't print again */
+		register_console(c);
+	}
 }
 
 static int xenfb_resume(struct xenbus_device *dev)

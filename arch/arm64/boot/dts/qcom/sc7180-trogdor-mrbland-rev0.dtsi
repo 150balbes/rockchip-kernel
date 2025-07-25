@@ -24,13 +24,30 @@
 
 /* PINCTRL - modifications to sc7180-trogdor-mrbland.dtsi */
 &avdd_lcd_en {
-	pins = "gpio80";
+	pinmux {
+		pins = "gpio80";
+	};
+
+	pinconf {
+		pins = "gpio80";
+	};
 };
 
 &mipi_1800_en {
-	pins = "gpio81";
-};
+	pinmux {
+		pins = "gpio81";
+	};
 
+	pinconf {
+		pins = "gpio81";
+	};
+};
 &vdd_reset_1800 {
-	pins = "gpio76";
+	pinmux {
+		pins = "gpio76";
+	};
+
+	pinconf {
+		pins = "gpio76";
+	};
 };

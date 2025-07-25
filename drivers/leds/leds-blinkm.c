@@ -139,11 +139,11 @@ static ssize_t show_color_common(struct device *dev, char *buf, int color)
 		return ret;
 	switch (color) {
 	case RED:
-		return sysfs_emit(buf, "%02X\n", data->red);
+		return scnprintf(buf, PAGE_SIZE, "%02X\n", data->red);
 	case GREEN:
-		return sysfs_emit(buf, "%02X\n", data->green);
+		return scnprintf(buf, PAGE_SIZE, "%02X\n", data->green);
 	case BLUE:
-		return sysfs_emit(buf, "%02X\n", data->blue);
+		return scnprintf(buf, PAGE_SIZE, "%02X\n", data->blue);
 	default:
 		return -EINVAL;
 	}
@@ -253,7 +253,7 @@ static DEVICE_ATTR_RW(blue);
 static ssize_t test_show(struct device *dev, struct device_attribute *attr,
 			 char *buf)
 {
-	return sysfs_emit(buf,
+	return scnprintf(buf, PAGE_SIZE,
 			 "#Write into test to start test sequence!#\n");
 }
 

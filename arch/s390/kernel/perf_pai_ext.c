@@ -28,6 +28,12 @@
 static debug_info_t *paiext_dbg;
 static unsigned int paiext_cnt;	/* Extracted with QPACI instruction */
 
+enum paiext_mode {
+	PAI_MODE_NONE,
+	PAI_MODE_SAMPLING,
+	PAI_MODE_COUNTER,
+};
+
 struct pai_userdata {
 	u16 num;
 	u64 value;
@@ -48,7 +54,7 @@ struct paiext_cb {		/* PAI extension 1 control block */
 struct paiext_map {
 	unsigned long *area;		/* Area for CPU to store counters */
 	struct pai_userdata *save;	/* Area to store non-zero counters */
-	enum paievt_mode mode;		/* Type of event */
+	enum paiext_mode mode;		/* Type of event */
 	unsigned int active_events;	/* # of PAI Extension users */
 	unsigned int refcnt;
 	struct perf_event *event;	/* Perf event for sampling */
@@ -186,14 +192,14 @@ static int paiext_alloc(struct perf_event_attr *a, struct perf_event *event)
 			goto unlock;
 		}
 		cpump->mode = a->sample_period ? PAI_MODE_SAMPLING
-					       : PAI_MODE_COUNTING;
+					       : PAI_MODE_COUNTER;
 	} else {
 		/* Multiple invocation, check whats active.
 		 * Supported are multiple counter events or only one sampling
 		 * event concurrently at any one time.
 		 */
 		if (cpump->mode == PAI_MODE_SAMPLING ||
-		    (cpump->mode == PAI_MODE_COUNTING && a->sample_period)) {
+		    (cpump->mode == PAI_MODE_COUNTER && a->sample_period)) {
 			rc = -EBUSY;
 			goto unlock;
 		}
@@ -466,7 +472,7 @@ static int paiext_push_sample(void)
 /* Called on schedule-in and schedule-out. No access to event structure,
  * but for sampling only event NNPA_ALL is allowed.
  */
-static void paiext_sched_task(struct perf_event_pmu_context *pmu_ctx, bool sched_in)
+static void paiext_sched_task(struct perf_event_context *ctx, bool sched_in)
 {
 	/* We started with a clean page on event installation. So read out
 	 * results on schedule_out and if page was dirty, clear values.
@@ -606,7 +612,7 @@ static int __init attr_event_init(void)
 	for (i = 0; i < ARRAY_SIZE(paiext_ctrnames); i++) {
 		ret = attr_event_init_one(attrs, i);
 		if (ret) {
-			attr_event_free(attrs, i - 1);
+			attr_event_free(attrs, i);
 			return ret;
 		}
 	}

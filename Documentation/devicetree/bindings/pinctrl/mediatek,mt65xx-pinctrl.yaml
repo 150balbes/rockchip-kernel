@@ -31,8 +31,7 @@ properties:
   pins-are-numbered:
     $ref: /schemas/types.yaml#/definitions/flag
     description: |
-      Specify the subnodes are using numbered pinmux to specify pins. (UNUSED)
-    deprecated: true
+      Specify the subnodes are using numbered pinmux to specify pins.
 
   gpio-controller: true
 
@@ -63,6 +62,7 @@ properties:
 
 required:
   - compatible
+  - pins-are-numbered
   - gpio-controller
   - "#gpio-cells"
 
@@ -150,6 +150,7 @@ examples:
           compatible = "mediatek,mt8135-pinctrl";
           reg = <0 0x1000B000 0 0x1000>;
           mediatek,pctl-regmap = <&syscfg_pctl_a>, <&syscfg_pctl_b>;
+          pins-are-numbered;
           gpio-controller;
           #gpio-cells = <2>;
           interrupt-controller;

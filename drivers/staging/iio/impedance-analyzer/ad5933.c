@@ -608,7 +608,7 @@ static void ad5933_work(struct work_struct *work)
 		struct ad5933_state, work.work);
 	struct iio_dev *indio_dev = i2c_get_clientdata(st->client);
 	__be16 buf[2];
-	int val[2];
+	u16 val[2];
 	unsigned char status;
 	int ret;
 
@@ -674,9 +674,9 @@ static void ad5933_clk_disable(void *data)
 	clk_disable_unprepare(st->mclk);
 }
 
-static int ad5933_probe(struct i2c_client *client)
+static int ad5933_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	int ret;
 	struct ad5933_state *st;
 	struct iio_dev *indio_dev;
@@ -781,7 +781,7 @@ static struct i2c_driver ad5933_driver = {
 		.name = "ad5933",
 		.of_match_table = ad5933_of_match,
 	},
-	.probe_new = ad5933_probe,
+	.probe = ad5933_probe,
 	.id_table = ad5933_id,
 };
 module_i2c_driver(ad5933_driver);

@@ -37,10 +37,12 @@ static ssize_t bw_name_read(struct file *fp, char __user *userbuf,
 			    size_t count, loff_t *ppos)
 {
 	struct icc_path *path = fp->private_data;
+	const char *name = icc_get_name(path);
 	char buf[64];
-	int i;
+	int i = 0;
 
-	i = scnprintf(buf, sizeof(buf), "%.62s\n", icc_get_name(path));
+	if (name)
+		i = scnprintf(buf, sizeof(buf), "%.62s\n", name);
 
 	return simple_read_from_buffer(userbuf, count, ppos, buf, i);
 }
@@ -235,7 +237,7 @@ static void opp_migrate_dentry(struct opp_device *opp_dev,
 
 	dentry = debugfs_rename(rootdir, opp_dev->dentry, rootdir,
 				opp_table->dentry_name);
-	if (!dentry) {
+	if (IS_ERR(dentry)) {
 		dev_err(dev, "%s: Failed to rename link from: %s to %s\n",
 			__func__, dev_name(opp_dev->dev), dev_name(dev));
 		return;
@@ -270,10 +272,61 @@ out:
 	opp_dev->dentry = NULL;
 }
 
+static int opp_summary_show(struct seq_file *s, void *data)
+{
+	struct list_head *lists = (struct list_head *)s->private;
+	struct opp_table *opp_table;
+	struct dev_pm_opp *opp;
+
+	mutex_lock(&opp_table_lock);
+
+	seq_puts(s, " device                rate(Hz)    target(uV)    min(uV)    max(uV)\n");
+	seq_puts(s, "-------------------------------------------------------------------\n");
+
+	list_for_each_entry(opp_table, lists, node) {
+		seq_printf(s, " %s\n", opp_table->dentry_name);
+		mutex_lock(&opp_table->lock);
+		list_for_each_entry(opp, &opp_table->opp_list, node) {
+			if (!opp->available)
+				continue;
+			seq_printf(s, "%31lu %12lu %11lu %11lu\n",
+				   opp->rates[0],
+				   opp->supplies[0].u_volt,
+				   opp->supplies[0].u_volt_min,
+				   opp->supplies[0].u_volt_max);
+			if (opp_table->regulator_count > 1)
+				seq_printf(s, "%44lu %11lu %11lu\n",
+					   opp->supplies[1].u_volt,
+					   opp->supplies[1].u_volt_min,
+					   opp->supplies[1].u_volt_max);
+		}
+		mutex_unlock(&opp_table->lock);
+	}
+
+	mutex_unlock(&opp_table_lock);
+
+	return 0;
+}
+
+static int opp_summary_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, opp_summary_show, inode->i_private);
+}
+
+static const struct file_operations opp_summary_fops = {
+	.open		= opp_summary_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static int __init opp_debug_init(void)
 {
 	/* Create /sys/kernel/debug/opp directory */
 	rootdir = debugfs_create_dir("opp", NULL);
+
+	debugfs_create_file("opp_summary", 0444, rootdir, &opp_tables,
+			    &opp_summary_fops);
 
 	return 0;
 }

@@ -5,7 +5,7 @@
 $id: http://devicetree.org/schemas/thermal/thermal-sensor.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Thermal sensor
+title: Thermal sensor binding
 
 maintainers:
   - Amit Kucheria <amitk@kernel.org>

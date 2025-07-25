@@ -129,9 +129,7 @@ static int bcm_iproc_probe(struct platform_device *pdev)
 
 static int bcm_iproc_remove(struct platform_device *pdev)
 {
-	bcm_qspi_remove(pdev);
-
-	return 0;
+	return bcm_qspi_remove(pdev);
 }
 
 static const struct of_device_id bcm_iproc_of_match[] = {

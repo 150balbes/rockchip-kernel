@@ -22,14 +22,8 @@ static const struct mtk_gate_regs aud_cg_regs = {
 	.sta_ofs = 0x0,
 };
 
-#define GATE_AUD(_id, _name, _parent, _shift) {	\
-		.id = _id,			\
-		.name = _name,			\
-		.parent_name = _parent,		\
-		.regs = &aud_cg_regs,		\
-		.shift = _shift,		\
-		.ops = &mtk_clk_gate_ops_no_setclr,		\
-	}
+#define GATE_AUD(_id, _name, _parent, _shift)			\
+	GATE_MTK(_id, _name, _parent, &aud_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr)
 
 static const struct mtk_gate aud_clks[] __initconst = {
 	GATE_AUD(CLK_AUD_AFE, "aud_afe", "clk26m_ck", 2),
@@ -54,7 +48,7 @@ static void __init mtk_audsys_init(struct device_node *node)
 
 	clk_data = mtk_alloc_clk_data(CLK_AUD_NR_CLK);
 
-	mtk_clk_register_gates(node, aud_clks, ARRAY_SIZE(aud_clks), clk_data);
+	mtk_clk_register_gates(NULL, node, aud_clks, ARRAY_SIZE(aud_clks), clk_data);
 
 	r = of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
 	if (r)

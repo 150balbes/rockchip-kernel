@@ -168,6 +168,14 @@ static void
 mt7921_get_status_freq_info(struct mt7921_dev *dev, struct mt76_phy *mphy,
 			    struct mt76_rx_status *status, u8 chfreq)
 {
+	if (!test_bit(MT76_HW_SCANNING, &mphy->state) &&
+	    !test_bit(MT76_HW_SCHED_SCANNING, &mphy->state) &&
+	    !test_bit(MT76_STATE_ROC, &mphy->state)) {
+		status->freq = mphy->chandef.chan->center_freq;
+		status->band = mphy->chandef.chan->band;
+		return;
+	}
+
 	if (chfreq > 180) {
 		status->band = NL80211_BAND_6GHZ;
 		chfreq = (chfreq - 181) * 4 + 1;
@@ -684,7 +692,7 @@ bool mt7921_rx_check(struct mt76_dev *mdev, void *data, int len)
 EXPORT_SYMBOL_GPL(mt7921_rx_check);
 
 void mt7921_queue_rx_skb(struct mt76_dev *mdev, enum mt76_rxq_id q,
-			 struct sk_buff *skb, u32 *info)
+			 struct sk_buff *skb)
 {
 	struct mt7921_dev *dev = container_of(mdev, struct mt7921_dev, mt76);
 	__le32 *rxd = (__le32 *)skb->data;
@@ -737,7 +745,7 @@ void mt7921_mac_reset_counters(struct mt7921_phy *phy)
 	}
 
 	dev->mt76.phy.survey_time = ktime_get_boottime();
-	memset(phy->mt76->aggr_stats, 0, sizeof(phy->mt76->aggr_stats));
+	memset(&dev->mt76.aggr_stats[0], 0, sizeof(dev->mt76.aggr_stats) / 2);
 
 	/* reset airtime counters */
 	mt76_rr(dev, MT_MIB_SDR9(0));
@@ -858,7 +866,7 @@ mt7921_vif_connect_iter(void *priv, u8 *mac,
 
 	if (vif->type == NL80211_IFTYPE_AP) {
 		mt76_connac_mcu_uni_add_bss(dev->phy.mt76, vif, &mvif->sta.wcid,
-					    true, NULL);
+					    true);
 		mt7921_mcu_sta_update(dev, NULL, vif, true,
 				      MT76_STA_INFO_STATE_NONE);
 		mt7921_mcu_uni_add_beacon_offload(dev, hw, vif, true);
@@ -875,6 +883,7 @@ void mt7921_mac_reset_work(struct work_struct *work)
 	int i, ret;
 
 	dev_dbg(dev->mt76.dev, "chip reset\n");
+	set_bit(MT76_RESET, &dev->mphy.state);
 	dev->hw_full_reset = true;
 	ieee80211_stop_queues(hw);
 
@@ -903,6 +912,7 @@ void mt7921_mac_reset_work(struct work_struct *work)
 	}
 
 	dev->hw_full_reset = false;
+	clear_bit(MT76_RESET, &dev->mphy.state);
 	pm->suspended = false;
 	ieee80211_wake_queues(hw);
 	ieee80211_iterate_active_interfaces(hw,
@@ -982,10 +992,10 @@ void mt7921_mac_update_mib_stats(struct mt7921_phy *phy)
 		val = mt76_rr(dev, MT_TX_AGG_CNT(0, i));
 		val2 = mt76_rr(dev, MT_TX_AGG_CNT2(0, i));
 
-		phy->mt76->aggr_stats[aggr0++] += val & 0xffff;
-		phy->mt76->aggr_stats[aggr0++] += val >> 16;
-		phy->mt76->aggr_stats[aggr1++] += val2 & 0xffff;
-		phy->mt76->aggr_stats[aggr1++] += val2 >> 16;
+		dev->mt76.aggr_stats[aggr0++] += val & 0xffff;
+		dev->mt76.aggr_stats[aggr0++] += val >> 16;
+		dev->mt76.aggr_stats[aggr1++] += val2 & 0xffff;
+		dev->mt76.aggr_stats[aggr1++] += val2 >> 16;
 	}
 }
 
@@ -1158,6 +1168,10 @@ int mt7921_usb_sdio_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 
 	if (unlikely(tx_info->skb->len <= ETH_HLEN))
 		return -EINVAL;
+
+	err = skb_cow_head(skb, MT_SDIO_TXD_SIZE + MT_SDIO_HDR_SIZE);
+	if (err)
+		return err;
 
 	if (!wcid)
 		wcid = &dev->mt76.global_wcid;

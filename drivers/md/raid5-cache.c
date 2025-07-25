@@ -1260,14 +1260,13 @@ static void r5l_log_flush_endio(struct bio *bio)
 
 	if (bio->bi_status)
 		md_error(log->rdev->mddev, log->rdev);
+	bio_uninit(bio);
 
 	spin_lock_irqsave(&log->io_list_lock, flags);
 	list_for_each_entry(io, &log->flushing_ios, log_sibling)
 		r5l_io_run_stripes(io);
 	list_splice_tail_init(&log->flushing_ios, &log->finished_ios);
 	spin_unlock_irqrestore(&log->io_list_lock, flags);
-
-	bio_uninit(bio);
 }
 
 /*
@@ -1565,12 +1564,11 @@ void r5l_wake_reclaim(struct r5l_log *log, sector_t space)
 
 	if (!log)
 		return;
-
-	target = READ_ONCE(log->reclaim_target);
 	do {
+		target = log->reclaim_target;
 		if (new < target)
 			return;
-	} while (!try_cmpxchg(&log->reclaim_target, &target, new));
+	} while (cmpxchg(&log->reclaim_target, target, new) != target);
 	md_wakeup_thread(log->reclaim_thread);
 }
 
@@ -3062,6 +3060,7 @@ void r5c_update_on_rdev_error(struct mddev *mddev, struct md_rdev *rdev)
 
 int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 {
+	struct request_queue *q = bdev_get_queue(rdev->bdev);
 	struct r5l_log *log;
 	int ret;
 
@@ -3090,7 +3089,9 @@ int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 	if (!log)
 		return -ENOMEM;
 	log->rdev = rdev;
-	log->need_cache_flush = bdev_write_cache(rdev->bdev);
+
+	log->need_cache_flush = test_bit(QUEUE_FLAG_WC, &q->queue_flags) != 0;
+
 	log->uuid_checksum = crc32c_le(~0, rdev->mddev->uuid,
 				       sizeof(rdev->mddev->uuid));
 
@@ -3164,12 +3165,15 @@ void r5l_exit_log(struct r5conf *conf)
 {
 	struct r5l_log *log = conf->log;
 
-	/* Ensure disable_writeback_work wakes up and exits */
-	wake_up(&conf->mddev->sb_wait);
-	flush_work(&log->disable_writeback_work);
 	md_unregister_thread(&log->reclaim_thread);
 
+	/*
+	 * 'reconfig_mutex' is held by caller, set 'confg->log' to NULL to
+	 * ensure disable_writeback_work wakes up and exits.
+	 */
 	conf->log = NULL;
+	wake_up(&conf->mddev->sb_wait);
+	flush_work(&log->disable_writeback_work);
 
 	mempool_exit(&log->meta_pool);
 	bioset_exit(&log->bs);

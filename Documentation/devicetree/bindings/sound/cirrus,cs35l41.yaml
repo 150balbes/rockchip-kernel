@@ -146,7 +146,6 @@ required:
   - "#sound-dai-cells"
 
 allOf:
-  - $ref: dai-common.yaml#
   - if:
       properties:
         cirrus,boost-type:
@@ -172,7 +171,7 @@ allOf:
           cirrus,gpio1-src-select:
             enum: [1]
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

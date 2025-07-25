@@ -258,7 +258,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 			spin_unlock(&fi->lock);
 		}
 		kfree(forget);
-		if (ret == -ENOMEM)
+		if (ret == -ENOMEM || ret == -EINTR)
 			goto out;
 		if (ret || fuse_invalid_attr(&outarg.attr) ||
 		    fuse_stale_inode(inode, outarg.generation, &outarg.attr))
@@ -399,6 +399,10 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 		goto out_put_forget;
 	if (fuse_invalid_attr(&outarg->attr))
 		goto out_put_forget;
+	if (outarg->nodeid == FUSE_ROOT_ID && outarg->generation != 0) {
+		pr_warn_once("root generation should be zero\n");
+		outarg->generation = 0;
+	}
 
 	*inode = fuse_iget(sb, outarg->nodeid, outarg->generation,
 			   &outarg->attr, entry_attr_timeout(outarg),
@@ -1170,7 +1174,7 @@ int fuse_update_attributes(struct inode *inode, struct file *file, u32 mask)
 }
 
 int fuse_reverse_inval_entry(struct fuse_conn *fc, u64 parent_nodeid,
-			     u64 child_nodeid, struct qstr *name, u32 flags)
+			     u64 child_nodeid, struct qstr *name)
 {
 	int err = -ENOTDIR;
 	struct inode *parent;
@@ -1197,9 +1201,7 @@ int fuse_reverse_inval_entry(struct fuse_conn *fc, u64 parent_nodeid,
 		goto unlock;
 
 	fuse_dir_changed(parent);
-	if (!(flags & FUSE_EXPIRE_ONLY))
-		d_invalidate(entry);
-	fuse_invalidate_entry_cache(entry);
+	fuse_invalidate_entry(entry);
 
 	if (child_nodeid != 0 && d_really_is_positive(entry)) {
 		inode_lock(d_inode(entry));
@@ -1237,18 +1239,6 @@ int fuse_reverse_inval_entry(struct fuse_conn *fc, u64 parent_nodeid,
 	return err;
 }
 
-static inline bool fuse_permissible_uidgid(struct fuse_conn *fc)
-{
-	const struct cred *cred = current_cred();
-
-	return (uid_eq(cred->euid, fc->user_id) &&
-		uid_eq(cred->suid, fc->user_id) &&
-		uid_eq(cred->uid,  fc->user_id) &&
-		gid_eq(cred->egid, fc->group_id) &&
-		gid_eq(cred->sgid, fc->group_id) &&
-		gid_eq(cred->gid,  fc->group_id));
-}
-
 /*
  * Calling into a user-controlled filesystem gives the filesystem
  * daemon ptrace-like capabilities over the current process.  This
@@ -1262,19 +1252,26 @@ static inline bool fuse_permissible_uidgid(struct fuse_conn *fc)
  * for which the owner of the mount has ptrace privilege.  This
  * excludes processes started by other users, suid or sgid processes.
  */
-bool fuse_allow_current_process(struct fuse_conn *fc)
+int fuse_allow_current_process(struct fuse_conn *fc)
 {
-	bool allow;
+	const struct cred *cred;
+
+	if (allow_sys_admin_access && capable(CAP_SYS_ADMIN))
+		return 1;
 
 	if (fc->allow_other)
-		allow = current_in_userns(fc->user_ns);
-	else
-		allow = fuse_permissible_uidgid(fc);
+		return current_in_userns(fc->user_ns);
 
-	if (!allow && allow_sys_admin_access && capable(CAP_SYS_ADMIN))
-		allow = true;
+	cred = current_cred();
+	if (uid_eq(cred->euid, fc->user_id) &&
+	    uid_eq(cred->suid, fc->user_id) &&
+	    uid_eq(cred->uid,  fc->user_id) &&
+	    gid_eq(cred->egid, fc->group_id) &&
+	    gid_eq(cred->sgid, fc->group_id) &&
+	    gid_eq(cred->gid,  fc->group_id))
+		return 1;
 
-	return allow;
+	return 0;
 }
 
 static int fuse_access(struct inode *inode, int mask)
@@ -1942,7 +1939,7 @@ static const struct inode_operations fuse_dir_inode_operations = {
 	.permission	= fuse_permission,
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
-	.get_inode_acl	= fuse_get_acl,
+	.get_acl	= fuse_get_acl,
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
@@ -1964,7 +1961,7 @@ static const struct inode_operations fuse_common_inode_operations = {
 	.permission	= fuse_permission,
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
-	.get_inode_acl	= fuse_get_acl,
+	.get_acl	= fuse_get_acl,
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,

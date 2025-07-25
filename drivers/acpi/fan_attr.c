@@ -27,24 +27,24 @@ static ssize_t show_state(struct device *dev, struct device_attribute *attr, cha
 		count = scnprintf(buf, PAGE_SIZE, "%lld:", fps->control);
 
 	if (fps->trip_point == 0xFFFFFFFF || fps->trip_point > 9)
-		count += sysfs_emit_at(buf, count, "not-defined:");
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "not-defined:");
 	else
-		count += sysfs_emit_at(buf, count, "%lld:", fps->trip_point);
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "%lld:", fps->trip_point);
 
 	if (fps->speed == 0xFFFFFFFF)
-		count += sysfs_emit_at(buf, count, "not-defined:");
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "not-defined:");
 	else
-		count += sysfs_emit_at(buf, count, "%lld:", fps->speed);
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "%lld:", fps->speed);
 
 	if (fps->noise_level == 0xFFFFFFFF)
-		count += sysfs_emit_at(buf, count, "not-defined:");
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "not-defined:");
 	else
-		count += sysfs_emit_at(buf, count, "%lld:", fps->noise_level * 100);
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "%lld:", fps->noise_level * 100);
 
 	if (fps->power == 0xFFFFFFFF)
-		count += sysfs_emit_at(buf, count, "not-defined\n");
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "not-defined\n");
 	else
-		count += sysfs_emit_at(buf, count, "%lld\n", fps->power);
+		count += scnprintf(&buf[count], PAGE_SIZE - count, "%lld\n", fps->power);
 
 	return count;
 }

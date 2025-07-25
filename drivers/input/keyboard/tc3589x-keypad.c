@@ -455,6 +455,7 @@ static int tc3589x_keypad_probe(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int tc3589x_keypad_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -491,14 +492,15 @@ static int tc3589x_keypad_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(tc3589x_keypad_dev_pm_ops,
-				tc3589x_keypad_suspend, tc3589x_keypad_resume);
+static SIMPLE_DEV_PM_OPS(tc3589x_keypad_dev_pm_ops,
+			 tc3589x_keypad_suspend, tc3589x_keypad_resume);
 
 static struct platform_driver tc3589x_keypad_driver = {
 	.driver	= {
 		.name	= "tc3589x-keypad",
-		.pm	= pm_sleep_ptr(&tc3589x_keypad_dev_pm_ops),
+		.pm	= &tc3589x_keypad_dev_pm_ops,
 	},
 	.probe	= tc3589x_keypad_probe,
 };

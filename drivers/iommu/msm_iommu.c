@@ -471,16 +471,14 @@ fail:
 }
 
 static int msm_iommu_map(struct iommu_domain *domain, unsigned long iova,
-			 phys_addr_t pa, size_t pgsize, size_t pgcount,
-			 int prot, gfp_t gfp, size_t *mapped)
+			 phys_addr_t pa, size_t len, int prot, gfp_t gfp)
 {
 	struct msm_priv *priv = to_msm_priv(domain);
 	unsigned long flags;
 	int ret;
 
 	spin_lock_irqsave(&priv->pgtlock, flags);
-	ret = priv->iop->map_pages(priv->iop, iova, pa, pgsize, pgcount, prot,
-				   GFP_ATOMIC, mapped);
+	ret = priv->iop->map(priv->iop, iova, pa, len, prot, GFP_ATOMIC);
 	spin_unlock_irqrestore(&priv->pgtlock, flags);
 
 	return ret;
@@ -495,18 +493,16 @@ static void msm_iommu_sync_map(struct iommu_domain *domain, unsigned long iova,
 }
 
 static size_t msm_iommu_unmap(struct iommu_domain *domain, unsigned long iova,
-			      size_t pgsize, size_t pgcount,
-			      struct iommu_iotlb_gather *gather)
+			      size_t len, struct iommu_iotlb_gather *gather)
 {
 	struct msm_priv *priv = to_msm_priv(domain);
 	unsigned long flags;
-	size_t ret;
 
 	spin_lock_irqsave(&priv->pgtlock, flags);
-	ret = priv->iop->unmap_pages(priv->iop, iova, pgsize, pgcount, gather);
+	len = priv->iop->unmap(priv->iop, iova, len, gather);
 	spin_unlock_irqrestore(&priv->pgtlock, flags);
 
-	return ret;
+	return len;
 }
 
 static phys_addr_t msm_iommu_iova_to_phys(struct iommu_domain *domain,
@@ -683,8 +679,8 @@ static struct iommu_ops msm_iommu_ops = {
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev	= msm_iommu_attach_dev,
 		.detach_dev	= msm_iommu_detach_dev,
-		.map_pages	= msm_iommu_map,
-		.unmap_pages	= msm_iommu_unmap,
+		.map		= msm_iommu_map,
+		.unmap		= msm_iommu_unmap,
 		/*
 		 * Nothing is needed here, the barrier to guarantee
 		 * completion of the tlb sync operation is implicitly

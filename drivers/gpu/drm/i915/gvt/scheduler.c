@@ -570,8 +570,9 @@ retry:
 			if (gmadr_bytes == 8)
 				bb->bb_start_cmd_va[2] = 0;
 
-			ret = i915_vma_move_to_active(bb->vma, workload->req,
-						      __EXEC_OBJECT_NO_REQUEST_AWAIT);
+			ret = i915_vma_move_to_active(bb->vma,
+						      workload->req,
+						      0);
 			if (ret)
 				goto err;
 
@@ -695,6 +696,7 @@ intel_vgpu_shadow_mm_pin(struct intel_vgpu_workload *workload)
 
 	if (workload->shadow_mm->type != INTEL_GVT_MM_PPGTT ||
 	    !workload->shadow_mm->ppgtt_mm.shadowed) {
+		intel_vgpu_unpin_mm(workload->shadow_mm);
 		gvt_vgpu_err("workload shadow ppgtt isn't ready\n");
 		return -EINVAL;
 	}

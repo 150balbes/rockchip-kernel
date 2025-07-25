@@ -35,6 +35,12 @@
 #define DPCD_VOLTAGE_SWING_SET(x)		(((x) & 0x3) << 0)
 #define DPCD_VOLTAGE_SWING_GET(x)		(((x) >> 0) & 0x3)
 
+/* Supported link rate in eDP 1.4 */
+#define EDP_LINK_BW_2_16			0x08
+#define EDP_LINK_BW_2_43			0x09
+#define EDP_LINK_BW_3_24			0x0c
+#define EDP_LINK_BW_4_32			0x10
+
 struct gpio_desc;
 
 enum link_lane_count_type {
@@ -71,6 +77,8 @@ enum pattern_set {
 	TRAINING_PTN1,
 	TRAINING_PTN2,
 	TRAINING_PTN3,
+	TEST_PATTERN_80BIT,
+	TEST_PATTERN_HBR2,
 	DP_NONE
 };
 
@@ -140,6 +148,7 @@ struct video_info {
 	u32 lane_map[4];
 
 	bool video_bist_enable;
+	bool force_stream_valid;
 };
 
 struct link_train {
@@ -153,6 +162,14 @@ struct link_train {
 	bool enhanced_framing;
 
 	enum link_training_state lt_state;
+};
+
+struct analogix_dp_compliance {
+	struct drm_dp_phy_test_params phytest;
+	int test_link_rate;
+	u8 test_lane_count;
+	unsigned long test_type;
+	bool test_active;
 };
 
 struct analogix_dp_device {
@@ -171,6 +188,9 @@ struct analogix_dp_device {
 	struct link_train	link_train;
 	struct phy		*phy;
 	int			dpms_mode;
+	int			nr_link_rate_table;
+	int			link_rate_table[DP_MAX_SUPPORTED_RATES];
+	int			link_rate_select;
 	struct gpio_desc	*hpd_gpiod;
 	bool                    force_hpd;
 	bool			fast_train_enable;
@@ -183,6 +203,11 @@ struct analogix_dp_device {
 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
 	struct analogix_dp_plat_data *plat_data;
 	struct extcon_dev *extcon;
+	struct analogix_dp_compliance compliance;
+
+	u32 split_area;
+
+	const struct analogix_dp_output_format *output_fmt;
 };
 
 /* analogix_dp_reg.c */
@@ -252,5 +277,7 @@ void analogix_dp_audio_enable(struct analogix_dp_device *dp);
 void analogix_dp_audio_disable(struct analogix_dp_device *dp);
 void analogix_dp_init(struct analogix_dp_device *dp);
 void analogix_dp_irq_handler(struct analogix_dp_device *dp);
+void analogix_dp_phy_test(struct analogix_dp_device *dp);
+void analogix_dp_check_device_service_irq(struct analogix_dp_device *dp);
 
 #endif /* _ANALOGIX_DP_CORE_H */

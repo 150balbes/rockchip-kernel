@@ -5,3 +5,4 @@
 #
 
 obj-$(CONFIG_CRYPTO_DEV_UX500_HASH) += hash/
+obj-$(CONFIG_CRYPTO_DEV_UX500_CRYP) += cryp/

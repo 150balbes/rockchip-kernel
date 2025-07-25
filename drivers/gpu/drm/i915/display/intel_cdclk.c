@@ -24,7 +24,6 @@
 #include <linux/time.h>
 
 #include "hsw_ips.h"
-#include "i915_reg.h"
 #include "intel_atomic.h"
 #include "intel_atomic_plane.h"
 #include "intel_audio.h"
@@ -1221,6 +1220,11 @@ static void skl_cdclk_uninit_hw(struct drm_i915_private *dev_priv)
 	skl_set_cdclk(dev_priv, &cdclk_config, INVALID_PIPE);
 }
 
+static bool has_cdclk_squasher(struct drm_i915_private *i915)
+{
+	return IS_DG2(i915);
+}
+
 struct intel_cdclk_vals {
 	u32 cdclk;
 	u16 refclk;
@@ -1319,7 +1323,7 @@ static const struct intel_cdclk_vals adlp_cdclk_table[] = {
 	{ .refclk = 24000, .cdclk = 192000, .divider = 2, .ratio = 16 },
 	{ .refclk = 24000, .cdclk = 312000, .divider = 2, .ratio = 26 },
 	{ .refclk = 24000, .cdclk = 552000, .divider = 2, .ratio = 46 },
-	{ .refclk = 24400, .cdclk = 648000, .divider = 2, .ratio = 54 },
+	{ .refclk = 24000, .cdclk = 648000, .divider = 2, .ratio = 54 },
 
 	{ .refclk = 38400, .cdclk = 179200, .divider = 3, .ratio = 14 },
 	{ .refclk = 38400, .cdclk = 192000, .divider = 2, .ratio = 10 },
@@ -1516,7 +1520,7 @@ static void bxt_get_cdclk(struct drm_i915_private *dev_priv,
 		return;
 	}
 
-	if (HAS_CDCLK_SQUASH(dev_priv))
+	if (has_cdclk_squasher(dev_priv))
 		squash_ctl = intel_de_read(dev_priv, CDCLK_SQUASH_CTL);
 
 	if (squash_ctl & CDCLK_SQUASH_ENABLE) {
@@ -1685,38 +1689,6 @@ static u32 cdclk_squash_waveform(struct drm_i915_private *dev_priv,
 	return 0xffff;
 }
 
-static void icl_cdclk_pll_update(struct drm_i915_private *i915, int vco)
-{
-	if (i915->display.cdclk.hw.vco != 0 &&
-	    i915->display.cdclk.hw.vco != vco)
-		icl_cdclk_pll_disable(i915);
-
-	if (i915->display.cdclk.hw.vco != vco)
-		icl_cdclk_pll_enable(i915, vco);
-}
-
-static void bxt_cdclk_pll_update(struct drm_i915_private *i915, int vco)
-{
-	if (i915->display.cdclk.hw.vco != 0 &&
-	    i915->display.cdclk.hw.vco != vco)
-		bxt_de_pll_disable(i915);
-
-	if (i915->display.cdclk.hw.vco != vco)
-		bxt_de_pll_enable(i915, vco);
-}
-
-static void dg2_cdclk_squash_program(struct drm_i915_private *i915,
-				     u16 waveform)
-{
-	u32 squash_ctl = 0;
-
-	if (waveform)
-		squash_ctl = CDCLK_SQUASH_ENABLE |
-			     CDCLK_SQUASH_WINDOW_SIZE(0xf) | waveform;
-
-	intel_de_write(i915, CDCLK_SQUASH_CTL, squash_ctl);
-}
-
 static void bxt_set_cdclk(struct drm_i915_private *dev_priv,
 			  const struct intel_cdclk_config *cdclk_config,
 			  enum pipe pipe)
@@ -1752,10 +1724,21 @@ static void bxt_set_cdclk(struct drm_i915_private *dev_priv,
 	if (HAS_CDCLK_CRAWL(dev_priv) && dev_priv->display.cdclk.hw.vco > 0 && vco > 0) {
 		if (dev_priv->display.cdclk.hw.vco != vco)
 			adlp_cdclk_pll_crawl(dev_priv, vco);
-	} else if (DISPLAY_VER(dev_priv) >= 11)
-		icl_cdclk_pll_update(dev_priv, vco);
-	else
-		bxt_cdclk_pll_update(dev_priv, vco);
+	} else if (DISPLAY_VER(dev_priv) >= 11) {
+		if (dev_priv->display.cdclk.hw.vco != 0 &&
+		    dev_priv->display.cdclk.hw.vco != vco)
+			icl_cdclk_pll_disable(dev_priv);
+
+		if (dev_priv->display.cdclk.hw.vco != vco)
+			icl_cdclk_pll_enable(dev_priv, vco);
+	} else {
+		if (dev_priv->display.cdclk.hw.vco != 0 &&
+		    dev_priv->display.cdclk.hw.vco != vco)
+			bxt_de_pll_disable(dev_priv);
+
+		if (dev_priv->display.cdclk.hw.vco != vco)
+			bxt_de_pll_enable(dev_priv, vco);
+	}
 
 	waveform = cdclk_squash_waveform(dev_priv, cdclk);
 
@@ -1764,8 +1747,15 @@ static void bxt_set_cdclk(struct drm_i915_private *dev_priv,
 	else
 		clock = cdclk;
 
-	if (HAS_CDCLK_SQUASH(dev_priv))
-		dg2_cdclk_squash_program(dev_priv, waveform);
+	if (has_cdclk_squasher(dev_priv)) {
+		u32 squash_ctl = 0;
+
+		if (waveform)
+			squash_ctl = CDCLK_SQUASH_ENABLE |
+				CDCLK_SQUASH_WINDOW_SIZE(0xf) | waveform;
+
+		intel_de_write(dev_priv, CDCLK_SQUASH_CTL, squash_ctl);
+	}
 
 	val = bxt_cdclk_cd2x_div_sel(dev_priv, clock, vco) |
 		bxt_cdclk_cd2x_pipe(dev_priv, pipe) |
@@ -1855,7 +1845,7 @@ static void bxt_sanitize_cdclk(struct drm_i915_private *dev_priv)
 	expected = skl_cdclk_decimal(cdclk);
 
 	/* Figure out what CD2X divider we should be using for this cdclk */
-	if (HAS_CDCLK_SQUASH(dev_priv))
+	if (has_cdclk_squasher(dev_priv))
 		clock = dev_priv->display.cdclk.hw.vco / 2;
 	else
 		clock = dev_priv->display.cdclk.hw.cdclk;
@@ -1986,7 +1976,7 @@ static bool intel_cdclk_can_squash(struct drm_i915_private *dev_priv,
 	 * the moment all platforms with squasher use a fixed cd2x
 	 * divider.
 	 */
-	if (!HAS_CDCLK_SQUASH(dev_priv))
+	if (!has_cdclk_squasher(dev_priv))
 		return false;
 
 	return a->cdclk != b->cdclk &&
@@ -2038,7 +2028,7 @@ static bool intel_cdclk_can_cd2x_update(struct drm_i915_private *dev_priv,
 	 * the moment all platforms with squasher use a fixed cd2x
 	 * divider.
 	 */
-	if (HAS_CDCLK_SQUASH(dev_priv))
+	if (has_cdclk_squasher(dev_priv))
 		return false;
 
 	return a->cdclk != b->cdclk &&
@@ -2162,7 +2152,7 @@ intel_set_cdclk_pre_plane_update(struct intel_atomic_state *state)
 				 &new_cdclk_state->actual))
 		return;
 
-	if (pipe == INVALID_PIPE ||
+	if (new_cdclk_state->disable_pipes ||
 	    old_cdclk_state->actual.cdclk <= new_cdclk_state->actual.cdclk) {
 		drm_WARN_ON(&dev_priv->drm, !new_cdclk_state->base.changed);
 
@@ -2191,7 +2181,7 @@ intel_set_cdclk_post_plane_update(struct intel_atomic_state *state)
 				 &new_cdclk_state->actual))
 		return;
 
-	if (pipe != INVALID_PIPE &&
+	if (!new_cdclk_state->disable_pipes &&
 	    old_cdclk_state->actual.cdclk > new_cdclk_state->actual.cdclk) {
 		drm_WARN_ON(&dev_priv->drm, !new_cdclk_state->base.changed);
 
@@ -2378,6 +2368,18 @@ static int intel_compute_min_cdclk(struct intel_cdclk_state *cdclk_state)
 	for_each_pipe(dev_priv, pipe)
 		min_cdclk = max(cdclk_state->min_cdclk[pipe], min_cdclk);
 
+	/*
+	 * Avoid glk_force_audio_cdclk() causing excessive screen
+	 * blinking when multiple pipes are active by making sure
+	 * CDCLK frequency is always high enough for audio. With a
+	 * single active pipe we can always change CDCLK frequency
+	 * by changing the cd2x divider (see glk_cdclk_table[]) and
+	 * thus a full modeset won't be needed then.
+	 */
+	if (IS_GEMINILAKE(dev_priv) && cdclk_state->active_pipes &&
+	    !is_power_of_2(cdclk_state->active_pipes))
+		min_cdclk = max(2 * 96000, min_cdclk);
+
 	if (min_cdclk > dev_priv->display.cdclk.max_cdclk_freq) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "required cdclk (%d kHz) exceeds max (%d kHz)\n",
@@ -2474,6 +2476,10 @@ static int bdw_modeset_calc_cdclk(struct intel_cdclk_state *cdclk_state)
 	if (min_cdclk < 0)
 		return min_cdclk;
 
+	/*
+	 * FIXME should also account for plane ratio
+	 * once 64bpp pixel formats are supported.
+	 */
 	cdclk = bdw_calc_cdclk(min_cdclk);
 
 	cdclk_state->logical.cdclk = cdclk;
@@ -2540,6 +2546,10 @@ static int skl_modeset_calc_cdclk(struct intel_cdclk_state *cdclk_state)
 
 	vco = skl_dpll0_vco(cdclk_state);
 
+	/*
+	 * FIXME should also account for plane ratio
+	 * once 64bpp pixel formats are supported.
+	 */
 	cdclk = skl_calc_cdclk(min_cdclk, vco);
 
 	cdclk_state->logical.vco = vco;
@@ -2624,6 +2634,7 @@ static struct intel_global_state *intel_cdclk_duplicate_state(struct intel_globa
 		return NULL;
 
 	cdclk_state->pipe = INVALID_PIPE;
+	cdclk_state->disable_pipes = false;
 
 	return &cdclk_state->base;
 }
@@ -2756,7 +2767,7 @@ int intel_modeset_calc_cdclk(struct intel_atomic_state *state)
 		if (IS_ERR(crtc_state))
 			return PTR_ERR(crtc_state);
 
-		if (intel_crtc_needs_modeset(crtc_state))
+		if (drm_atomic_crtc_needs_modeset(&crtc_state->uapi))
 			pipe = INVALID_PIPE;
 	}
 
@@ -2764,12 +2775,12 @@ int intel_modeset_calc_cdclk(struct intel_atomic_state *state)
 				   &old_cdclk_state->actual,
 				   &new_cdclk_state->actual)) {
 		drm_dbg_kms(&dev_priv->drm,
-			    "Can change cdclk via squashing\n");
+			    "Can change cdclk via squasher\n");
 	} else if (intel_cdclk_can_crawl(dev_priv,
 					 &old_cdclk_state->actual,
 					 &new_cdclk_state->actual)) {
 		drm_dbg_kms(&dev_priv->drm,
-			    "Can change cdclk via crawling\n");
+			    "Can change cdclk via crawl\n");
 	} else if (pipe != INVALID_PIPE) {
 		new_cdclk_state->pipe = pipe;
 
@@ -2779,9 +2790,11 @@ int intel_modeset_calc_cdclk(struct intel_atomic_state *state)
 	} else if (intel_cdclk_needs_modeset(&old_cdclk_state->actual,
 					     &new_cdclk_state->actual)) {
 		/* All pipes must be switched off while we change the cdclk. */
-		ret = intel_modeset_all_pipes(state, "CDCLK change");
+		ret = intel_modeset_all_pipes(state);
 		if (ret)
 			return ret;
+
+		new_cdclk_state->disable_pipes = true;
 
 		drm_dbg_kms(&dev_priv->drm,
 			    "Modeset required for cdclk change\n");

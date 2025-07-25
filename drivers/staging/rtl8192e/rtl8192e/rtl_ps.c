@@ -100,43 +100,50 @@ void rtl92e_enter_sleep(struct net_device *dev, u64 time)
 static void _rtl92e_ps_update_rf_state(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	struct rt_pwr_save_ctrl *psc = (struct rt_pwr_save_ctrl *)
-					&priv->rtllib->pwr_save_ctrl;
+	struct rt_pwr_save_ctrl *pPSC = (struct rt_pwr_save_ctrl *)
+					&(priv->rtllib->PowerSaveControl);
 
-	psc->bSwRfProcessing = true;
-	rtl92e_set_rf_state(dev, psc->eInactivePowerState, RF_CHANGE_BY_IPS);
+	pPSC->bSwRfProcessing = true;
+	rtl92e_set_rf_state(dev, pPSC->eInactivePowerState, RF_CHANGE_BY_IPS);
 
-	psc->bSwRfProcessing = false;
+	pPSC->bSwRfProcessing = false;
 }
 
 void rtl92e_ips_enter(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	struct rt_pwr_save_ctrl *psc = (struct rt_pwr_save_ctrl *)
-					&priv->rtllib->pwr_save_ctrl;
+	struct rt_pwr_save_ctrl *pPSC = (struct rt_pwr_save_ctrl *)
+					&(priv->rtllib->PowerSaveControl);
 	enum rt_rf_power_state rt_state;
 
-	rt_state = priv->rtllib->rf_power_state;
-	if (rt_state == rf_on && !psc->bSwRfProcessing &&
-		(priv->rtllib->state != RTLLIB_LINKED) &&
-		(priv->rtllib->iw_mode != IW_MODE_MASTER)) {
-		psc->eInactivePowerState = rf_off;
-		_rtl92e_ps_update_rf_state(dev);
+	if (pPSC->bInactivePs) {
+		rt_state = priv->rtllib->rf_power_state;
+		if (rt_state == rf_on && !pPSC->bSwRfProcessing &&
+			(priv->rtllib->state != RTLLIB_LINKED) &&
+			(priv->rtllib->iw_mode != IW_MODE_MASTER)) {
+			pPSC->eInactivePowerState = rf_off;
+			priv->isRFOff = true;
+			priv->bInPowerSaveMode = true;
+			_rtl92e_ps_update_rf_state(dev);
+		}
 	}
 }
 
 void rtl92e_ips_leave(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	struct rt_pwr_save_ctrl *psc = (struct rt_pwr_save_ctrl *)
-					&priv->rtllib->pwr_save_ctrl;
+	struct rt_pwr_save_ctrl *pPSC = (struct rt_pwr_save_ctrl *)
+					&(priv->rtllib->PowerSaveControl);
 	enum rt_rf_power_state rt_state;
 
-	rt_state = priv->rtllib->rf_power_state;
-	if (rt_state != rf_on  && !psc->bSwRfProcessing &&
-	    priv->rtllib->rf_off_reason <= RF_CHANGE_BY_IPS) {
-		psc->eInactivePowerState = rf_on;
-		_rtl92e_ps_update_rf_state(dev);
+	if (pPSC->bInactivePs) {
+		rt_state = priv->rtllib->rf_power_state;
+		if (rt_state != rf_on  && !pPSC->bSwRfProcessing &&
+		    priv->rtllib->rf_off_reason <= RF_CHANGE_BY_IPS) {
+			pPSC->eInactivePowerState = rf_on;
+			priv->bInPowerSaveMode = false;
+			_rtl92e_ps_update_rf_state(dev);
+		}
 	}
 }
 
@@ -158,15 +165,18 @@ void rtl92e_rtllib_ips_leave_wq(struct net_device *dev)
 	enum rt_rf_power_state rt_state;
 
 	rt_state = priv->rtllib->rf_power_state;
-	if (rt_state == rf_off) {
-		if (priv->rtllib->rf_off_reason > RF_CHANGE_BY_IPS) {
-			netdev_warn(dev, "%s(): RF is OFF.\n",
+
+	if (priv->rtllib->PowerSaveControl.bInactivePs) {
+		if (rt_state == rf_off) {
+			if (priv->rtllib->rf_off_reason > RF_CHANGE_BY_IPS) {
+				netdev_warn(dev, "%s(): RF is OFF.\n",
+					    __func__);
+				return;
+			}
+			netdev_info(dev, "=========>%s(): rtl92e_ips_leave\n",
 				    __func__);
-			return;
+			schedule_work(&priv->rtllib->ips_leave_wq);
 		}
-		netdev_info(dev, "=========>%s(): rtl92e_ips_leave\n",
-			    __func__);
-		schedule_work(&priv->rtllib->ips_leave_wq);
 	}
 }
 
@@ -206,8 +216,8 @@ static bool _rtl92e_ps_set_mode(struct net_device *dev, u8 rtPsMode)
 void rtl92e_leisure_ps_enter(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	struct rt_pwr_save_ctrl *psc = (struct rt_pwr_save_ctrl *)
-					&priv->rtllib->pwr_save_ctrl;
+	struct rt_pwr_save_ctrl *pPSC = (struct rt_pwr_save_ctrl *)
+					&(priv->rtllib->PowerSaveControl);
 
 	if (!((priv->rtllib->iw_mode == IW_MODE_INFRA) &&
 	    (priv->rtllib->state == RTLLIB_LINKED))
@@ -215,31 +225,38 @@ void rtl92e_leisure_ps_enter(struct net_device *dev)
 	    (priv->rtllib->iw_mode == IW_MODE_MASTER))
 		return;
 
-	if (psc->bLeisurePs) {
-		if (psc->LpsIdleCount >= RT_CHECK_FOR_HANG_PERIOD) {
+	if (pPSC->bLeisurePs) {
+		if (pPSC->LpsIdleCount >= RT_CHECK_FOR_HANG_PERIOD) {
 
 			if (priv->rtllib->ps == RTLLIB_PS_DISABLED) {
-				if (priv->rtllib->SetFwCmdHandler)
-					priv->rtllib->SetFwCmdHandler(dev, FW_CMD_LPS_ENTER);
+				if (!pPSC->bFwCtrlLPS) {
+					if (priv->rtllib->SetFwCmdHandler)
+						priv->rtllib->SetFwCmdHandler(
+							dev, FW_CMD_LPS_ENTER);
+				}
 				_rtl92e_ps_set_mode(dev, RTLLIB_PS_MBCAST |
 							 RTLLIB_PS_UNICAST);
 			}
 		} else
-			psc->LpsIdleCount++;
+			pPSC->LpsIdleCount++;
 	}
 }
 
 void rtl92e_leisure_ps_leave(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	struct rt_pwr_save_ctrl *psc = (struct rt_pwr_save_ctrl *)
-					&priv->rtllib->pwr_save_ctrl;
+	struct rt_pwr_save_ctrl *pPSC = (struct rt_pwr_save_ctrl *)
+					&(priv->rtllib->PowerSaveControl);
 
-	if (psc->bLeisurePs) {
+	if (pPSC->bLeisurePs) {
 		if (priv->rtllib->ps != RTLLIB_PS_DISABLED) {
 			_rtl92e_ps_set_mode(dev, RTLLIB_PS_DISABLED);
-			if (priv->rtllib->SetFwCmdHandler)
-				priv->rtllib->SetFwCmdHandler(dev, FW_CMD_LPS_LEAVE);
+
+			if (!pPSC->bFwCtrlLPS) {
+				if (priv->rtllib->SetFwCmdHandler)
+					priv->rtllib->SetFwCmdHandler(dev,
+							 FW_CMD_LPS_LEAVE);
+			}
 		}
 	}
 }

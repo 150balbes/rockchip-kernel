@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/pci/qcom,pcie-ep.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Qualcomm PCIe Endpoint Controller
+title: Qualcomm PCIe Endpoint Controller binding
 
 maintainers:
   - Manivannan Sadhasivam <manivannan.sadhasivam@linaro.org>

@@ -36,7 +36,6 @@
 
 		l2: l2-cache0 {
 			compatible = "cache";
-			cache-level = <2>;
 		};
 	};
 

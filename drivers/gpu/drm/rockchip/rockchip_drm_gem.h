@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
+ * Copyright (C) Rockchip Electronics Co., Ltd.
  * Author:Mark Yao <mark.yao@rock-chips.com>
  */
 
@@ -41,15 +41,9 @@ struct drm_gem_object *
 rockchip_gem_prime_import_sg_table(struct drm_device *dev,
 				   struct dma_buf_attachment *attach,
 				   struct sg_table *sg);
-//void *rockchip_gem_prime_vmap(struct drm_gem_object *obj);
-//void rockchip_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr);
-
-/* drm driver mmap file operations */
-int rockchip_gem_mmap(struct file *filp, struct vm_area_struct *vma);
-
-/* mmap a gem object to userspace. */
-int rockchip_gem_mmap_buf(struct drm_gem_object *obj,
-			  struct vm_area_struct *vma);
+int rockchip_gem_prime_vmap(struct drm_gem_object *obj, struct iosys_map *map);
+void rockchip_gem_prime_vunmap(struct drm_gem_object *obj,
+			       struct iosys_map *map);
 
 struct rockchip_gem_object *
 rockchip_gem_create_object(struct drm_device *drm, unsigned int size,
@@ -60,6 +54,7 @@ void rockchip_gem_free_object(struct drm_gem_object *obj);
 int rockchip_gem_dumb_create(struct drm_file *file_priv,
 			     struct drm_device *dev,
 			     struct drm_mode_create_dumb *args);
+
 /*
  * request gem object creation and buffer allocation as the size
  * that it is calculated with framebuffer information such as width,
@@ -81,14 +76,8 @@ int rockchip_gem_prime_begin_cpu_access(struct drm_gem_object *obj,
 int rockchip_gem_prime_end_cpu_access(struct drm_gem_object *obj,
 				      enum dma_data_direction dir);
 
-int rockchip_gem_prime_begin_cpu_access_partial(struct drm_gem_object *obj,
-						enum dma_data_direction dir,
-						unsigned int offset,
-						unsigned int len);
-
-int rockchip_gem_prime_end_cpu_access_partial(struct drm_gem_object *obj,
-					      enum dma_data_direction dir,
-					      unsigned int offset,
-					      unsigned int len);
 void rockchip_gem_get_ddr_info(void);
+
+extern const struct drm_gem_object_funcs rockchip_gem_object_funcs;
+
 #endif /* _ROCKCHIP_DRM_GEM_H */

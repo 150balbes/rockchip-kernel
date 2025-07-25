@@ -49,7 +49,7 @@ xchk_setup_xattr_buf(
 	if (ab) {
 		if (sz <= ab->sz)
 			return 0;
-		kvfree(ab);
+		kmem_free(ab);
 		sc->buf = NULL;
 	}
 
@@ -79,8 +79,7 @@ xchk_setup_xattr(
 	 * without the inode lock held, which means we can sleep.
 	 */
 	if (sc->flags & XCHK_TRY_HARDER) {
-		error = xchk_setup_xattr_buf(sc, XATTR_SIZE_MAX,
-				XCHK_GFP_FLAGS);
+		error = xchk_setup_xattr_buf(sc, XATTR_SIZE_MAX, GFP_KERNEL);
 		if (error)
 			return error;
 	}
@@ -139,7 +138,8 @@ xchk_xattr_listent(
 	 * doesn't work, we overload the seen_enough variable to convey
 	 * the error message back to the main scrub function.
 	 */
-	error = xchk_setup_xattr_buf(sx->sc, valuelen, XCHK_GFP_FLAGS);
+	error = xchk_setup_xattr_buf(sx->sc, valuelen,
+			GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 	if (error == -ENOMEM)
 		error = -EDEADLOCK;
 	if (error) {
@@ -324,7 +324,8 @@ xchk_xattr_block(
 		return 0;
 
 	/* Allocate memory for block usage checking. */
-	error = xchk_setup_xattr_buf(ds->sc, 0, XCHK_GFP_FLAGS);
+	error = xchk_setup_xattr_buf(ds->sc, 0,
+			GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 	if (error == -ENOMEM)
 		return -EDEADLOCK;
 	if (error)

@@ -624,7 +624,8 @@ static int stmfts_enable_led(struct stmfts_data *sdata)
 	return 0;
 }
 
-static int stmfts_probe(struct i2c_client *client)
+static int stmfts_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int err;
 	struct stmfts_data *sdata;
@@ -808,7 +809,7 @@ static struct i2c_driver stmfts_driver = {
 		.pm = &stmfts_pm_ops,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
-	.probe_new = stmfts_probe,
+	.probe = stmfts_probe,
 	.remove = stmfts_remove,
 	.id_table = stmfts_id,
 };

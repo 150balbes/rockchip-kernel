@@ -2226,8 +2226,10 @@ static int tegra194_cbb_get_bridges(struct tegra194_cbb *cbb, struct device_node
 
 			cbb->bridges[i].base = devm_ioremap_resource(cbb->base.dev,
 								     &cbb->bridges[i].res);
-			if (IS_ERR(cbb->bridges[i].base))
+			if (IS_ERR(cbb->bridges[i].base)) {
+				dev_err(cbb->base.dev, "failed to map AXI2APB range\n");
 				return PTR_ERR(cbb->bridges[i].base);
+			}
 		}
 	}
 

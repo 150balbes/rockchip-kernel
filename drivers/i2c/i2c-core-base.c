@@ -61,6 +61,7 @@
 static DEFINE_MUTEX(core_lock);
 static DEFINE_IDR(i2c_adapter_idr);
 
+static int i2c_check_addr_ex(struct i2c_adapter *adapter, int addr);
 static int i2c_detect(struct i2c_adapter *adapter, struct i2c_driver *driver);
 
 static DEFINE_STATIC_KEY_FALSE(i2c_trace_msg_key);
@@ -853,7 +854,8 @@ static void i2c_adapter_unlock_bus(struct i2c_adapter *adapter,
 
 static void i2c_dev_set_name(struct i2c_adapter *adap,
 			     struct i2c_client *client,
-			     struct i2c_board_info const *info)
+			     struct i2c_board_info const *info,
+			     int status)
 {
 	struct acpi_device *adev = ACPI_COMPANION(&client->dev);
 
@@ -867,8 +869,12 @@ static void i2c_dev_set_name(struct i2c_adapter *adap,
 		return;
 	}
 
-	dev_set_name(&client->dev, "%d-%04x", i2c_adapter_id(adap),
-		     i2c_encode_flags_to_addr(client));
+	if (status == 0)
+		dev_set_name(&client->dev, "%d-%04x", i2c_adapter_id(adap),
+			i2c_encode_flags_to_addr(client));
+	else
+		dev_set_name(&client->dev, "%d-%04x-%01x", i2c_adapter_id(adap),
+			i2c_encode_flags_to_addr(client), status);
 }
 
 int i2c_dev_irq_from_resources(const struct resource *resources,
@@ -916,8 +922,10 @@ int i2c_dev_irq_from_resources(const struct resource *resources,
 struct i2c_client *
 i2c_new_client_device(struct i2c_adapter *adap, struct i2c_board_info const *info)
 {
-	struct i2c_client	*client;
-	int			status;
+	struct i2c_client *client;
+	bool need_put = false;
+	int status;
+	int cnt;
 
 	client = kzalloc(sizeof *client, GFP_KERNEL);
 	if (!client)
@@ -944,9 +952,12 @@ i2c_new_client_device(struct i2c_adapter *adap, struct i2c_board_info const *inf
 	}
 
 	/* Check for address business */
-	status = i2c_check_addr_busy(adap, i2c_encode_flags_to_addr(client));
+	status = i2c_check_addr_ex(adap, i2c_encode_flags_to_addr(client));
 	if (status)
-		goto out_err;
+		dev_err(&adap->dev,
+			"%d i2c clients have been registered at 0x%02x",
+			status, client->addr);
+	cnt = status;
 
 	client->dev.parent = &client->adapter->dev;
 	client->dev.bus = &i2c_bus_type;
@@ -955,7 +966,6 @@ i2c_new_client_device(struct i2c_adapter *adap, struct i2c_board_info const *inf
 	client->dev.fwnode = info->fwnode;
 
 	device_enable_async_suspend(&client->dev);
-	i2c_dev_set_name(adap, client, info);
 
 	if (info->swnode) {
 		status = device_add_software_node(&client->dev, info->swnode);
@@ -967,6 +977,7 @@ i2c_new_client_device(struct i2c_adapter *adap, struct i2c_board_info const *inf
 		}
 	}
 
+	i2c_dev_set_name(adap, client, info, cnt);
 	status = device_register(&client->dev);
 	if (status)
 		goto out_remove_swnode;
@@ -978,14 +989,17 @@ i2c_new_client_device(struct i2c_adapter *adap, struct i2c_board_info const *inf
 
 out_remove_swnode:
 	device_remove_software_node(&client->dev);
+	need_put = true;
 out_err_put_of_node:
 	of_node_put(info->of_node);
-out_err:
 	dev_err(&adap->dev,
 		"Failed to register i2c client %s at 0x%02x (%d)\n",
 		client->name, client->addr, status);
 out_err_silent:
-	kfree(client);
+	if (need_put)
+		put_device(&client->dev);
+	else
+		kfree(client);
 	return ERR_PTR(status);
 }
 EXPORT_SYMBOL_GPL(i2c_new_client_device);
@@ -1012,20 +1026,50 @@ void i2c_unregister_device(struct i2c_client *client)
 }
 EXPORT_SYMBOL_GPL(i2c_unregister_device);
 
+/**
+ * i2c_find_device_by_fwnode() - find an i2c_client for the fwnode
+ * @fwnode: &struct fwnode_handle corresponding to the &struct i2c_client
+ *
+ * Look up and return the &struct i2c_client corresponding to the @fwnode.
+ * If no client can be found, or @fwnode is NULL, this returns NULL.
+ *
+ * The user must call put_device(&client->dev) once done with the i2c client.
+ */
+struct i2c_client *i2c_find_device_by_fwnode(struct fwnode_handle *fwnode)
+{
+	struct i2c_client *client;
+	struct device *dev;
+
+	if (!fwnode)
+		return NULL;
+
+	dev = bus_find_device_by_fwnode(&i2c_bus_type, fwnode);
+	if (!dev)
+		return NULL;
+
+	client = i2c_verify_client(dev);
+	if (!client)
+		put_device(dev);
+
+	return client;
+}
+EXPORT_SYMBOL(i2c_find_device_by_fwnode);
+
 
 static const struct i2c_device_id dummy_id[] = {
 	{ "dummy", 0 },
 	{ },
 };
 
-static int dummy_probe(struct i2c_client *client)
+static int dummy_probe(struct i2c_client *client,
+		       const struct i2c_device_id *id)
 {
 	return 0;
 }
 
 static struct i2c_driver dummy_driver = {
 	.driver.name	= "dummy",
-	.probe_new	= dummy_probe,
+	.probe		= dummy_probe,
 	.id_table	= dummy_id,
 };
 
@@ -1761,6 +1805,75 @@ int devm_i2c_add_adapter(struct device *dev, struct i2c_adapter *adapter)
 }
 EXPORT_SYMBOL_GPL(devm_i2c_add_adapter);
 
+static int i2c_dev_or_parent_fwnode_match(struct device *dev, const void *data)
+{
+	if (dev_fwnode(dev) == data)
+		return 1;
+
+	if (dev->parent && dev_fwnode(dev->parent) == data)
+		return 1;
+
+	return 0;
+}
+
+/**
+ * i2c_find_adapter_by_fwnode() - find an i2c_adapter for the fwnode
+ * @fwnode: &struct fwnode_handle corresponding to the &struct i2c_adapter
+ *
+ * Look up and return the &struct i2c_adapter corresponding to the @fwnode.
+ * If no adapter can be found, or @fwnode is NULL, this returns NULL.
+ *
+ * The user must call put_device(&adapter->dev) once done with the i2c adapter.
+ */
+struct i2c_adapter *i2c_find_adapter_by_fwnode(struct fwnode_handle *fwnode)
+{
+	struct i2c_adapter *adapter;
+	struct device *dev;
+
+	if (!fwnode)
+		return NULL;
+
+	dev = bus_find_device(&i2c_bus_type, NULL, fwnode,
+			      i2c_dev_or_parent_fwnode_match);
+	if (!dev)
+		return NULL;
+
+	adapter = i2c_verify_adapter(dev);
+	if (!adapter)
+		put_device(dev);
+
+	return adapter;
+}
+EXPORT_SYMBOL(i2c_find_adapter_by_fwnode);
+
+/**
+ * i2c_get_adapter_by_fwnode() - find an i2c_adapter for the fwnode
+ * @fwnode: &struct fwnode_handle corresponding to the &struct i2c_adapter
+ *
+ * Look up and return the &struct i2c_adapter corresponding to the @fwnode,
+ * and increment the adapter module's use count. If no adapter can be found,
+ * or @fwnode is NULL, this returns NULL.
+ *
+ * The user must call i2c_put_adapter(adapter) once done with the i2c adapter.
+ * Note that this is different from i2c_find_adapter_by_node().
+ */
+struct i2c_adapter *i2c_get_adapter_by_fwnode(struct fwnode_handle *fwnode)
+{
+	struct i2c_adapter *adapter;
+
+	adapter = i2c_find_adapter_by_fwnode(fwnode);
+	if (!adapter)
+		return NULL;
+
+	if (!try_module_get(adapter->owner)) {
+		put_device(&adapter->dev);
+		adapter = NULL;
+	}
+
+	return adapter;
+}
+EXPORT_SYMBOL(i2c_get_adapter_by_fwnode);
+
 static void i2c_parse_timing(struct device *dev, char *prop_name, u32 *cur_val_p,
 			    u32 def_val, bool use_def)
 {
@@ -1893,6 +2006,33 @@ void i2c_del_driver(struct i2c_driver *driver)
 EXPORT_SYMBOL(i2c_del_driver);
 
 /* ------------------------------------------------------------------------- */
+
+struct i2c_addr_cnt {
+	int addr;
+	int cnt;
+};
+
+static int __i2c_check_addr_ex(struct device *dev, void *addrp)
+{
+	struct i2c_client *client = i2c_verify_client(dev);
+	struct i2c_addr_cnt *addrinfo = (struct i2c_addr_cnt *)addrp;
+	int addr = addrinfo->addr;
+
+	if (client && client->addr == addr)
+		addrinfo->cnt++;
+
+	return 0;
+}
+
+static int i2c_check_addr_ex(struct i2c_adapter *adapter, int addr)
+{
+	struct i2c_addr_cnt addrinfo;
+
+	addrinfo.addr = addr;
+	addrinfo.cnt = 0;
+	device_for_each_child(&adapter->dev, &addrinfo, __i2c_check_addr_ex);
+	return addrinfo.cnt;
+}
 
 struct i2c_cmd_arg {
 	unsigned	cmd;
@@ -2069,12 +2209,17 @@ static int i2c_check_for_quirks(struct i2c_adapter *adap, struct i2c_msg *msgs, 
  * Returns negative errno, else the number of messages executed.
  *
  * Adapter lock must be held when calling this function. No debug logging
- * takes place. adap->algo->master_xfer existence isn't checked.
+ * takes place.
  */
 int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 {
 	unsigned long orig_jiffies;
 	int ret, try;
+
+	if (!adap->algo->master_xfer) {
+		dev_dbg(&adap->dev, "I2C level transfers not supported\n");
+		return -EOPNOTSUPP;
+	}
 
 	if (WARN_ON(!msgs || num < 1))
 		return -EINVAL;
@@ -2141,11 +2286,6 @@ EXPORT_SYMBOL(__i2c_transfer);
 int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 {
 	int ret;
-
-	if (!adap->algo->master_xfer) {
-		dev_dbg(&adap->dev, "I2C level transfers not supported\n");
-		return -EOPNOTSUPP;
-	}
 
 	/* REVISIT the fault reporting model here is weak:
 	 *
@@ -2235,20 +2375,6 @@ int i2c_get_device_id(const struct i2c_client *client,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(i2c_get_device_id);
-
-/**
- * i2c_client_get_device_id - get the driver match table entry of a device
- * @client: the device to query. The device must be bound to a driver
- *
- * Returns a pointer to the matching entry if found, NULL otherwise.
- */
-const struct i2c_device_id *i2c_client_get_device_id(const struct i2c_client *client)
-{
-	const struct i2c_driver *drv = to_i2c_driver(client->dev.driver);
-
-	return i2c_match_id(drv->id_table, client);
-}
-EXPORT_SYMBOL_GPL(i2c_client_get_device_id);
 
 /* ----------------------------------------------------
  * the i2c address scanning function

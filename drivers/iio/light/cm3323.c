@@ -214,7 +214,8 @@ static const struct iio_info cm3323_info = {
 	.attrs		= &cm3323_attribute_group,
 };
 
-static int cm3323_probe(struct i2c_client *client)
+static int cm3323_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct cm3323_data *data;
 	struct iio_dev *indio_dev;
@@ -266,7 +267,7 @@ static struct i2c_driver cm3323_driver = {
 		.name = CM3323_DRV_NAME,
 		.of_match_table = cm3323_of_match,
 	},
-	.probe_new	= cm3323_probe,
+	.probe		= cm3323_probe,
 	.id_table	= cm3323_id,
 };
 

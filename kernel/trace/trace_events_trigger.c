@@ -1067,14 +1067,7 @@ int set_trigger_filter(char *filter_str,
 
 	/* The filter is for the 'trigger' event, not the triggered event */
 	ret = create_event_filter(file->tr, file->event_call,
-				  filter_str, true, &filter);
-
-	/* Only enabled set_str for error handling */
-	if (filter) {
-		kfree(filter->filter_string);
-		filter->filter_string = NULL;
-	}
-
+				  filter_str, false, &filter);
 	/*
 	 * If create_event_filter() fails, filter still needs to be freed.
 	 * Which the calling code will do with data->filter.
@@ -1085,14 +1078,8 @@ int set_trigger_filter(char *filter_str,
 	rcu_assign_pointer(data->filter, filter);
 
 	if (tmp) {
-		/*
-		 * Make sure the call is done with the filter.
-		 * It is possible that a filter could fail at boot up,
-		 * and then this path will be called. Avoid the synchronization
-		 * in that case.
-		 */
-		if (system_state != SYSTEM_BOOTING)
-			tracepoint_synchronize_unregister();
+		/* Make sure the call is done with the filter */
+		tracepoint_synchronize_unregister();
 		free_event_filter(tmp);
 	}
 
@@ -1468,8 +1455,10 @@ register_snapshot_trigger(char *glob,
 			  struct event_trigger_data *data,
 			  struct trace_event_file *file)
 {
-	if (tracing_alloc_snapshot_instance(file->tr) != 0)
-		return 0;
+	int ret = tracing_alloc_snapshot_instance(file->tr);
+
+	if (ret < 0)
+		return ret;
 
 	return register_trigger(glob, data, file);
 }

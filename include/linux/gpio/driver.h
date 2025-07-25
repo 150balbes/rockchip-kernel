@@ -7,8 +7,8 @@
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
 #include <linux/lockdep.h>
-#include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinctrl.h>
+#include <linux/pinctrl/pinconf-generic.h>
 #include <linux/property.h>
 #include <linux/types.h>
 
@@ -27,7 +27,7 @@ struct gpio_chip;
 
 union gpio_irq_fwspec {
 	struct irq_fwspec	fwspec;
-#ifdef CONFIG_GENERIC_MSI_IRQ
+#ifdef CONFIG_GENERIC_MSI_IRQ_DOMAIN
 	msi_alloc_info_t	msiinfo;
 #endif
 };
@@ -243,6 +243,14 @@ struct gpio_irq_chip {
 	 * before they are initialized.
 	 */
 	bool initialized;
+
+	/**
+	 * @domain_is_allocated_externally:
+	 *
+	 * True it the irq_domain was allocated outside of gpiolib, in which
+	 * case gpiolib won't free the irq_domain itself.
+	 */
+	bool domain_is_allocated_externally;
 
 	/**
 	 * @init_hw: optional routine to initialize hardware before

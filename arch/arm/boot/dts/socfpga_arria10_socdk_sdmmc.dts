@@ -12,7 +12,6 @@
 	cap-mmc-highspeed;
 	broken-cd;
 	bus-width = <4>;
-	clk-phase-sd-hs = <0>, <135>;
 };
 
 &eccmgr {

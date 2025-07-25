@@ -949,7 +949,8 @@ static irqreturn_t isl29501_trigger_handler(int irq, void *p)
 	return IRQ_HANDLED;
 }
 
-static int isl29501_probe(struct i2c_client *client)
+static int isl29501_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct iio_dev *indio_dev;
 	struct isl29501_private *isl29501;
@@ -1008,7 +1009,7 @@ static struct i2c_driver isl29501_driver = {
 		.name	= "isl29501",
 	},
 	.id_table	= isl29501_id,
-	.probe_new	= isl29501_probe,
+	.probe		= isl29501_probe,
 };
 module_i2c_driver(isl29501_driver);
 

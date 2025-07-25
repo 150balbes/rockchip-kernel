@@ -20,6 +20,16 @@ static const struct snd_soc_acpi_codecs mtl_rt5682_rt5682s_hp = {
 	.codecs = {"10EC5682", "RTL5682"},
 };
 
+static const struct snd_soc_acpi_codecs mtl_lt6911_hdmi = {
+	.num_codecs = 1,
+	.codecs = {"INTC10B0"}
+};
+
+static const struct snd_soc_acpi_codecs mtl_essx_83x6 = {
+	.num_codecs = 3,
+	.codecs = { "ESSX8316", "ESSX8326", "ESSX8336"},
+};
+
 struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_machines[] = {
 	{
 		.comp_ids = &mtl_rt5682_rt5682s_hp,
@@ -27,6 +37,14 @@ struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_machines[] = {
 		.machine_quirk = snd_soc_acpi_codec_list,
 		.quirk_data = &mtl_max98357a_amp,
 		.sof_tplg_filename = "sof-mtl-max98357a-rt5682.tplg",
+	},
+	{
+		.comp_ids = &mtl_essx_83x6,
+		.drv_name = "sof-essx8336",
+		.sof_tplg_filename = "sof-mtl-es8336", /* the tplg suffix is added at run time */
+		.tplg_quirk_mask = SND_SOC_ACPI_TPLG_INTEL_SSP_NUMBER |
+					SND_SOC_ACPI_TPLG_INTEL_SSP_MSB |
+					SND_SOC_ACPI_TPLG_INTEL_DMIC_NUMBER,
 	},
 	{},
 };
@@ -39,20 +57,6 @@ static const struct snd_soc_acpi_endpoint single_endpoint = {
 	.group_id = 0,
 };
 
-static const struct snd_soc_acpi_endpoint spk_l_endpoint = {
-	.num = 0,
-	.aggregated = 1,
-	.group_position = 0,
-	.group_id = 1,
-};
-
-static const struct snd_soc_acpi_endpoint spk_r_endpoint = {
-	.num = 0,
-	.aggregated = 1,
-	.group_position = 1,
-	.group_id = 1,
-};
-
 static const struct snd_soc_acpi_adr_device rt711_sdca_0_adr[] = {
 	{
 		.adr = 0x000030025D071101ull,
@@ -60,45 +64,6 @@ static const struct snd_soc_acpi_adr_device rt711_sdca_0_adr[] = {
 		.endpoints = &single_endpoint,
 		.name_prefix = "rt711"
 	}
-};
-
-static const struct snd_soc_acpi_adr_device mx8373_0_adr[] = {
-	{
-		.adr = 0x000023019F837300ull,
-		.num_endpoints = 1,
-		.endpoints = &spk_l_endpoint,
-		.name_prefix = "Left"
-	},
-	{
-		.adr = 0x000027019F837300ull,
-		.num_endpoints = 1,
-		.endpoints = &spk_r_endpoint,
-		.name_prefix = "Right"
-	}
-};
-
-static const struct snd_soc_acpi_adr_device rt5682_2_adr[] = {
-	{
-		.adr = 0x000221025D568200ull,
-		.num_endpoints = 1,
-		.endpoints = &single_endpoint,
-		.name_prefix = "rt5682"
-	}
-};
-
-static const struct snd_soc_acpi_link_adr rt5682_link2_max98373_link0[] = {
-	/* Expected order: jack -> amp */
-	{
-		.mask = BIT(2),
-		.num_adr = ARRAY_SIZE(rt5682_2_adr),
-		.adr_d = rt5682_2_adr,
-	},
-	{
-		.mask = BIT(0),
-		.num_adr = ARRAY_SIZE(mx8373_0_adr),
-		.adr_d = mx8373_0_adr,
-	},
-	{}
 };
 
 static const struct snd_soc_acpi_link_adr mtl_rvp[] = {
@@ -120,6 +85,13 @@ struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_sdw_machines[] = {
 		.sof_tplg_filename = "sof-mtl-rt711-rt1308-rt715.tplg",
 	},
 	{
+		.comp_ids = &mtl_essx_83x6,
+		.drv_name = "mtl_es83x6_c1_h02",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &mtl_lt6911_hdmi,
+		.sof_tplg_filename = "sof-mtl-es83x6-ssp1-hdmi-ssp02.tplg",
+	},
+	{
 		.link_mask = BIT(0) | BIT(1) | BIT(3),
 		.links = sdw_mockup_headset_1amp_mic,
 		.drv_name = "sof_sdw",
@@ -136,12 +108,6 @@ struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_sdw_machines[] = {
 		.links = mtl_rvp,
 		.drv_name = "sof_sdw",
 		.sof_tplg_filename = "sof-mtl-rt711.tplg",
-	},
-	{
-		.link_mask = BIT(0) | BIT(2),
-		.links = rt5682_link2_max98373_link0,
-		.drv_name = "sof_sdw",
-		.sof_tplg_filename = "sof-mtl-sdw-rt5682-l2-max98373-l0.tplg",
 	},
 	{},
 };

@@ -18,6 +18,7 @@
 #include <linux/capability.h>
 #include <linux/elf.h>
 #include <linux/elfcore.h>
+#include <linux/notifier.h>
 #include <linux/vmalloc.h>
 #include <linux/highmem.h>
 #include <linux/printk.h>
@@ -540,17 +541,25 @@ read_kcore(struct file *file, char __user *buffer, size_t buflen, loff_t *fpos)
 			fallthrough;
 		case KCORE_VMEMMAP:
 		case KCORE_TEXT:
-			/*
-			 * Using bounce buffer to bypass the
-			 * hardened user copy kernel text checks.
-			 */
-			if (copy_from_kernel_nofault(buf, (void *)start, tsz)) {
-				if (clear_user(buffer, tsz)) {
-					ret = -EFAULT;
-					goto out;
+			if (kern_addr_valid(start)) {
+				/*
+				 * Using bounce buffer to bypass the
+				 * hardened user copy kernel text checks.
+				 */
+				if (copy_from_kernel_nofault(buf, (void *)start,
+						tsz)) {
+					if (clear_user(buffer, tsz)) {
+						ret = -EFAULT;
+						goto out;
+					}
+				} else {
+					if (copy_to_user(buffer, buf, tsz)) {
+						ret = -EFAULT;
+						goto out;
+					}
 				}
 			} else {
-				if (copy_to_user(buffer, buf, tsz)) {
+				if (clear_user(buffer, tsz)) {
 					ret = -EFAULT;
 					goto out;
 				}
@@ -629,6 +638,10 @@ static int __meminit kcore_callback(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
+static struct notifier_block kcore_callback_nb __meminitdata = {
+	.notifier_call = kcore_callback,
+	.priority = 0,
+};
 
 static struct kcore_list kcore_vmalloc;
 
@@ -681,7 +694,7 @@ static int __init proc_kcore_init(void)
 	add_modules_range();
 	/* Store direct-map area from physical memory map */
 	kcore_update_ram();
-	hotplug_memory_notifier(kcore_callback, DEFAULT_CALLBACK_PRI);
+	register_hotmemory_notifier(&kcore_callback_nb);
 
 	return 0;
 }

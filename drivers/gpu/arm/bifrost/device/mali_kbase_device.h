@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -19,7 +19,11 @@
  *
  */
 
+#ifndef _MALI_KBASE_DEVICE_H_
+#define _MALI_KBASE_DEVICE_H_
+
 #include <mali_kbase.h>
+#include <hw_access/mali_kbase_hw_access.h>
 
 /**
  * kbase_device_get_list - get device list.
@@ -54,6 +58,9 @@ void kbase_increment_device_id(void);
  * When a device file is opened for the first time,
  * load firmware and initialize hardware counter components.
  *
+ * It is safe for this function to be called multiple times without ill
+ * effects. Only the first call would be effective.
+ *
  * Return: 0 on success. An error code on failure.
  */
 int kbase_device_firmware_init_once(struct kbase_device *kbdev);
@@ -81,27 +88,6 @@ int kbase_device_init(struct kbase_device *kbdev);
 void kbase_device_term(struct kbase_device *kbdev);
 
 /**
- * kbase_reg_write - write to GPU register
- * @kbdev:  Kbase device pointer
- * @offset: Offset of register
- * @value:  Value to write
- *
- * Caller must ensure the GPU is powered (@kbdev->pm.gpu_powered != false).
- */
-void kbase_reg_write(struct kbase_device *kbdev, u32 offset, u32 value);
-
-/**
- * kbase_reg_read - read from GPU register
- * @kbdev:  Kbase device pointer
- * @offset: Offset of register
- *
- * Caller must ensure the GPU is powered (@kbdev->pm.gpu_powered != false).
- *
- * Return: Value in desired register
- */
-u32 kbase_reg_read(struct kbase_device *kbdev, u32 offset);
-
-/**
  * kbase_is_gpu_removed() - Has the GPU been removed.
  * @kbdev:    Kbase device pointer
  *
@@ -114,6 +100,26 @@ u32 kbase_reg_read(struct kbase_device *kbdev, u32 offset);
  * Return: True if GPU removed
  */
 bool kbase_is_gpu_removed(struct kbase_device *kbdev);
+
+/**
+ * kbase_gpu_cache_flush_pa_range_and_busy_wait() - Start a cache physical range flush
+ * and busy wait
+ *
+ * @kbdev:    kbase device to issue the MMU operation on.
+ * @phys:     Starting address of the physical range to start the operation on.
+ * @nr_bytes: Number of bytes to work on.
+ * @flush_op: Flush command register value to be sent to HW
+ *
+ * Issue a cache flush physical range command, then busy wait an irq status.
+ * This function will clear FLUSH_PA_RANGE_COMPLETED irq mask bit
+ * and busy-wait the rawstat register.
+ *
+ * Return: 0 if successful or a negative error code on failure.
+ */
+#if MALI_USE_CSF
+int kbase_gpu_cache_flush_pa_range_and_busy_wait(struct kbase_device *kbdev, phys_addr_t phys,
+						 size_t nr_bytes, u32 flush_op);
+#endif /* MALI_USE_CSF */
 
 /**
  * kbase_gpu_cache_flush_and_busy_wait - Start a cache flush and busy wait
@@ -129,8 +135,7 @@ bool kbase_is_gpu_removed(struct kbase_device *kbdev);
  *
  * Return: 0 if successful or a negative error code on failure.
  */
-int kbase_gpu_cache_flush_and_busy_wait(struct kbase_device *kbdev,
-					u32 flush_op);
+int kbase_gpu_cache_flush_and_busy_wait(struct kbase_device *kbdev, u32 flush_op);
 
 /**
  * kbase_gpu_start_cache_clean - Start a cache clean
@@ -150,8 +155,7 @@ void kbase_gpu_start_cache_clean(struct kbase_device *kbdev, u32 flush_op);
  * Issue a given cache flush command to hardware.
  * hwaccess_lock must be held by the caller.
  */
-void kbase_gpu_start_cache_clean_nolock(struct kbase_device *kbdev,
-					u32 flush_op);
+void kbase_gpu_start_cache_clean_nolock(struct kbase_device *kbdev, u32 flush_op);
 
 /**
  * kbase_gpu_wait_cache_clean - Wait for cache cleaning to finish
@@ -171,11 +175,11 @@ void kbase_gpu_wait_cache_clean(struct kbase_device *kbdev);
  * called from paths (like GPU reset) where an indefinite wait for the
  * completion of cache clean operation can cause deadlock, as the operation may
  * never complete.
+ * If cache clean times out, reset GPU to recover.
  *
  * Return: 0 if successful or a negative error code on failure.
  */
-int kbase_gpu_wait_cache_clean_timeout(struct kbase_device *kbdev,
-		unsigned int wait_timeout_ms);
+int kbase_gpu_wait_cache_clean_timeout(struct kbase_device *kbdev, unsigned int wait_timeout_ms);
 
 /**
  * kbase_gpu_cache_clean_wait_complete - Called after the cache cleaning is
@@ -188,7 +192,7 @@ int kbase_gpu_wait_cache_clean_timeout(struct kbase_device *kbdev,
 void kbase_gpu_cache_clean_wait_complete(struct kbase_device *kbdev);
 
 /**
- * kbase_clean_caches_done - Issue preiously queued cache clean request or
+ * kbase_clean_caches_done - Issue previously queued cache clean request or
  *                           wake up the requester that issued cache clean.
  * @kbdev: Kbase device
  *
@@ -205,3 +209,5 @@ void kbase_clean_caches_done(struct kbase_device *kbdev);
  * handled.
  */
 void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val);
+
+#endif /* _MALI_KBASE_DEVICE_H_ */

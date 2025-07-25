@@ -2,11 +2,7 @@
 /* Copyright 2019 NXP
  */
 #include <linux/dsa/ocelot.h>
-
-#include "tag.h"
-
-#define OCELOT_NAME	"ocelot"
-#define SEVILLE_NAME	"seville"
+#include "dsa_priv.h"
 
 /* If the port is under a VLAN-aware bridge, remove the VLAN header from the
  * payload and move it into the DSA tag, which will make the switch classify
@@ -187,7 +183,7 @@ static struct sk_buff *ocelot_rcv(struct sk_buff *skb,
 }
 
 static const struct dsa_device_ops ocelot_netdev_ops = {
-	.name			= OCELOT_NAME,
+	.name			= "ocelot",
 	.proto			= DSA_TAG_PROTO_OCELOT,
 	.xmit			= ocelot_xmit,
 	.rcv			= ocelot_rcv,
@@ -196,10 +192,10 @@ static const struct dsa_device_ops ocelot_netdev_ops = {
 };
 
 DSA_TAG_DRIVER(ocelot_netdev_ops);
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_OCELOT, OCELOT_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_OCELOT);
 
 static const struct dsa_device_ops seville_netdev_ops = {
-	.name			= SEVILLE_NAME,
+	.name			= "seville",
 	.proto			= DSA_TAG_PROTO_SEVILLE,
 	.xmit			= seville_xmit,
 	.rcv			= ocelot_rcv,
@@ -208,7 +204,7 @@ static const struct dsa_device_ops seville_netdev_ops = {
 };
 
 DSA_TAG_DRIVER(seville_netdev_ops);
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_SEVILLE, SEVILLE_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_SEVILLE);
 
 static struct dsa_tag_driver *ocelot_tag_driver_array[] = {
 	&DSA_TAG_DRIVER_NAME(ocelot_netdev_ops),

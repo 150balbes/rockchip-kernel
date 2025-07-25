@@ -19,18 +19,62 @@ static struct mtk_pcs *pcs_to_mtk_pcs(struct phylink_pcs *pcs)
 	return container_of(pcs, struct mtk_pcs, pcs);
 }
 
-static void mtk_pcs_get_state(struct phylink_pcs *pcs,
-			      struct phylink_link_state *state)
+/* For SGMII interface mode */
+static int mtk_pcs_setup_mode_an(struct mtk_pcs *mpcs)
 {
-	struct mtk_pcs *mpcs = pcs_to_mtk_pcs(pcs);
-	unsigned int bm, adv;
+	unsigned int val;
 
-	/* Read the BMSR and LPA */
-	regmap_read(mpcs->regmap, SGMSYS_PCS_CONTROL_1, &bm);
-	regmap_read(mpcs->regmap, SGMSYS_PCS_ADVERTISE, &adv);
+	/* Setup the link timer and QPHY power up inside SGMIISYS */
+	regmap_write(mpcs->regmap, SGMSYS_PCS_LINK_TIMER,
+		     SGMII_LINK_TIMER_DEFAULT);
 
-	phylink_mii_c22_pcs_decode_state(state, FIELD_GET(SGMII_BMSR, bm),
-					 FIELD_GET(SGMII_LPA, adv));
+	regmap_read(mpcs->regmap, SGMSYS_SGMII_MODE, &val);
+	val |= SGMII_REMOTE_FAULT_DIS;
+	regmap_write(mpcs->regmap, SGMSYS_SGMII_MODE, val);
+
+	regmap_read(mpcs->regmap, SGMSYS_PCS_CONTROL_1, &val);
+	val |= SGMII_AN_RESTART;
+	regmap_write(mpcs->regmap, SGMSYS_PCS_CONTROL_1, val);
+
+	regmap_read(mpcs->regmap, SGMSYS_QPHY_PWR_STATE_CTRL, &val);
+	val &= ~SGMII_PHYA_PWD;
+	regmap_write(mpcs->regmap, SGMSYS_QPHY_PWR_STATE_CTRL, val);
+
+	return 0;
+
+}
+
+/* For 1000BASE-X and 2500BASE-X interface modes, which operate at a
+ * fixed speed.
+ */
+static int mtk_pcs_setup_mode_force(struct mtk_pcs *mpcs,
+				    phy_interface_t interface)
+{
+	unsigned int val;
+
+	regmap_read(mpcs->regmap, mpcs->ana_rgc3, &val);
+	val &= ~RG_PHY_SPEED_MASK;
+	if (interface == PHY_INTERFACE_MODE_2500BASEX)
+		val |= RG_PHY_SPEED_3_125G;
+	regmap_write(mpcs->regmap, mpcs->ana_rgc3, val);
+
+	/* Disable SGMII AN */
+	regmap_read(mpcs->regmap, SGMSYS_PCS_CONTROL_1, &val);
+	val &= ~SGMII_AN_ENABLE;
+	regmap_write(mpcs->regmap, SGMSYS_PCS_CONTROL_1, val);
+
+	/* Set the speed etc but leave the duplex unchanged */
+	regmap_read(mpcs->regmap, SGMSYS_SGMII_MODE, &val);
+	val &= SGMII_DUPLEX_FULL | ~SGMII_IF_MODE_MASK;
+	val |= SGMII_SPEED_1000;
+	regmap_write(mpcs->regmap, SGMSYS_SGMII_MODE, val);
+
+	/* Release PHYA power down state */
+	regmap_read(mpcs->regmap, SGMSYS_QPHY_PWR_STATE_CTRL, &val);
+	val &= ~SGMII_PHYA_PWD;
+	regmap_write(mpcs->regmap, SGMSYS_QPHY_PWR_STATE_CTRL, val);
+
+	return 0;
 }
 
 static int mtk_pcs_config(struct phylink_pcs *pcs, unsigned int mode,
@@ -39,116 +83,46 @@ static int mtk_pcs_config(struct phylink_pcs *pcs, unsigned int mode,
 			  bool permit_pause_to_mac)
 {
 	struct mtk_pcs *mpcs = pcs_to_mtk_pcs(pcs);
-	unsigned int rgc3, sgm_mode, bmcr;
-	int advertise, link_timer;
-	bool changed, use_an;
+	int err = 0;
 
-	if (interface == PHY_INTERFACE_MODE_2500BASEX)
-		rgc3 = RG_PHY_SPEED_3_125G;
-	else
-		rgc3 = 0;
+	/* Setup SGMIISYS with the determined property */
+	if (interface != PHY_INTERFACE_MODE_SGMII)
+		err = mtk_pcs_setup_mode_force(mpcs, interface);
+	else if (phylink_autoneg_inband(mode))
+		err = mtk_pcs_setup_mode_an(mpcs);
 
-	advertise = phylink_mii_c22_pcs_encode_advertisement(interface,
-							     advertising);
-	if (advertise < 0)
-		return advertise;
-
-	link_timer = phylink_get_link_timer_ns(interface);
-	if (link_timer < 0)
-		return link_timer;
-
-	/* Clearing IF_MODE_BIT0 switches the PCS to BASE-X mode, and
-	 * we assume that fixes it's speed at bitrate = line rate (in
-	 * other words, 1000Mbps or 2500Mbps).
-	 */
-	if (interface == PHY_INTERFACE_MODE_SGMII) {
-		sgm_mode = SGMII_IF_MODE_SGMII;
-		if (phylink_autoneg_inband(mode)) {
-			sgm_mode |= SGMII_REMOTE_FAULT_DIS |
-				    SGMII_SPEED_DUPLEX_AN;
-			use_an = true;
-		} else {
-			use_an = false;
-		}
-	} else if (phylink_autoneg_inband(mode)) {
-		/* 1000base-X or 2500base-X autoneg */
-		sgm_mode = SGMII_REMOTE_FAULT_DIS;
-		use_an = linkmode_test_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
-					   advertising);
-	} else {
-		/* 1000base-X or 2500base-X without autoneg */
-		sgm_mode = 0;
-		use_an = false;
-	}
-
-	if (use_an) {
-		/* FIXME: Do we need to set AN_RESTART here? */
-		bmcr = SGMII_AN_RESTART | SGMII_AN_ENABLE;
-	} else {
-		bmcr = 0;
-	}
-
-	/* Configure the underlying interface speed */
-	regmap_update_bits(mpcs->regmap, mpcs->ana_rgc3,
-			   RG_PHY_SPEED_3_125G, rgc3);
-
-	/* Update the advertisement, noting whether it has changed */
-	regmap_update_bits_check(mpcs->regmap, SGMSYS_PCS_ADVERTISE,
-				 SGMII_ADVERTISE, advertise, &changed);
-
-	/* Setup the link timer and QPHY power up inside SGMIISYS */
-	regmap_write(mpcs->regmap, SGMSYS_PCS_LINK_TIMER, link_timer / 2 / 8);
-
-	/* Update the sgmsys mode register */
-	regmap_update_bits(mpcs->regmap, SGMSYS_SGMII_MODE,
-			   SGMII_REMOTE_FAULT_DIS | SGMII_SPEED_DUPLEX_AN |
-			   SGMII_IF_MODE_SGMII, sgm_mode);
-
-	/* Update the BMCR */
-	regmap_update_bits(mpcs->regmap, SGMSYS_PCS_CONTROL_1,
-			   SGMII_AN_RESTART | SGMII_AN_ENABLE, bmcr);
-
-	/* Release PHYA power down state */
-	regmap_update_bits(mpcs->regmap, SGMSYS_QPHY_PWR_STATE_CTRL,
-			   SGMII_PHYA_PWD, 0);
-
-	return changed;
+	return err;
 }
 
 static void mtk_pcs_restart_an(struct phylink_pcs *pcs)
 {
 	struct mtk_pcs *mpcs = pcs_to_mtk_pcs(pcs);
+	unsigned int val;
 
-	regmap_update_bits(mpcs->regmap, SGMSYS_PCS_CONTROL_1,
-			   SGMII_AN_RESTART, SGMII_AN_RESTART);
+	regmap_read(mpcs->regmap, SGMSYS_PCS_CONTROL_1, &val);
+	val |= SGMII_AN_RESTART;
+	regmap_write(mpcs->regmap, SGMSYS_PCS_CONTROL_1, val);
 }
 
 static void mtk_pcs_link_up(struct phylink_pcs *pcs, unsigned int mode,
 			    phy_interface_t interface, int speed, int duplex)
 {
 	struct mtk_pcs *mpcs = pcs_to_mtk_pcs(pcs);
-	unsigned int sgm_mode;
+	unsigned int val;
 
-	if (!phylink_autoneg_inband(mode)) {
-		/* Force the speed and duplex setting */
-		if (speed == SPEED_10)
-			sgm_mode = SGMII_SPEED_10;
-		else if (speed == SPEED_100)
-			sgm_mode = SGMII_SPEED_100;
-		else
-			sgm_mode = SGMII_SPEED_1000;
+	if (!phy_interface_mode_is_8023z(interface))
+		return;
 
-		if (duplex == DUPLEX_FULL)
-			sgm_mode |= SGMII_DUPLEX_FULL;
+	/* SGMII force duplex setting */
+	regmap_read(mpcs->regmap, SGMSYS_SGMII_MODE, &val);
+	val &= ~SGMII_DUPLEX_FULL;
+	if (duplex == DUPLEX_FULL)
+		val |= SGMII_DUPLEX_FULL;
 
-		regmap_update_bits(mpcs->regmap, SGMSYS_SGMII_MODE,
-				   SGMII_DUPLEX_FULL | SGMII_SPEED_MASK,
-				   sgm_mode);
-	}
+	regmap_write(mpcs->regmap, SGMSYS_SGMII_MODE, val);
 }
 
 static const struct phylink_pcs_ops mtk_pcs_ops = {
-	.pcs_get_state = mtk_pcs_get_state,
 	.pcs_config = mtk_pcs_config,
 	.pcs_an_restart = mtk_pcs_restart_an,
 	.pcs_link_up = mtk_pcs_link_up,

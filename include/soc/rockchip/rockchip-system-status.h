@@ -6,7 +6,9 @@
 #ifndef __SOC_ROCKCHIP_SYSTEM_STATUS_H
 #define __SOC_ROCKCHIP_SYSTEM_STATUS_H
 
-#if IS_ENABLED(CONFIG_ROCKCHIP_SYSTEM_MONITOR)
+#include <dt-bindings/soc/rockchip-system-status.h>
+
+#if IS_REACHABLE(CONFIG_ROCKCHIP_SYSTEM_MONITOR)
 int rockchip_register_system_status_notifier(struct notifier_block *nb);
 int rockchip_unregister_system_status_notifier(struct notifier_block *nb);
 void rockchip_set_system_status(unsigned long status);

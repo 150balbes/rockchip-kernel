@@ -252,6 +252,8 @@ config ARCH_REALTEK
 
 config ARCH_RENESAS
 	bool "Renesas SoC Platforms"
+	select GPIOLIB
+	select PINCTRL
 	help
 	  This enables support for the ARMv8 based Renesas SoCs.
 
@@ -260,7 +262,6 @@ config ARCH_ROCKCHIP
 	select ARCH_HAS_RESET_CONTROLLER
 	select PINCTRL
 	select PM
-	select ROCKCHIP_TIMER
 	help
 	  This enables support for the ARMv8 based Rockchip chipsets,
 	  like the RK3368.

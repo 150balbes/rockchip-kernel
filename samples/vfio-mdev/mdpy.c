@@ -283,6 +283,7 @@ static void mdpy_release_dev(struct vfio_device *vdev)
 
 	vfree(mdev_state->memblk);
 	kfree(mdev_state->vconfig);
+	vfio_free_device(vdev);
 }
 
 static void mdpy_remove(struct mdev_device *mdev)
@@ -717,7 +718,7 @@ static int __init mdpy_dev_init(void)
 
 	ret = device_register(&mdpy_dev);
 	if (ret)
-		goto err_put;
+		goto err_class;
 
 	ret = mdev_register_parent(&mdpy_parent, &mdpy_dev, &mdpy_driver,
 				   mdpy_mdev_types,
@@ -728,9 +729,8 @@ static int __init mdpy_dev_init(void)
 	return 0;
 
 err_device:
-	device_del(&mdpy_dev);
-err_put:
-	put_device(&mdpy_dev);
+	device_unregister(&mdpy_dev);
+err_class:
 	class_destroy(mdpy_class);
 err_driver:
 	mdev_unregister_driver(&mdpy_driver);

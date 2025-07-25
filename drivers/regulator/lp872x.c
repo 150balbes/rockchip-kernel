@@ -879,9 +879,8 @@ static struct lp872x_platform_data
 }
 #endif
 
-static int lp872x_probe(struct i2c_client *cl)
+static int lp872x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(cl);
 	struct lp872x *lp;
 	struct lp872x_platform_data *pdata;
 	int ret;
@@ -947,7 +946,7 @@ static struct i2c_driver lp872x_driver = {
 		.name = "lp872x",
 		.of_match_table = of_match_ptr(lp872x_dt_ids),
 	},
-	.probe_new = lp872x_probe,
+	.probe = lp872x_probe,
 	.id_table = lp872x_ids,
 };
 

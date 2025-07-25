@@ -525,6 +525,7 @@ STACK_SIZE	= _CTX      + _CTX_SIZE
 ########################################################################
 .text
 SYM_TYPED_FUNC_START(sha256_transform_rorx)
+.align 32
 	pushq	%rbx
 	pushq	%r12
 	pushq	%r13
@@ -710,6 +711,7 @@ done_hash:
 	popq	%r13
 	popq	%r12
 	popq	%rbx
+	vzeroupper
 	RET
 SYM_FUNC_END(sha256_transform_rorx)
 

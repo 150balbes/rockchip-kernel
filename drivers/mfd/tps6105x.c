@@ -117,7 +117,8 @@ static struct tps6105x_platform_data *tps6105x_parse_dt(struct device *dev)
 	return pdata;
 }
 
-static int tps6105x_probe(struct i2c_client *client)
+static int tps6105x_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct tps6105x			*tps6105x;
 	struct tps6105x_platform_data	*pdata;
@@ -209,7 +210,7 @@ static struct i2c_driver tps6105x_driver = {
 		.name	= "tps6105x",
 		.of_match_table = tps6105x_of_match,
 	},
-	.probe_new	= tps6105x_probe,
+	.probe		= tps6105x_probe,
 	.remove		= tps6105x_remove,
 	.id_table	= tps6105x_id,
 };

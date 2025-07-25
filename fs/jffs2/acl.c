@@ -229,11 +229,10 @@ static int __jffs2_set_acl(struct inode *inode, int xprefix, struct posix_acl *a
 	return rc;
 }
 
-int jffs2_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
+int jffs2_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
 		  struct posix_acl *acl, int type)
 {
 	int rc, xprefix;
-	struct inode *inode = d_inode(dentry);
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:

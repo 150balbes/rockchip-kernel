@@ -22,7 +22,7 @@
 	};
 
 	reserved-memory {
-		/* wcnss.mdt is not relocatable, so it must be loaded at 0x8b600000 */
+		// wcnss.mdt is not relocatable, so it must be loaded at 0x8b600000
 		/delete-node/ wcnss@89300000;
 
 		wcnss_mem: wcnss@8b600000 {
@@ -163,7 +163,7 @@
 		pinctrl-0 = <&light_int_default>;
 
 		vdd-supply = <&pm8916_l17>;
-		vio-supply = <&pm8916_l6>;
+		vddio-supply = <&pm8916_l6>;
 	};
 
 	gyroscope@68 {
@@ -204,12 +204,12 @@
 
 		rmi4-f01@1 {
 			reg = <0x1>;
-			syna,nosleep-mode = <1>; /* Allow sleeping */
+			syna,nosleep-mode = <1>; // Allow sleeping
 		};
 
 		rmi4-f12@12 {
 			reg = <0x12>;
-			syna,sensor-type = <1>; /* Touchscreen */
+			syna,sensor-type = <1>; // Touchscreen
 		};
 	};
 };
@@ -367,7 +367,7 @@
 };
 
 &msmgpio {
-	accel_int_default: accel-int-default-state {
+	accel_int_default: accel-int-default {
 		pins = "gpio116";
 		function = "gpio";
 
@@ -375,7 +375,7 @@
 		bias-disable;
 	};
 
-	camera_flash_default: camera-flash-default-state {
+	camera_flash_default: camera-flash-default {
 		pins = "gpio31", "gpio32";
 		function = "gpio";
 
@@ -383,7 +383,7 @@
 		bias-disable;
 	};
 
-	ctp_pwr_en_default: ctp-pwr-en-default-state {
+	ctp_pwr_en_default: ctp-pwr-en-default {
 		pins = "gpio17";
 		function = "gpio";
 
@@ -391,7 +391,7 @@
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default-state {
+	gpio_keys_default: gpio-keys-default {
 		pins = "gpio107";
 		function = "gpio";
 
@@ -399,7 +399,7 @@
 		bias-pull-up;
 	};
 
-	gyro_int_default: gyro-int-default-state {
+	gyro_int_default: gyro-int-default {
 		pins = "gpio22", "gpio23";
 		function = "gpio";
 
@@ -407,7 +407,7 @@
 		bias-disable;
 	};
 
-	light_int_default: light-int-default-state {
+	light_int_default: light-int-default {
 		pins = "gpio115";
 		function = "gpio";
 
@@ -415,7 +415,7 @@
 		bias-disable;
 	};
 
-	magn_int_default: magn-int-default-state {
+	magn_int_default: magn-int-default {
 		pins = "gpio113";
 		function = "gpio";
 
@@ -423,7 +423,7 @@
 		bias-disable;
 	};
 
-	tp_int_default: tp-int-default-state {
+	tp_int_default: tp-int-default {
 		pins = "gpio13";
 		function = "gpio";
 

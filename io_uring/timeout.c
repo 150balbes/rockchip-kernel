@@ -50,6 +50,7 @@ static inline void io_put_req(struct io_kiocb *req)
 }
 
 static bool io_kill_timeout(struct io_kiocb *req, int status)
+	__must_hold(&req->ctx->completion_lock)
 	__must_hold(&req->ctx->timeout_lock)
 {
 	struct io_timeout_data *io = req->async_data;
@@ -69,6 +70,7 @@ static bool io_kill_timeout(struct io_kiocb *req, int status)
 }
 
 __cold void io_flush_timeouts(struct io_ring_ctx *ctx)
+	__must_hold(&ctx->completion_lock)
 {
 	u32 seq;
 	struct io_timeout *timeout, *tmp;
@@ -543,7 +545,7 @@ int io_timeout(struct io_kiocb *req, unsigned int issue_flags)
 		goto add;
 	}
 
-	tail = ctx->cached_cq_tail - atomic_read(&ctx->cq_timeouts);
+	tail = data_race(ctx->cached_cq_tail) - atomic_read(&ctx->cq_timeouts);
 	timeout->target_seq = tail + off;
 
 	/* Update the last seq here in case io_flush_timeouts() hasn't.
@@ -622,11 +624,7 @@ __cold bool io_kill_timeouts(struct io_ring_ctx *ctx, struct task_struct *tsk,
 	struct io_timeout *timeout, *tmp;
 	int canceled = 0;
 
-	/*
-	 * completion_lock is needed for io_match_task(). Take it before
-	 * timeout_lockfirst to keep locking ordering.
-	 */
-	spin_lock(&ctx->completion_lock);
+	io_cq_lock(ctx);
 	spin_lock_irq(&ctx->timeout_lock);
 	list_for_each_entry_safe(timeout, tmp, &ctx->timeout_list, list) {
 		struct io_kiocb *req = cmd_to_io_kiocb(timeout);
@@ -636,6 +634,6 @@ __cold bool io_kill_timeouts(struct io_ring_ctx *ctx, struct task_struct *tsk,
 			canceled++;
 	}
 	spin_unlock_irq(&ctx->timeout_lock);
-	spin_unlock(&ctx->completion_lock);
+	io_cq_unlock_post(ctx);
 	return canceled != 0;
 }

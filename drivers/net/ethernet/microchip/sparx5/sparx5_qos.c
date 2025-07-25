@@ -389,10 +389,6 @@ int sparx5_qos_init(struct sparx5 *sparx5)
 	if (ret < 0)
 		return ret;
 
-	ret = sparx5_dcb_init(sparx5);
-	if (ret < 0)
-		return ret;
-
 	return 0;
 }
 

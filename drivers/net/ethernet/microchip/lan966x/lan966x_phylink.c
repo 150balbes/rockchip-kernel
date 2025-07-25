@@ -5,6 +5,7 @@
 #include <linux/device.h>
 #include <linux/netdevice.h>
 #include <linux/phy/phy.h>
+#include <linux/sfp.h>
 
 #include "lan966x_main.h"
 
@@ -124,6 +125,7 @@ static void lan966x_pcs_aneg_restart(struct phylink_pcs *pcs)
 }
 
 const struct phylink_mac_ops lan966x_phylink_mac_ops = {
+	.validate = phylink_generic_validate,
 	.mac_select_pcs = lan966x_phylink_mac_select,
 	.mac_config = lan966x_phylink_mac_config,
 	.mac_prepare = lan966x_phylink_mac_prepare,

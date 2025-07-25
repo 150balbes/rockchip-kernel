@@ -108,10 +108,10 @@ struct pda_country {
 } __packed;
 
 struct pda_antenna_gain {
-	DECLARE_FLEX_ARRAY(struct {
+	struct {
 		u8 gain_5GHz;	/* 0.25 dBi units */
 		u8 gain_2GHz;	/* 0.25 dBi units */
-	} __packed, antenna);
+	} __packed antenna[0];
 } __packed;
 
 struct pda_custom_wrapper {

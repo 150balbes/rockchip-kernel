@@ -18,7 +18,6 @@ properties:
     enum:
       - fsl,imx8mm-micfil
       - fsl,imx8mp-micfil
-      - fsl,imx93-micfil
 
   reg:
     maxItems: 1

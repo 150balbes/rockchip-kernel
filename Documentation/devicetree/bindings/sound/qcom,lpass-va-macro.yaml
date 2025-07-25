@@ -4,13 +4,10 @@
 $id: http://devicetree.org/schemas/sound/qcom,lpass-va-macro.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: LPASS(Low Power Audio Subsystem) VA Macro audio codec
+title: LPASS(Low Power Audio Subsystem) VA Macro audio codec DT bindings
 
 maintainers:
   - Srinivas Kandagatla <srinivas.kandagatla@linaro.org>
-
-allOf:
-  - $ref: dai-common.yaml#
 
 properties:
   compatible:
@@ -42,7 +39,8 @@ properties:
           - const: mclk
 
   clock-output-names:
-    maxItems: 1
+    items:
+      - const: fsgen
 
   power-domains:
     maxItems: 2
@@ -64,7 +62,7 @@ required:
   - reg
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

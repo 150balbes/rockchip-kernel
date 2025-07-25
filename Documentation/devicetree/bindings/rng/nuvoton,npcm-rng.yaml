@@ -16,9 +16,7 @@ maintainers:
 
 properties:
   compatible:
-    enum:
-      - nuvoton,npcm750-rng
-      - nuvoton,npcm845-rng
+    const: nuvoton,npcm750-rng
 
   reg:
     maxItems: 1

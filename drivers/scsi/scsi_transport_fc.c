@@ -2530,14 +2530,15 @@ static int fc_vport_match(struct attribute_container *cont,
  * Notes:
  *	This routine assumes no locks are held on entry.
  */
-enum scsi_timeout_action fc_eh_timed_out(struct scsi_cmnd *scmd)
+enum blk_eh_timer_return
+fc_eh_timed_out(struct scsi_cmnd *scmd)
 {
 	struct fc_rport *rport = starget_to_rport(scsi_target(scmd->device));
 
 	if (rport->port_state == FC_PORTSTATE_BLOCKED)
-		return SCSI_EH_RESET_TIMER;
+		return BLK_EH_RESET_TIMER;
 
-	return SCSI_EH_NOT_HANDLED;
+	return BLK_EH_DONE;
 }
 EXPORT_SYMBOL(fc_eh_timed_out);
 

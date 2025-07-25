@@ -24,6 +24,7 @@ obj-$(CONFIG_MTK_SMI)		+= mtk-smi.o
 obj-$(CONFIG_DA8XX_DDRCTL)	+= da8xx-ddrctl.o
 obj-$(CONFIG_PL353_SMC)		+= pl353-smc.o
 obj-$(CONFIG_RENESAS_RPCIF)	+= renesas-rpc-if.o
+obj-$(CONFIG_ROCKCHIP_DSMC)	+= rockchip/
 obj-$(CONFIG_STM32_FMC2_EBI)	+= stm32-fmc2-ebi.o
 
 obj-$(CONFIG_SAMSUNG_MC)	+= samsung/
@@ -32,6 +33,8 @@ obj-$(CONFIG_TI_EMIF_SRAM)	+= ti-emif-sram.o
 obj-$(CONFIG_FPGA_DFL_EMIF)	+= dfl-emif.o
 
 ti-emif-sram-objs		:= ti-emif-pm.o ti-emif-sram-pm.o
+
+AFLAGS_ti-emif-sram-pm.o	:=-Wa,-march=armv7-a
 
 $(obj)/ti-emif-sram-pm.o: $(obj)/ti-emif-asm-offsets.h
 

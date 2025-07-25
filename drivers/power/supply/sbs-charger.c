@@ -24,7 +24,7 @@
 #define SBS_CHARGER_REG_STATUS			0x13
 #define SBS_CHARGER_REG_ALARM_WARNING		0x16
 
-#define SBS_CHARGER_STATUS_CHARGE_INHIBITED	BIT(1)
+#define SBS_CHARGER_STATUS_CHARGE_INHIBITED	BIT(0)
 #define SBS_CHARGER_STATUS_RES_COLD		BIT(9)
 #define SBS_CHARGER_STATUS_RES_HOT		BIT(10)
 #define SBS_CHARGER_STATUS_BATTERY_PRESENT	BIT(14)
@@ -162,7 +162,8 @@ static const struct power_supply_desc sbs_desc = {
 	.get_property = sbs_get_property,
 };
 
-static int sbs_probe(struct i2c_client *client)
+static int sbs_probe(struct i2c_client *client,
+		     const struct i2c_device_id *id)
 {
 	struct power_supply_config psy_cfg = {};
 	struct sbs_info *chip;
@@ -240,7 +241,7 @@ static const struct i2c_device_id sbs_id[] = {
 MODULE_DEVICE_TABLE(i2c, sbs_id);
 
 static struct i2c_driver sbs_driver = {
-	.probe_new	= sbs_probe,
+	.probe		= sbs_probe,
 	.id_table	= sbs_id,
 	.driver = {
 		.name	= "sbs-charger",

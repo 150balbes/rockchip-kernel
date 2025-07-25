@@ -554,8 +554,8 @@ static int input_action_end_dx6(struct sk_buff *skb,
 
 	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
 		return NF_HOOK(NFPROTO_IPV6, NF_INET_PRE_ROUTING,
-			       dev_net(skb->dev), NULL, skb, NULL,
-			       skb_dst(skb)->dev, input_action_end_dx6_finish);
+			       dev_net(skb->dev), NULL, skb, skb->dev,
+			       NULL, input_action_end_dx6_finish);
 
 	return input_action_end_dx6_finish(dev_net(skb->dev), NULL, skb);
 drop:
@@ -604,8 +604,8 @@ static int input_action_end_dx4(struct sk_buff *skb,
 
 	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
 		return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
-			       dev_net(skb->dev), NULL, skb, NULL,
-			       skb_dst(skb)->dev, input_action_end_dx4_finish);
+			       dev_net(skb->dev), NULL, skb, skb->dev,
+			       NULL, input_action_end_dx4_finish);
 
 	return input_action_end_dx4_finish(dev_net(skb->dev), NULL, skb);
 drop:
@@ -1644,13 +1644,13 @@ static int put_nla_counters(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 
 		pcounters = per_cpu_ptr(slwt->pcpu_counters, i);
 		do {
-			start = u64_stats_fetch_begin(&pcounters->syncp);
+			start = u64_stats_fetch_begin_irq(&pcounters->syncp);
 
 			packets = u64_stats_read(&pcounters->packets);
 			bytes = u64_stats_read(&pcounters->bytes);
 			errors = u64_stats_read(&pcounters->errors);
 
-		} while (u64_stats_fetch_retry(&pcounters->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&pcounters->syncp, start));
 
 		counters.packets += packets;
 		counters.bytes += bytes;

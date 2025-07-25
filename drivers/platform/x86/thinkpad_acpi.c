@@ -265,6 +265,9 @@ enum tpacpi_hkey_event_t {
 
 #define FAN_NOT_PRESENT		65535
 
+#define strlencmp(a, b) (strncmp((a), (b), strlen(b)))
+
+
 /****************************************************************************
  * Driver-wide structs and misc. variables
  */
@@ -1332,9 +1335,9 @@ static int tpacpi_rfk_procfs_write(const enum tpacpi_rfk_id id, char *buf)
 		return -ENODEV;
 
 	while ((cmd = strsep(&buf, ","))) {
-		if (strstarts(cmd, "enable"))
+		if (strlencmp(cmd, "enable") == 0)
 			status = TPACPI_RFK_RADIO_ON;
-		else if (strstarts(cmd, "disable"))
+		else if (strlencmp(cmd, "disable") == 0)
 			status = TPACPI_RFK_RADIO_OFF;
 		else
 			return -EINVAL;
@@ -4195,12 +4198,12 @@ static int hotkey_write(char *buf)
 
 	res = 0;
 	while ((cmd = strsep(&buf, ","))) {
-		if (strstarts(cmd, "enable")) {
+		if (strlencmp(cmd, "enable") == 0) {
 			hotkey_enabledisable_warn(1);
-		} else if (strstarts(cmd, "disable")) {
+		} else if (strlencmp(cmd, "disable") == 0) {
 			hotkey_enabledisable_warn(0);
 			res = -EPERM;
-		} else if (strstarts(cmd, "reset")) {
+		} else if (strlencmp(cmd, "reset") == 0) {
 			mask = (hotkey_all_mask | hotkey_source_mask)
 				& ~hotkey_reserved_mask;
 		} else if (sscanf(cmd, "0x%x", &mask) == 1) {
@@ -4479,6 +4482,14 @@ static const struct dmi_system_id fwbug_list[] __initconst = {
 		}
 	},
 	{
+		.ident = "T14s Gen1 AMD",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "20UJ"),
+		}
+	},
+	{
 		.ident = "P14s Gen1 AMD",
 		.driver_data = &quirk_s2idle_bug,
 		.matches = {
@@ -4500,6 +4511,79 @@ static const struct dmi_system_id fwbug_list[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "21A1"),
+		}
+	},
+	/* https://bugzilla.kernel.org/show_bug.cgi?id=218024 */
+	{
+		.ident = "V14 G4 AMN",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82YT"),
+		}
+	},
+	{
+		.ident = "V14 G4 AMN",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "83GE"),
+		}
+	},
+	{
+		.ident = "V15 G4 AMN",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82YU"),
+		}
+	},
+	{
+		.ident = "V15 G4 AMN",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "83CQ"),
+		}
+	},
+	{
+		.ident = "IdeaPad 1 14AMN7",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82VF"),
+		}
+	},
+	{
+		.ident = "IdeaPad 1 15AMN7",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82VG"),
+		}
+	},
+	{
+		.ident = "IdeaPad 1 15AMN7",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82X5"),
+		}
+	},
+	{
+		.ident = "IdeaPad Slim 3 14AMN8",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82XN"),
+		}
+	},
+	{
+		.ident = "IdeaPad Slim 3 15AMN8",
+		.driver_data = &quirk_s2idle_bug,
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "82XQ"),
 		}
 	},
 	{}
@@ -5230,33 +5314,33 @@ static int video_write(char *buf)
 	disable = 0;
 
 	while ((cmd = strsep(&buf, ","))) {
-		if (strstarts(cmd, "lcd_enable")) {
+		if (strlencmp(cmd, "lcd_enable") == 0) {
 			enable |= TP_ACPI_VIDEO_S_LCD;
-		} else if (strstarts(cmd, "lcd_disable")) {
+		} else if (strlencmp(cmd, "lcd_disable") == 0) {
 			disable |= TP_ACPI_VIDEO_S_LCD;
-		} else if (strstarts(cmd, "crt_enable")) {
+		} else if (strlencmp(cmd, "crt_enable") == 0) {
 			enable |= TP_ACPI_VIDEO_S_CRT;
-		} else if (strstarts(cmd, "crt_disable")) {
+		} else if (strlencmp(cmd, "crt_disable") == 0) {
 			disable |= TP_ACPI_VIDEO_S_CRT;
 		} else if (video_supported == TPACPI_VIDEO_NEW &&
-			   strstarts(cmd, "dvi_enable")) {
+			   strlencmp(cmd, "dvi_enable") == 0) {
 			enable |= TP_ACPI_VIDEO_S_DVI;
 		} else if (video_supported == TPACPI_VIDEO_NEW &&
-			   strstarts(cmd, "dvi_disable")) {
+			   strlencmp(cmd, "dvi_disable") == 0) {
 			disable |= TP_ACPI_VIDEO_S_DVI;
-		} else if (strstarts(cmd, "auto_enable")) {
+		} else if (strlencmp(cmd, "auto_enable") == 0) {
 			res = video_autosw_set(1);
 			if (res)
 				return res;
-		} else if (strstarts(cmd, "auto_disable")) {
+		} else if (strlencmp(cmd, "auto_disable") == 0) {
 			res = video_autosw_set(0);
 			if (res)
 				return res;
-		} else if (strstarts(cmd, "video_switch")) {
+		} else if (strlencmp(cmd, "video_switch") == 0) {
 			res = video_outputsw_cycle();
 			if (res)
 				return res;
-		} else if (strstarts(cmd, "expand_toggle")) {
+		} else if (strlencmp(cmd, "expand_toggle") == 0) {
 			res = video_expand_toggle();
 			if (res)
 				return res;
@@ -5563,7 +5647,7 @@ static int light_sysfs_set(struct led_classdev *led_cdev,
 
 static enum led_brightness light_sysfs_get(struct led_classdev *led_cdev)
 {
-	return (light_get_status() == 1) ? LED_FULL : LED_OFF;
+	return (light_get_status() == 1) ? LED_ON : LED_OFF;
 }
 
 static struct tpacpi_led_classdev tpacpi_led_thinklight = {
@@ -5650,9 +5734,9 @@ static int light_write(char *buf)
 		return -ENODEV;
 
 	while ((cmd = strsep(&buf, ","))) {
-		if (strstarts(cmd, "on")) {
+		if (strlencmp(cmd, "on") == 0) {
 			newstatus = 1;
-		} else if (strstarts(cmd, "off")) {
+		} else if (strlencmp(cmd, "off") == 0) {
 			newstatus = 0;
 		} else
 			return -EINVAL;
@@ -7123,10 +7207,10 @@ static int brightness_write(char *buf)
 		return level;
 
 	while ((cmd = strsep(&buf, ","))) {
-		if (strstarts(cmd, "up")) {
+		if (strlencmp(cmd, "up") == 0) {
 			if (level < bright_maxlvl)
 				level++;
-		} else if (strstarts(cmd, "down")) {
+		} else if (strlencmp(cmd, "down") == 0) {
 			if (level > 0)
 				level--;
 		} else if (sscanf(cmd, "level %d", &level) == 1 &&
@@ -7875,13 +7959,13 @@ static int volume_write(char *buf)
 
 	while ((cmd = strsep(&buf, ","))) {
 		if (!tp_features.mixer_no_level_control) {
-			if (strstarts(cmd, "up")) {
+			if (strlencmp(cmd, "up") == 0) {
 				if (new_mute)
 					new_mute = 0;
 				else if (new_level < TP_EC_VOLUME_MAX)
 					new_level++;
 				continue;
-			} else if (strstarts(cmd, "down")) {
+			} else if (strlencmp(cmd, "down") == 0) {
 				if (new_mute)
 					new_mute = 0;
 				else if (new_level > 0)
@@ -7893,9 +7977,9 @@ static int volume_write(char *buf)
 				continue;
 			}
 		}
-		if (strstarts(cmd, "mute"))
+		if (strlencmp(cmd, "mute") == 0)
 			new_mute = TP_EC_AUDIO_MUTESW_MSK;
-		else if (strstarts(cmd, "unmute"))
+		else if (strlencmp(cmd, "unmute") == 0)
 			new_mute = 0;
 		else
 			return -EINVAL;
@@ -8065,7 +8149,18 @@ static struct ibm_struct volume_driver_data = {
  * 	TPACPI_FAN_WR_TPEC is also available and should be used to
  * 	command the fan.  The X31/X40/X41 seems to have 8 fan levels,
  * 	but the ACPI tables just mention level 7.
+ *
+ * TPACPI_FAN_RD_TPEC_NS:
+ *	This mode is used for a few ThinkPads (L13 Yoga Gen2, X13 Yoga Gen2 etc.)
+ *	that are using non-standard EC locations for reporting fan speeds.
+ *	Currently these platforms only provide fan rpm reporting.
+ *
  */
+
+#define FAN_RPM_CAL_CONST 491520	/* FAN RPM calculation offset for some non-standard ECFW */
+
+#define FAN_NS_CTRL_STATUS	BIT(2)		/* Bit which determines control is enabled or not */
+#define FAN_NS_CTRL		BIT(4)		/* Bit which determines control is by host or EC */
 
 enum {					/* Fan control constants */
 	fan_status_offset = 0x2f,	/* EC register 0x2f */
@@ -8073,6 +8168,11 @@ enum {					/* Fan control constants */
 					 * 0x84 must be read before 0x85 */
 	fan_select_offset = 0x31,	/* EC register 0x31 (Firmware 7M)
 					   bit 0 selects which fan is active */
+
+	fan_status_offset_ns = 0x93,	/* Special status/control offset for non-standard EC Fan1 */
+	fan2_status_offset_ns = 0x96,	/* Special status/control offset for non-standard EC Fan2 */
+	fan_rpm_status_ns = 0x95,	/* Special offset for Fan1 RPM status for non-standard EC */
+	fan2_rpm_status_ns = 0x98,	/* Special offset for Fan2 RPM status for non-standard EC */
 
 	TP_EC_FAN_FULLSPEED = 0x40,	/* EC fan mode: full speed */
 	TP_EC_FAN_AUTO	    = 0x80,	/* EC fan mode: auto fan control */
@@ -8084,6 +8184,7 @@ enum fan_status_access_mode {
 	TPACPI_FAN_NONE = 0,		/* No fan status or control */
 	TPACPI_FAN_RD_ACPI_GFAN,	/* Use ACPI GFAN */
 	TPACPI_FAN_RD_TPEC,		/* Use ACPI EC regs 0x2f, 0x84-0x85 */
+	TPACPI_FAN_RD_TPEC_NS,		/* Use non-standard ACPI EC regs (eg: L13 Yoga gen2 etc.) */
 };
 
 enum fan_control_access_mode {
@@ -8110,6 +8211,8 @@ static u8 fan_control_initial_status;
 static u8 fan_control_desired_level;
 static u8 fan_control_resume_level;
 static int fan_watchdog_maxinterval;
+
+static bool fan_with_ns_addr;
 
 static struct mutex fan_mutex;
 
@@ -8241,6 +8344,15 @@ static int fan_get_status(u8 *status)
 		}
 
 		break;
+	case TPACPI_FAN_RD_TPEC_NS:
+		/* Default mode is AUTO which means controlled by EC */
+		if (!acpi_ec_read(fan_status_offset_ns, &s))
+			return -EIO;
+
+		if (status)
+			*status = s;
+
+		break;
 
 	default:
 		return -ENXIO;
@@ -8257,7 +8369,8 @@ static int fan_get_status_safe(u8 *status)
 	if (mutex_lock_killable(&fan_mutex))
 		return -ERESTARTSYS;
 	rc = fan_get_status(&s);
-	if (!rc)
+	/* NS EC doesn't have register with level settings */
+	if (!rc && !fan_with_ns_addr)
 		fan_update_desired_level(s);
 	mutex_unlock(&fan_mutex);
 
@@ -8284,7 +8397,13 @@ static int fan_get_speed(unsigned int *speed)
 
 		if (likely(speed))
 			*speed = (hi << 8) | lo;
+		break;
+	case TPACPI_FAN_RD_TPEC_NS:
+		if (!acpi_ec_read(fan_rpm_status_ns, &lo))
+			return -EIO;
 
+		if (speed)
+			*speed = lo ? FAN_RPM_CAL_CONST / lo : 0;
 		break;
 
 	default:
@@ -8296,7 +8415,7 @@ static int fan_get_speed(unsigned int *speed)
 
 static int fan2_get_speed(unsigned int *speed)
 {
-	u8 hi, lo;
+	u8 hi, lo, status;
 	bool rc;
 
 	switch (fan_status_access_mode) {
@@ -8312,7 +8431,21 @@ static int fan2_get_speed(unsigned int *speed)
 
 		if (likely(speed))
 			*speed = (hi << 8) | lo;
+		break;
 
+	case TPACPI_FAN_RD_TPEC_NS:
+		rc = !acpi_ec_read(fan2_status_offset_ns, &status);
+		if (rc)
+			return -EIO;
+		if (!(status & FAN_NS_CTRL_STATUS)) {
+			pr_info("secondary fan control not supported\n");
+			return -EIO;
+		}
+		rc = !acpi_ec_read(fan2_rpm_status_ns, &lo);
+		if (rc)
+			return -EIO;
+		if (speed)
+			*speed = lo ? FAN_RPM_CAL_CONST / lo : 0;
 		break;
 
 	default:
@@ -8815,6 +8948,7 @@ static const struct attribute_group fan_driver_attr_group = {
 #define TPACPI_FAN_2FAN		0x0002		/* EC 0x31 bit 0 selects fan2 */
 #define TPACPI_FAN_2CTL		0x0004		/* selects fan2 control */
 #define TPACPI_FAN_NOFAN	0x0008		/* no fan available */
+#define TPACPI_FAN_NS		0x0010		/* For EC with non-Standard register addresses */
 
 static const struct tpacpi_quirk fan_quirk_table[] __initconst = {
 	TPACPI_QEC_IBM('1', 'Y', TPACPI_FAN_Q1),
@@ -8833,6 +8967,8 @@ static const struct tpacpi_quirk fan_quirk_table[] __initconst = {
 	TPACPI_Q_LNV3('N', '2', 'O', TPACPI_FAN_2CTL),	/* P1 / X1 Extreme (2nd gen) */
 	TPACPI_Q_LNV3('N', '3', '0', TPACPI_FAN_2CTL),	/* P15 (1st gen) / P15v (1st gen) */
 	TPACPI_Q_LNV3('N', '3', '7', TPACPI_FAN_2CTL),  /* T15g (2nd gen) */
+	TPACPI_Q_LNV3('R', '1', 'F', TPACPI_FAN_NS),	/* L13 Yoga Gen 2 */
+	TPACPI_Q_LNV3('N', '2', 'U', TPACPI_FAN_NS),	/* X13 Yoga Gen 2*/
 	TPACPI_Q_LNV3('N', '1', 'O', TPACPI_FAN_NOFAN),	/* X1 Tablet (2nd gen) */
 };
 
@@ -8867,18 +9003,27 @@ static int __init fan_init(struct ibm_init_struct *iibm)
 		return -ENODEV;
 	}
 
+	if (quirks & TPACPI_FAN_NS) {
+		pr_info("ECFW with non-standard fan reg control found\n");
+		fan_with_ns_addr = 1;
+		/* Fan ctrl support from host is undefined for now */
+		tp_features.fan_ctrl_status_undef = 1;
+	}
+
 	if (gfan_handle) {
 		/* 570, 600e/x, 770e, 770x */
 		fan_status_access_mode = TPACPI_FAN_RD_ACPI_GFAN;
 	} else {
 		/* all other ThinkPads: note that even old-style
 		 * ThinkPad ECs supports the fan control register */
-		if (likely(acpi_ec_read(fan_status_offset,
-					&fan_control_initial_status))) {
+		if (fan_with_ns_addr ||
+		    likely(acpi_ec_read(fan_status_offset, &fan_control_initial_status))) {
 			int res;
 			unsigned int speed;
 
-			fan_status_access_mode = TPACPI_FAN_RD_TPEC;
+			fan_status_access_mode = fan_with_ns_addr ?
+				TPACPI_FAN_RD_TPEC_NS : TPACPI_FAN_RD_TPEC;
+
 			if (quirks & TPACPI_FAN_Q1)
 				fan_quirk1_setup();
 			/* Try and probe the 2nd fan */
@@ -8887,7 +9032,8 @@ static int __init fan_init(struct ibm_init_struct *iibm)
 			if (res >= 0 && speed != FAN_NOT_PRESENT) {
 				/* It responded - so let's assume it's there */
 				tp_features.second_fan = 1;
-				tp_features.second_fan_ctl = 1;
+				/* fan control not currently available for ns ECFW */
+				tp_features.second_fan_ctl = !fan_with_ns_addr;
 				pr_info("secondary fan control detected & enabled\n");
 			} else {
 				/* Fan not auto-detected */
@@ -9062,6 +9208,7 @@ static int fan_read(struct seq_file *m)
 			       str_enabled_disabled(status), status);
 		break;
 
+	case TPACPI_FAN_RD_TPEC_NS:
 	case TPACPI_FAN_RD_TPEC:
 		/* all except 570, 600e/x, 770e, 770x */
 		rc = fan_get_status_safe(&status);
@@ -9076,13 +9223,22 @@ static int fan_read(struct seq_file *m)
 
 		seq_printf(m, "speed:\t\t%d\n", speed);
 
-		if (status & TP_EC_FAN_FULLSPEED)
-			/* Disengaged mode takes precedence */
-			seq_printf(m, "level:\t\tdisengaged\n");
-		else if (status & TP_EC_FAN_AUTO)
-			seq_printf(m, "level:\t\tauto\n");
-		else
-			seq_printf(m, "level:\t\t%d\n", status);
+		if (fan_status_access_mode == TPACPI_FAN_RD_TPEC_NS) {
+			/*
+			 * No full speed bit in NS EC
+			 * EC Auto mode is set by default.
+			 * No other levels settings available
+			 */
+			seq_printf(m, "level:\t\t%s\n", status & FAN_NS_CTRL ? "unknown" : "auto");
+		} else {
+			if (status & TP_EC_FAN_FULLSPEED)
+				/* Disengaged mode takes precedence */
+				seq_printf(m, "level:\t\tdisengaged\n");
+			else if (status & TP_EC_FAN_AUTO)
+				seq_printf(m, "level:\t\tauto\n");
+			else
+				seq_printf(m, "level:\t\t%d\n", status);
+		}
 		break;
 
 	case TPACPI_FAN_NONE:
@@ -9118,9 +9274,10 @@ static int fan_write_cmd_level(const char *cmd, int *rc)
 {
 	int level;
 
-	if (strstarts(cmd, "level auto"))
+	if (strlencmp(cmd, "level auto") == 0)
 		level = TP_EC_FAN_AUTO;
-	else if (strstarts(cmd, "level disengaged") || strstarts(cmd, "level full-speed"))
+	else if ((strlencmp(cmd, "level disengaged") == 0) ||
+			(strlencmp(cmd, "level full-speed") == 0))
 		level = TP_EC_FAN_FULLSPEED;
 	else if (sscanf(cmd, "level %d", &level) != 1)
 		return 0;
@@ -9138,7 +9295,7 @@ static int fan_write_cmd_level(const char *cmd, int *rc)
 
 static int fan_write_cmd_enable(const char *cmd, int *rc)
 {
-	if (!strstarts(cmd, "enable"))
+	if (strlencmp(cmd, "enable") != 0)
 		return 0;
 
 	*rc = fan_set_enable();
@@ -9153,7 +9310,7 @@ static int fan_write_cmd_enable(const char *cmd, int *rc)
 
 static int fan_write_cmd_disable(const char *cmd, int *rc)
 {
-	if (!strstarts(cmd, "disable"))
+	if (strlencmp(cmd, "disable") != 0)
 		return 0;
 
 	*rc = fan_set_disable();
@@ -9904,7 +10061,7 @@ ATTRIBUTE_GROUPS(tpacpi_battery);
 
 /* ACPI battery hooking */
 
-static int tpacpi_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
+static int tpacpi_battery_add(struct power_supply *battery)
 {
 	int batteryid = tpacpi_battery_get_id(battery->desc->name);
 
@@ -9915,7 +10072,7 @@ static int tpacpi_battery_add(struct power_supply *battery, struct acpi_battery_
 	return 0;
 }
 
-static int tpacpi_battery_remove(struct power_supply *battery, struct acpi_battery_hook *hook)
+static int tpacpi_battery_remove(struct power_supply *battery)
 {
 	device_remove_groups(&battery->dev, tpacpi_battery_groups);
 	return 0;
@@ -9934,6 +10091,7 @@ static const struct tpacpi_quirk battery_quirk_table[] __initconst = {
 	 * Individual addressing is broken on models that expose the
 	 * primary battery as BAT1.
 	 */
+	TPACPI_Q_LNV('8', 'F', true),       /* Thinkpad X120e */
 	TPACPI_Q_LNV('J', '7', true),       /* B5400 */
 	TPACPI_Q_LNV('J', 'I', true),       /* Thinkpad 11e */
 	TPACPI_Q_LNV3('R', '0', 'B', true), /* Thinkpad 11e gen 3 */
@@ -10310,10 +10468,13 @@ static atomic_t dytc_ignore_event = ATOMIC_INIT(0);
 static DEFINE_MUTEX(dytc_mutex);
 static int dytc_capabilities;
 static bool dytc_mmc_get_available;
+static int profile_force;
 
-static int convert_dytc_to_profile(int dytcmode, enum platform_profile_option *profile)
+static int convert_dytc_to_profile(int funcmode, int dytcmode,
+		enum platform_profile_option *profile)
 {
-	if (dytc_capabilities & BIT(DYTC_FC_MMC)) {
+	switch (funcmode) {
+	case DYTC_FUNCTION_MMC:
 		switch (dytcmode) {
 		case DYTC_MODE_MMC_LOWPOWER:
 			*profile = PLATFORM_PROFILE_LOW_POWER;
@@ -10329,8 +10490,7 @@ static int convert_dytc_to_profile(int dytcmode, enum platform_profile_option *p
 			return -EINVAL;
 		}
 		return 0;
-	}
-	if (dytc_capabilities & BIT(DYTC_FC_PSC)) {
+	case DYTC_FUNCTION_PSC:
 		switch (dytcmode) {
 		case DYTC_MODE_PSC_LOWPOWER:
 			*profile = PLATFORM_PROFILE_LOW_POWER;
@@ -10344,6 +10504,15 @@ static int convert_dytc_to_profile(int dytcmode, enum platform_profile_option *p
 		default: /* Unknown mode */
 			return -EINVAL;
 		}
+		return 0;
+	case DYTC_FUNCTION_AMT:
+		/* For now return balanced. It's the closest we have to 'auto' */
+		*profile =  PLATFORM_PROFILE_BALANCED;
+		return 0;
+	default:
+		/* Unknown function */
+		pr_debug("unknown function 0x%x\n", funcmode);
+		return -EOPNOTSUPP;
 	}
 	return 0;
 }
@@ -10487,11 +10656,11 @@ static int dytc_profile_set(struct platform_profile_handler *pprof,
 			if (err)
 				goto unlock;
 		}
-	}
-	if (dytc_capabilities & BIT(DYTC_FC_PSC)) {
+	} else if (dytc_capabilities & BIT(DYTC_FC_PSC)) {
 		err = dytc_command(DYTC_SET_COMMAND(DYTC_FUNCTION_PSC, perfmode, 1), &output);
 		if (err)
 			goto unlock;
+
 		/* system supports AMT, activate it when on balanced */
 		if (dytc_capabilities & BIT(DYTC_FC_AMT))
 			dytc_control_amt(profile == PLATFORM_PROFILE_BALANCED);
@@ -10506,8 +10675,8 @@ unlock:
 static void dytc_profile_refresh(void)
 {
 	enum platform_profile_option profile;
-	int output, err = 0;
-	int perfmode;
+	int output = 0, err = 0;
+	int perfmode, funcmode = 0;
 
 	mutex_lock(&dytc_mutex);
 	if (dytc_capabilities & BIT(DYTC_FC_MMC)) {
@@ -10515,16 +10684,21 @@ static void dytc_profile_refresh(void)
 			err = dytc_command(DYTC_CMD_MMC_GET, &output);
 		else
 			err = dytc_cql_command(DYTC_CMD_GET, &output);
-	} else if (dytc_capabilities & BIT(DYTC_FC_PSC))
+		funcmode = DYTC_FUNCTION_MMC;
+	} else if (dytc_capabilities & BIT(DYTC_FC_PSC)) {
 		err = dytc_command(DYTC_CMD_GET, &output);
-
+		/* Check if we are PSC mode, or have AMT enabled */
+		funcmode = (output >> DYTC_GET_FUNCTION_BIT) & 0xF;
+	} else { /* Unknown profile mode */
+		err = -ENODEV;
+	}
 	mutex_unlock(&dytc_mutex);
 	if (err)
 		return;
 
 	perfmode = (output >> DYTC_GET_MODE_BIT) & 0xF;
-	convert_dytc_to_profile(perfmode, &profile);
-	if (profile != dytc_current_profile) {
+	err = convert_dytc_to_profile(funcmode, perfmode, &profile);
+	if (!err && profile != dytc_current_profile) {
 		dytc_current_profile = profile;
 		platform_profile_notify();
 	}
@@ -10560,6 +10734,21 @@ static int tpacpi_dytc_profile_init(struct ibm_init_struct *iibm)
 	if (err)
 		return err;
 
+	/* Check if user wants to override the profile selection */
+	if (profile_force) {
+		switch (profile_force) {
+		case -1:
+			dytc_capabilities = 0;
+			break;
+		case 1:
+			dytc_capabilities = BIT(DYTC_FC_MMC);
+			break;
+		case 2:
+			dytc_capabilities = BIT(DYTC_FC_PSC);
+			break;
+		}
+		pr_debug("Profile selection forced: 0x%x\n", dytc_capabilities);
+	}
 	if (dytc_capabilities & BIT(DYTC_FC_MMC)) { /* MMC MODE */
 		pr_debug("MMC is supported\n");
 		/*
@@ -10573,11 +10762,6 @@ static int tpacpi_dytc_profile_init(struct ibm_init_struct *iibm)
 				dytc_mmc_get_available = true;
 		}
 	} else if (dytc_capabilities & BIT(DYTC_FC_PSC)) { /* PSC MODE */
-		/* Support for this only works on AMD platforms */
-		if (boot_cpu_data.x86_vendor != X86_VENDOR_AMD) {
-			dbg_printk(TPACPI_DBG_INIT, "PSC not support on Intel platforms\n");
-			return -ENODEV;
-		}
 		pr_debug("PSC is supported\n");
 	} else {
 		dbg_printk(TPACPI_DBG_INIT, "No DYTC support available\n");
@@ -11625,6 +11809,9 @@ module_param_named(uwb_state, tpacpi_uwb_emulstate, bool, 0);
 MODULE_PARM_DESC(uwb_state,
 		 "Initial state of the emulated UWB switch");
 #endif
+
+module_param(profile_force, int, 0444);
+MODULE_PARM_DESC(profile_force, "Force profile mode. -1=off, 1=MMC, 2=PSC");
 
 static void thinkpad_acpi_module_exit(void)
 {

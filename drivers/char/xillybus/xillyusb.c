@@ -184,14 +184,6 @@ struct xillyusb_dev {
 	struct mutex process_in_mutex; /* synchronize wakeup_all() */
 };
 
-/*
- * kref_mutex is used in xillyusb_open() to prevent the xillyusb_dev
- * struct from being freed during the gap between being found by
- * xillybus_find_inode() and having its reference count incremented.
- */
-
-static DEFINE_MUTEX(kref_mutex);
-
 /* FPGA to host opcodes */
 enum {
 	OPCODE_DATA = 0,
@@ -1245,16 +1237,9 @@ static int xillyusb_open(struct inode *inode, struct file *filp)
 	int rc;
 	int index;
 
-	mutex_lock(&kref_mutex);
-
 	rc = xillybus_find_inode(inode, (void **)&xdev, &index);
-	if (rc) {
-		mutex_unlock(&kref_mutex);
+	if (rc)
 		return rc;
-	}
-
-	kref_get(&xdev->kref);
-	mutex_unlock(&kref_mutex);
 
 	chan = &xdev->channels[index];
 	filp->private_data = chan;
@@ -1289,6 +1274,8 @@ static int xillyusb_open(struct inode *inode, struct file *filp)
 	if (((filp->f_mode & FMODE_READ) && chan->open_for_read) ||
 	    ((filp->f_mode & FMODE_WRITE) && chan->open_for_write))
 		goto unmutex_fail;
+
+	kref_get(&xdev->kref);
 
 	if (filp->f_mode & FMODE_READ)
 		chan->open_for_read = 1;
@@ -1426,7 +1413,6 @@ unopen:
 	return rc;
 
 unmutex_fail:
-	kref_put(&xdev->kref, cleanup_dev);
 	mutex_unlock(&chan->lock);
 	return rc;
 }
@@ -2241,9 +2227,7 @@ static void xillyusb_disconnect(struct usb_interface *interface)
 
 	xdev->dev = NULL;
 
-	mutex_lock(&kref_mutex);
 	kref_put(&xdev->kref, cleanup_dev);
-	mutex_unlock(&kref_mutex);
 }
 
 static struct usb_driver xillyusb_driver = {

@@ -39,16 +39,14 @@
 
 #include "internal.h"
 
-bool can_change_pte_writable(struct vm_area_struct *vma, unsigned long addr,
-			     pte_t pte)
+static inline bool can_change_pte_writable(struct vm_area_struct *vma,
+					   unsigned long addr, pte_t pte)
 {
 	struct page *page;
 
-	if (WARN_ON_ONCE(!(vma->vm_flags & VM_WRITE)))
-		return false;
+	VM_BUG_ON(!(vma->vm_flags & VM_WRITE) || pte_write(pte));
 
-	/* Don't touch entries that are not even readable. */
-	if (pte_protnone(pte))
+	if (pte_protnone(pte) || !pte_dirty(pte))
 		return false;
 
 	/* Do we need write faults for softdirty tracking? */
@@ -61,23 +59,17 @@ bool can_change_pte_writable(struct vm_area_struct *vma, unsigned long addr,
 
 	if (!(vma->vm_flags & VM_SHARED)) {
 		/*
-		 * Writable MAP_PRIVATE mapping: We can only special-case on
-		 * exclusive anonymous pages, because we know that our
-		 * write-fault handler similarly would map them writable without
-		 * any additional checks while holding the PT lock.
+		 * We can only special-case on exclusive anonymous pages,
+		 * because we know that our write-fault handler similarly would
+		 * map them writable without any additional checks while holding
+		 * the PT lock.
 		 */
 		page = vm_normal_page(vma, addr, pte);
-		return page && PageAnon(page) && PageAnonExclusive(page);
+		if (!page || !PageAnon(page) || !PageAnonExclusive(page))
+			return false;
 	}
 
-	/*
-	 * Writable MAP_SHARED mapping: "clean" might indicate that the FS still
-	 * needs a real write-fault for writenotify
-	 * (see vma_wants_writenotify()). If "dirty", the assumption is that the
-	 * FS was already notified and we can simply mark the PTE writable
-	 * just like the write-fault handler would do.
-	 */
-	return pte_dirty(pte);
+	return true;
 }
 
 static unsigned long change_pte_range(struct mmu_gather *tlb,
@@ -121,6 +113,7 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
 		oldpte = *pte;
 		if (pte_present(oldpte)) {
 			pte_t ptent;
+			bool preserve_write = prot_numa && pte_write(oldpte);
 
 			/*
 			 * Avoid trapping faults against the zero or KSM
@@ -176,6 +169,8 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
 
 			oldpte = ptep_modify_prot_start(vma, addr, pte);
 			ptent = pte_modify(oldpte, newprot);
+			if (preserve_write)
+				ptent = pte_mk_savedwrite(ptent);
 
 			if (uffd_wp) {
 				ptent = pte_wrprotect(ptent);
@@ -272,6 +267,7 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
 		} else {
 			/* It must be an none page, or what else?.. */
 			WARN_ON_ONCE(!pte_none(oldpte));
+#ifdef CONFIG_PTE_MARKER_UFFD_WP
 			if (unlikely(uffd_wp && !vma_is_anonymous(vma))) {
 				/*
 				 * For file-backed mem, we need to be able to
@@ -283,6 +279,7 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
 					   make_pte_marker(PTE_MARKER_UFFD_WP));
 				pages++;
 			}
+#endif
 		}
 	} while (pte++, addr += PAGE_SIZE, addr != end);
 	arch_leave_lazy_mmu_mode();
@@ -297,7 +294,7 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
  */
 static inline int pmd_none_or_clear_bad_unless_trans_huge(pmd_t *pmd)
 {
-	pmd_t pmdval = pmdp_get_lockless(pmd);
+	pmd_t pmdval = pmd_read_atomic(pmd);
 
 	/* See pmd_none_or_trans_huge_or_clear_bad for info on barrier */
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
@@ -555,8 +552,8 @@ mprotect_fixup(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long oldflags = vma->vm_flags;
 	long nrpages = (end - start) >> PAGE_SHIFT;
-	unsigned int mm_cp_flags = 0;
 	unsigned long charged = 0;
+	bool try_change_writable;
 	pgoff_t pgoff;
 	int error;
 
@@ -634,11 +631,20 @@ success:
 	 * held in write mode.
 	 */
 	vma->vm_flags = newflags;
-	if (vma_wants_manual_pte_write_upgrade(vma))
-		mm_cp_flags |= MM_CP_TRY_CHANGE_WRITABLE;
+	/*
+	 * We want to check manually if we can change individual PTEs writable
+	 * if we can't do that automatically for all PTEs in a mapping. For
+	 * private mappings, that's always the case when we have write
+	 * permissions as we properly have to handle COW.
+	 */
+	if (vma->vm_flags & VM_SHARED)
+		try_change_writable = vma_wants_writenotify(vma, vma->vm_page_prot);
+	else
+		try_change_writable = !!(vma->vm_flags & VM_WRITE);
 	vma_set_page_prot(vma);
 
-	change_protection(tlb, vma, start, end, vma->vm_page_prot, mm_cp_flags);
+	change_protection(tlb, vma, start, end, vma->vm_page_prot,
+			  try_change_writable ? MM_CP_TRY_CHANGE_WRITABLE : 0);
 
 	/*
 	 * Private VM_LOCKED VMA becoming writable: trigger COW to avoid major
@@ -750,7 +756,8 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		 * If a permission is not passed to mprotect(), it must be
 		 * cleared from the VMA.
 		 */
-		mask_off_old_flags = VM_ACCESS_FLAGS | VM_FLAGS_CLEAR;
+		mask_off_old_flags = VM_READ | VM_WRITE | VM_EXEC |
+					VM_FLAGS_CLEAR;
 
 		new_vma_pkey = arch_override_mprotect_pkey(vma, prot, pkey);
 		newflags = calc_vm_prot_bits(prot, new_vma_pkey);

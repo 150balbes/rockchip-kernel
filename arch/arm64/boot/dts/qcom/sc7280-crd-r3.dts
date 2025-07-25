@@ -118,25 +118,25 @@ ap_ts_pen_1v8: &i2c13 {
 };
 
 &tlmm {
-	tp_int_odl: tp-int-odl-state {
+	tp_int_odl: tp-int-odl {
 		pins = "gpio7";
 		function = "gpio";
 		bias-disable;
 	};
 
-	ts_int_l: ts-int-l-state {
+	ts_int_l: ts-int-l {
 		pins = "gpio55";
 		function = "gpio";
 		bias-pull-up;
 	};
 
-	ts_reset_l: ts-reset-l-state {
+	ts_reset_l: ts-reset-l {
 		pins = "gpio54";
 		function = "gpio";
 		bias-disable;
 	};
 
-	us_euro_hs_sel: us-euro-hs-sel-state {
+	us_euro_hs_sel: us-euro-hs-sel {
 		pins = "gpio81";
 		function = "gpio";
 		bias-pull-down;

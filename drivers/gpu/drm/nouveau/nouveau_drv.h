@@ -78,6 +78,11 @@ enum nouveau_drm_object_route {
 	NVDRM_OBJECT_ANY = NVIF_IOCTL_V0_OWNER_ANY,
 };
 
+enum nouveau_drm_notify_route {
+	NVDRM_NOTIFY_NVIF = 0,
+	NVDRM_NOTIFY_USIF
+};
+
 enum nouveau_drm_handle {
 	NVDRM_CHAN    = 0xcccc0000, /* |= client chid */
 	NVDRM_NVSW    = 0x55550000,
@@ -174,19 +179,16 @@ struct nouveau_drm {
 	void *fence;
 
 	/* Global channel management. */
-	int chan_total; /* Number of channels across all runlists. */
-	int chan_nr;	/* 0 if per-runlist CHIDs. */
-	int runl_nr;
 	struct {
-		int chan_nr;
-		int chan_id_base;
+		int nr;
 		u64 context_base;
-	} *runl;
+	} chan;
 
 	/* context for accelerated drm-internal operations */
 	struct nouveau_channel *cechan;
 	struct nouveau_channel *channel;
 	struct nvkm_gpuobj *notify;
+	struct nouveau_fbdev *fbcon;
 	struct nvif_object ntfy;
 
 	/* nv10-nv40 tiling regions */
@@ -199,8 +201,10 @@ struct nouveau_drm {
 	struct nvbios vbios;
 	struct nouveau_display *display;
 	struct work_struct hpd_work;
-	spinlock_t hpd_lock;
+	struct mutex hpd_lock;
 	u32 hpd_pending;
+	struct work_struct fbcon_work;
+	int fbcon_new_state;
 #ifdef CONFIG_ACPI
 	struct notifier_block acpi_nb;
 #endif

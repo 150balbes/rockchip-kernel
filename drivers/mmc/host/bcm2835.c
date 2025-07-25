@@ -327,12 +327,15 @@ static void bcm2835_dma_complete(void *param)
 
 static void bcm2835_transfer_block_pio(struct bcm2835_host *host, bool is_read)
 {
+	unsigned long flags;
 	size_t blksize;
 	unsigned long wait_max;
 
 	blksize = host->data->blksz;
 
 	wait_max = jiffies + msecs_to_jiffies(500);
+
+	local_irq_save(flags);
 
 	while (blksize) {
 		int copy_words;
@@ -418,6 +421,8 @@ static void bcm2835_transfer_block_pio(struct bcm2835_host *host, bool is_read)
 	}
 
 	sg_miter_stop(&host->sg_miter);
+
+	local_irq_restore(flags);
 }
 
 static void bcm2835_transfer_pio(struct bcm2835_host *host)
@@ -1063,6 +1068,7 @@ static void bcm2835_dma_complete_work(struct work_struct *work)
 	}
 
 	if (host->drain_words) {
+		unsigned long flags;
 		void *page;
 		u32 *buf;
 
@@ -1070,7 +1076,8 @@ static void bcm2835_dma_complete_work(struct work_struct *work)
 			host->drain_page += host->drain_offset >> PAGE_SHIFT;
 			host->drain_offset &= ~PAGE_MASK;
 		}
-		page = kmap_local_page(host->drain_page);
+		local_irq_save(flags);
+		page = kmap_atomic(host->drain_page);
 		buf = page + host->drain_offset;
 
 		while (host->drain_words) {
@@ -1081,7 +1088,8 @@ static void bcm2835_dma_complete_work(struct work_struct *work)
 			host->drain_words--;
 		}
 
-		kunmap_local(page);
+		kunmap_atomic(page);
+		local_irq_restore(flags);
 	}
 
 	bcm2835_finish_data(host);
@@ -1403,8 +1411,8 @@ static int bcm2835_probe(struct platform_device *pdev)
 	host->max_clk = clk_get_rate(clk);
 
 	host->irq = platform_get_irq(pdev, 0);
-	if (host->irq <= 0) {
-		ret = -EINVAL;
+	if (host->irq < 0) {
+		ret = host->irq;
 		goto err;
 	}
 

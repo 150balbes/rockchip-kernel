@@ -107,7 +107,6 @@ enum audit_type {
 struct apparmor_audit_data {
 	int error;
 	int type;
-	u16 class;
 	const char *op;
 	struct aa_label *label;
 	const char *name;
@@ -156,12 +155,9 @@ struct apparmor_audit_data {
 
 /* macros for dealing with  apparmor_audit_data structure */
 #define aad(SA) ((SA)->apparmor_audit_data)
-#define DEFINE_AUDIT_DATA(NAME, T, C, X)				\
+#define DEFINE_AUDIT_DATA(NAME, T, X)					\
 	/* TODO: cleanup audit init so we don't need _aad = {0,} */	\
-	struct apparmor_audit_data NAME ## _aad = {                     \
-		.class = (C),						\
-		.op = (X),                                              \
-	};                                                              \
+	struct apparmor_audit_data NAME ## _aad = { .op = (X), };	\
 	struct common_audit_data NAME =					\
 	{								\
 	.type = (T),							\
@@ -190,7 +186,7 @@ static inline int complain_error(int error)
 }
 
 void aa_audit_rule_free(void *vrule);
-int aa_audit_rule_init(u32 field, u32 op, char *rulestr, void **vrule);
+int aa_audit_rule_init(u32 field, u32 op, char *rulestr, void **vrule, gfp_t gfp);
 int aa_audit_rule_known(struct audit_krule *rule);
 int aa_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule);
 

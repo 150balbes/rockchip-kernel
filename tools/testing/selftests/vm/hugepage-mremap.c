@@ -22,7 +22,6 @@
 #include <sys/syscall.h> /* Definition of SYS_* constants */
 #include <linux/userfaultfd.h>
 #include <sys/ioctl.h>
-#include <string.h>
 
 #define DEFAULT_LENGTH_MB 10UL
 #define MB_TO_BYTES(x) (x * 1024 * 1024)
@@ -109,23 +108,26 @@ static void register_region_with_uffd(char *addr, size_t len)
 int main(int argc, char *argv[])
 {
 	size_t length = 0;
-	int ret = 0, fd;
 
-	if (argc >= 2 && !strcmp(argv[1], "-h")) {
-		printf("Usage: %s [length_in_MB]\n", argv[0]);
+	if (argc != 2 && argc != 3) {
+		printf("Usage: %s [length_in_MB] <hugetlb_file>\n", argv[0]);
 		exit(1);
 	}
 
 	/* Read memory length as the first arg if valid, otherwise fallback to
 	 * the default length.
 	 */
-	if (argc >= 2)
-		length = (size_t)atoi(argv[1]);
-	else
-		length = DEFAULT_LENGTH_MB;
+	if (argc == 3)
+		length = argc > 2 ? (size_t)atoi(argv[1]) : 0UL;
 
+	length = length > 0 ? length : DEFAULT_LENGTH_MB;
 	length = MB_TO_BYTES(length);
-	fd = memfd_create(argv[0], MFD_HUGETLB);
+
+	int ret = 0;
+
+	/* last arg is the hugetlb file name */
+	int fd = open(argv[argc-1], O_CREAT | O_RDWR, 0755);
+
 	if (fd < 0) {
 		perror("Open failed");
 		exit(1);
@@ -183,6 +185,7 @@ int main(int argc, char *argv[])
 	}
 
 	close(fd);
+	unlink(argv[argc-1]);
 
 	return ret;
 }

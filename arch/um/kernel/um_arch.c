@@ -3,6 +3,7 @@
  * Copyright (C) 2000 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
  */
 
+#include <linux/cpu.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/mm.h>
@@ -426,7 +427,7 @@ void __init setup_arch(char **cmdline_p)
 	}
 }
 
-void __init check_bugs(void)
+void __init arch_cpu_finalize_init(void)
 {
 	arch_check_bugs();
 	os_check_bugs();
@@ -441,11 +442,6 @@ void apply_retpolines(s32 *start, s32 *end)
 }
 
 void apply_returns(s32 *start, s32 *end)
-{
-}
-
-void apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
-		   s32 *start_cfi, s32 *end_cfi)
 {
 }
 

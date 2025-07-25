@@ -21,7 +21,6 @@
  *
  */
 
-#include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_vblank.h>
 
@@ -2919,6 +2918,8 @@ static int dce_v11_0_sw_init(void *handle)
 
 	adev_to_drm(adev)->mode_config.fb_modifiers_not_supported = true;
 
+	adev_to_drm(adev)->mode_config.fb_base = adev->gmc.aper_base;
+
 	r = amdgpu_display_modeset_create_props(adev);
 	if (r)
 		return r;
@@ -2947,17 +2948,6 @@ static int dce_v11_0_sw_init(void *handle)
 	r = dce_v11_0_audio_init(adev);
 	if (r)
 		return r;
-
-	/* Disable vblank IRQs aggressively for power-saving */
-	/* XXX: can this be enabled for DC? */
-	adev_to_drm(adev)->vblank_disable_immediate = true;
-
-	r = drm_vblank_init(adev_to_drm(adev), adev->mode_info.num_crtc);
-	if (r)
-		return r;
-
-	INIT_WORK(&adev->hotplug_work,
-		  amdgpu_display_hotplug_work_func);
 
 	drm_kms_helper_poll_init(adev_to_drm(adev));
 
@@ -3031,8 +3021,6 @@ static int dce_v11_0_hw_fini(void *handle)
 	}
 
 	dce_v11_0_pageflip_interrupt_fini(adev);
-
-	flush_work(&adev->hotplug_work);
 
 	return 0;
 }

@@ -104,7 +104,6 @@ Contents:
    switchdev
    sysfs-tagging
    tc-actions-env-rules
-   tc-queue-filters
    tcp-thin
    team
    timestamping

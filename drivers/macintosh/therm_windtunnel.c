@@ -411,9 +411,8 @@ static const struct i2c_device_id therm_windtunnel_id[] = {
 MODULE_DEVICE_TABLE(i2c, therm_windtunnel_id);
 
 static int
-do_probe(struct i2c_client *cl)
+do_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(cl);
 	struct i2c_adapter *adapter = cl->adapter;
 	int ret = 0;
 
@@ -442,7 +441,7 @@ static struct i2c_driver g4fan_driver = {
 	.driver = {
 		.name	= "therm_windtunnel",
 	},
-	.probe_new	= do_probe,
+	.probe		= do_probe,
 	.remove		= do_remove,
 	.id_table	= therm_windtunnel_id,
 };

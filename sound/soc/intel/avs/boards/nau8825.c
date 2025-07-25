@@ -33,15 +33,15 @@ avs_nau8825_clock_control(struct snd_soc_dapm_widget *w, struct snd_kcontrol *co
 		return -EINVAL;
 	}
 
-	if (!SND_SOC_DAPM_EVENT_ON(event)) {
+	if (SND_SOC_DAPM_EVENT_ON(event))
+		ret = snd_soc_dai_set_sysclk(codec_dai, NAU8825_CLK_MCLK, 24000000,
+					     SND_SOC_CLOCK_IN);
+	else
 		ret = snd_soc_dai_set_sysclk(codec_dai, NAU8825_CLK_INTERNAL, 0, SND_SOC_CLOCK_IN);
-		if (ret < 0) {
-			dev_err(card->dev, "set sysclk err = %d\n", ret);
-			return ret;
-		}
-	}
+	if (ret < 0)
+		dev_err(card->dev, "Set sysclk failed: %d\n", ret);
 
-	return 0;
+	return ret;
 }
 
 static const struct snd_kcontrol_new card_controls[] = {
@@ -79,9 +79,11 @@ static struct snd_soc_jack_pin card_headset_pins[] = {
 
 static int avs_nau8825_codec_init(struct snd_soc_pcm_runtime *runtime)
 {
-	struct snd_soc_card *card = runtime->card;
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(runtime, 0);
+	struct snd_soc_component *component = codec_dai->component;
 	struct snd_soc_jack_pin *pins;
 	struct snd_soc_jack *jack;
+	struct snd_soc_card *card = runtime->card;
 	int num_pins, ret;
 
 	jack = snd_soc_card_get_drvdata(card);
@@ -106,12 +108,11 @@ static int avs_nau8825_codec_init(struct snd_soc_pcm_runtime *runtime)
 	snd_jack_set_key(jack->jack, SND_JACK_BTN_2, KEY_VOLUMEUP);
 	snd_jack_set_key(jack->jack, SND_JACK_BTN_3, KEY_VOLUMEDOWN);
 
-	return snd_soc_component_set_jack(asoc_rtd_to_codec(runtime, 0)->component, jack, NULL);
-}
+	//snd_soc_component_set_jack(component, jack, NULL);
+	// TODO: Fix nau8825 codec to use .set_jack, like everyone else
+	nau8825_enable_jack_detect(component, jack);
 
-static void avs_nau8825_codec_exit(struct snd_soc_pcm_runtime *rtd)
-{
-	snd_soc_component_set_jack(asoc_rtd_to_codec(rtd, 0)->component, NULL, NULL);
+	return 0;
 }
 
 static int
@@ -202,7 +203,6 @@ static int avs_create_dai_link(struct device *dev, const char *platform_name, in
 	dl->id = 0;
 	dl->dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBS_CFS;
 	dl->init = avs_nau8825_codec_init;
-	dl->exit = avs_nau8825_codec_exit;
 	dl->be_hw_params_fixup = avs_nau8825_be_fixup;
 	dl->ops = &avs_nau8825_ops;
 	dl->nonatomic = 1;
@@ -247,11 +247,23 @@ static int avs_create_dapm_routes(struct device *dev, int ssp_port,
 	return 0;
 }
 
+static int avs_card_set_jack(struct snd_soc_card *card, struct snd_soc_jack *jack)
+{
+	struct snd_soc_component *component;
+
+	for_each_card_components(card, component)
+		snd_soc_component_set_jack(component, jack, NULL);
+	return 0;
+}
+
+static int avs_card_remove(struct snd_soc_card *card)
+{
+	return avs_card_set_jack(card, NULL);
+}
+
 static int avs_card_suspend_pre(struct snd_soc_card *card)
 {
-	struct snd_soc_dai *codec_dai = snd_soc_card_get_codec_dai(card, SKL_NUVOTON_CODEC_DAI);
-
-	return snd_soc_component_set_jack(codec_dai->component, NULL, NULL);
+	return avs_card_set_jack(card, NULL);
 }
 
 static int avs_card_resume_post(struct snd_soc_card *card)
@@ -268,7 +280,7 @@ static int avs_card_resume_post(struct snd_soc_card *card)
 	    codec_dai->playback_widget->active)
 		snd_soc_dai_set_sysclk(codec_dai, NAU8825_CLK_FLL_FS, 0, SND_SOC_CLOCK_IN);
 
-	return snd_soc_component_set_jack(codec_dai->component, jack, NULL);
+	return avs_card_set_jack(card, jack);
 }
 
 static int avs_nau8825_probe(struct platform_device *pdev)
@@ -306,6 +318,7 @@ static int avs_nau8825_probe(struct platform_device *pdev)
 	card->name = "avs_nau8825";
 	card->dev = dev;
 	card->owner = THIS_MODULE;
+	card->remove = avs_card_remove;
 	card->suspend_pre = avs_card_suspend_pre;
 	card->resume_post = avs_card_resume_post;
 	card->dai_link = dai_link;

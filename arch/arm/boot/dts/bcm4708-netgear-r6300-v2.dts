@@ -28,29 +28,29 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-logo {
+		logo {
 			label = "bcm53xx:white:logo";
 			gpios = <&chipcommon 1 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-power0 {
+		power0 {
 			label = "bcm53xx:green:power";
 			gpios = <&chipcommon 2 GPIO_ACTIVE_LOW>;
 		};
 
-		led-power1 {
+		power1 {
 			label = "bcm53xx:amber:power";
 			gpios = <&chipcommon 3 GPIO_ACTIVE_LOW>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-usb {
+		usb {
 			label = "bcm53xx:blue:usb";
 			gpios = <&chipcommon 8 GPIO_ACTIVE_LOW>;
 		};
 
-		led-wireless {
+		wireless {
 			label = "bcm53xx:blue:wireless";
 			gpios = <&chipcommon 11 GPIO_ACTIVE_LOW>;
 		};

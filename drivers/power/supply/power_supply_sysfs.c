@@ -57,6 +57,9 @@ static const char * const POWER_SUPPLY_TYPE_TEXT[] = {
 	[POWER_SUPPLY_TYPE_USB_PD_DRP]		= "USB_PD_DRP",
 	[POWER_SUPPLY_TYPE_APPLE_BRICK_ID]	= "BrickID",
 	[POWER_SUPPLY_TYPE_WIRELESS]		= "Wireless",
+#if defined(CONFIG_NO_GKI)
+	[POWER_SUPPLY_TYPE_CHARGE_PUMP]		= "Charge_Pump",
+#endif
 };
 
 static const char * const POWER_SUPPLY_USB_TYPE_TEXT[] = {
@@ -216,6 +219,43 @@ static struct power_supply_attr power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(MANUFACTURE_YEAR),
 	POWER_SUPPLY_ATTR(MANUFACTURE_MONTH),
 	POWER_SUPPLY_ATTR(MANUFACTURE_DAY),
+#if defined(CONFIG_NO_GKI)
+	/* Charge pump properties */
+	POWER_SUPPLY_ATTR(CP_ALARM_STATUS),
+	POWER_SUPPLY_ATTR(CP_BAT_OVP_ALARM),
+	POWER_SUPPLY_ATTR(CP_BAT_OCP_ALARM),
+	POWER_SUPPLY_ATTR(CP_BAT_UCP_ALARM),
+	POWER_SUPPLY_ATTR(CP_BUS_OVP_ALARM),
+	POWER_SUPPLY_ATTR(CP_BUS_OCP_ALARM),
+	POWER_SUPPLY_ATTR(CP_BAT_THERM_ALARM),
+	POWER_SUPPLY_ATTR(CP_BUS_THERM_ALARM),
+	POWER_SUPPLY_ATTR(CP_DIE_THERM_ALARM),
+	POWER_SUPPLY_ATTR(CP_FAULT_STATUS),
+	POWER_SUPPLY_ATTR(CP_BAT_OVP_FAULT),
+	POWER_SUPPLY_ATTR(CP_BAT_OCP_FAULT),
+	POWER_SUPPLY_ATTR(CP_BUS_OVP_FAULT),
+	POWER_SUPPLY_ATTR(CP_BUS_OCP_FAULT),
+	POWER_SUPPLY_ATTR(CP_BAT_THERM_FAULT),
+	POWER_SUPPLY_ATTR(CP_BUS_THERM_FAULT),
+	POWER_SUPPLY_ATTR(CP_DIE_THERM_FAULT),
+	POWER_SUPPLY_ATTR(CP_VBUS_ERROR_STATUS),
+	POWER_SUPPLY_ATTR(CP_VBUS_HERROR_STATUS),
+	POWER_SUPPLY_ATTR(CP_VBUS_LERROR_STATUS),
+	POWER_SUPPLY_ATTR(CP_CHARGING_ENABLED),
+	POWER_SUPPLY_ATTR(CP_WORK_MODE),
+	POWER_SUPPLY_ATTR(CP_WDT_EN),
+	POWER_SUPPLY_ATTR(CP_VOUT),
+	POWER_SUPPLY_ATTR(CP_VBUS),
+	POWER_SUPPLY_ATTR(CP_IBUS),
+	POWER_SUPPLY_ATTR(CP_SWITCHER_EN),
+	POWER_SUPPLY_ATTR(CP_BAT_TEMPERATURE),
+	POWER_SUPPLY_ATTR(CP_BUS_TEMPERATURE),
+	POWER_SUPPLY_ATTR(CP_DIE_TEMPERATURE),
+	POWER_SUPPLY_ATTR(CP_ISNS),
+	POWER_SUPPLY_ATTR(CP_TOGGLE_SWITCHER),
+	POWER_SUPPLY_ATTR(CP_IRQ_STATUS),
+	POWER_SUPPLY_ATTR(CP_ILIM),
+#endif
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(MODEL_NAME),
 	POWER_SUPPLY_ATTR(MANUFACTURER),
@@ -285,7 +325,8 @@ static ssize_t power_supply_show_property(struct device *dev,
 
 		if (ret < 0) {
 			if (ret == -ENODATA)
-				dev_dbg(dev, "driver has no data for `%s' property\n",
+				dev_dbg_ratelimited(dev,
+					"driver has no data for `%s' property\n",
 					attr->attr.name);
 			else if (ret != -ENODEV && ret != -EAGAIN)
 				dev_err_ratelimited(dev,
@@ -427,7 +468,7 @@ void power_supply_init_attrs(struct device_type *dev_type)
 	}
 }
 
-static int add_prop_uevent(const struct device *dev, struct kobj_uevent_env *env,
+static int add_prop_uevent(struct device *dev, struct kobj_uevent_env *env,
 			   enum power_supply_property prop, char *prop_buf)
 {
 	int ret = 0;
@@ -438,7 +479,7 @@ static int add_prop_uevent(const struct device *dev, struct kobj_uevent_env *env
 	pwr_attr = &power_supply_attrs[prop];
 	dev_attr = &pwr_attr->dev_attr;
 
-	ret = power_supply_show_property((struct device *)dev, dev_attr, prop_buf);
+	ret = power_supply_show_property(dev, dev_attr, prop_buf);
 	if (ret == -ENODEV || ret == -ENODATA) {
 		/*
 		 * When a battery is absent, we expect -ENODEV. Don't abort;
@@ -458,9 +499,9 @@ static int add_prop_uevent(const struct device *dev, struct kobj_uevent_env *env
 			      pwr_attr->prop_name, prop_buf);
 }
 
-int power_supply_uevent(const struct device *dev, struct kobj_uevent_env *env)
+int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct power_supply *psy = dev_get_drvdata(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	int ret = 0, j;
 	char *prop_buf;
 

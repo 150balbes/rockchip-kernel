@@ -10,14 +10,6 @@
 
 #define in_range(b, first, len) ((b) >= (first) && (b) < (first) + (len))
 
-/*
- * Enumerate bits using enum autoincrement. Define the @name as the n-th bit.
- */
-#define ENUM_BIT(name)                                  \
-	__ ## name ## _BIT,                             \
-	name = (1U << __ ## name ## _BIT),              \
-	__ ## name ## _SEQ = __ ## name ## _BIT
-
 static inline void cond_wake_up(struct wait_queue_head *wq)
 {
 	/*
@@ -40,10 +32,22 @@ static inline void cond_wake_up_nomb(struct wait_queue_head *wq)
 		wake_up(wq);
 }
 
-static inline u64 mult_perc(u64 num, u32 percent)
+static inline u64 div_factor(u64 num, int factor)
 {
-	return div_u64(num * percent, 100);
+	if (factor == 10)
+		return num;
+	num *= factor;
+	return div_u64(num, 10);
 }
+
+static inline u64 div_factor_fine(u64 num, int factor)
+{
+	if (factor == 100)
+		return num;
+	num *= factor;
+	return div_u64(num, 100);
+}
+
 /* Copy of is_power_of_two that is 64bit safe */
 static inline bool is_power_of_two_u64(u64 n)
 {

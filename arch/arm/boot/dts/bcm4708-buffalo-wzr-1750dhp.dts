@@ -49,7 +49,7 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-usb {
+		usb {
 			label = "bcm53xx:blue:usb";
 			gpios = <&hc595 0 GPIO_ACTIVE_HIGH>;
 			trigger-sources = <&ohci_port1>, <&ehci_port1>,
@@ -58,40 +58,40 @@
 			linux,default-trigger = "usbport";
 		};
 
-		led-power0 {
+		power0 {
 			label = "bcm53xx:red:power";
 			gpios = <&hc595 1 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-power1 {
+		power1 {
 			label = "bcm53xx:white:power";
 			gpios = <&hc595 2 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-router0 {
+		router0 {
 			label = "bcm53xx:blue:router";
 			gpios = <&hc595 3 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-router1 {
+		router1 {
 			label = "bcm53xx:amber:router";
 			gpios = <&hc595 4 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-wan {
+		wan {
 			label = "bcm53xx:blue:wan";
 			gpios = <&hc595 5 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-wireless0 {
+		wireless0 {
 			label = "bcm53xx:blue:wireless";
 			gpios = <&hc595 6 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-wireless1 {
+		wireless1 {
 			label = "bcm53xx:amber:wireless";
 			gpios = <&hc595 7 GPIO_ACTIVE_HIGH>;
 		};

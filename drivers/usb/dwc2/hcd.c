@@ -777,11 +777,13 @@ void dwc2_hc_halt(struct dwc2_hsotg *hsotg, struct dwc2_host_chan *chan,
 	 * uframe/frame (in the worst case), the core generates a channel
 	 * halted and disables the channel automatically.
 	 */
-	if ((hsotg->params.g_dma && !hsotg->params.g_dma_desc) ||
+	if ((hsotg->params.host_dma && !hsotg->params.dma_desc_enable) ||
 	    hsotg->hw_params.arch == GHWCFG2_EXT_DMA_ARCH) {
 		if (!chan->do_split &&
 		    (chan->ep_type == USB_ENDPOINT_XFER_ISOC ||
-		     chan->ep_type == USB_ENDPOINT_XFER_INT)) {
+		     chan->ep_type == USB_ENDPOINT_XFER_INT) &&
+		    (halt_status == DWC2_HC_XFER_URB_DEQUEUE)) {
+			chan->halt_status = halt_status;
 			dev_err(hsotg->dev, "%s() Channel can't be halted\n",
 				__func__);
 			return;
@@ -1792,11 +1794,13 @@ void dwc2_hcd_disconnect(struct dwc2_hsotg *hsotg, bool force)
 	 * Without the extra check here we will end calling disconnect
 	 * and won't get any future interrupts to handle the connect.
 	 */
-	if (!force) {
-		hprt0 = dwc2_readl(hsotg, HPRT0);
-		if (!(hprt0 & HPRT0_CONNDET) && (hprt0 & HPRT0_CONNSTS))
-			dwc2_hcd_connect(hsotg);
-	}
+	hprt0 = dwc2_readl(hsotg, HPRT0);
+
+	if (!force && !(hprt0 & HPRT0_CONNDET) &&
+	    (hprt0 & HPRT0_CONNSTS))
+		dwc2_hcd_connect(hsotg);
+	else if (hsotg->lx_state != DWC2_L0)
+		usb_hcd_resume_root_hub(hsotg->priv);
 }
 
 /**
@@ -2406,10 +2410,13 @@ static void dwc2_hc_init_xfer(struct dwc2_hsotg *hsotg,
 	}
 }
 
-static int dwc2_alloc_split_dma_aligned_buf(struct dwc2_hsotg *hsotg,
-					    struct dwc2_qh *qh,
-					    struct dwc2_host_chan *chan)
+static int dwc2_alloc_qh_dma_aligned_buf(struct dwc2_hsotg *hsotg,
+					 struct dwc2_qh *qh,
+					 struct dwc2_qtd *qtd,
+					 struct dwc2_host_chan *chan)
 {
+	u32 offset;
+
 	if (!hsotg->unaligned_cache ||
 	    chan->max_packet > DWC2_KMEM_UNALIGNED_BUF_SIZE)
 		return -ENOMEM;
@@ -2419,6 +2426,18 @@ static int dwc2_alloc_split_dma_aligned_buf(struct dwc2_hsotg *hsotg,
 						    GFP_ATOMIC | GFP_DMA);
 		if (!qh->dw_align_buf)
 			return -ENOMEM;
+	}
+
+	if (!chan->ep_is_in) {
+		if (qh->do_split) {
+			offset = chan->xfer_dma - qtd->urb->dma;
+			memcpy(qh->dw_align_buf, (u8 *)qtd->urb->buf + offset,
+			       (chan->xfer_len > 188 ? 188 : chan->xfer_len));
+		} else {
+			offset = chan->xfer_dma - qtd->urb->dma;
+			memcpy(qh->dw_align_buf, (u8 *)qtd->urb->buf + offset,
+			       chan->xfer_len);
+		}
 	}
 
 	qh->dw_align_buf_dma = dma_map_single(hsotg->dev, qh->dw_align_buf,
@@ -2625,10 +2644,10 @@ static int dwc2_assign_and_init_hc(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
 	dwc2_hc_init_xfer(hsotg, chan, qtd);
 
 	/* For non-dword aligned buffers */
-	if (hsotg->params.host_dma && qh->do_split &&
-	    chan->ep_is_in && (chan->xfer_dma & 0x3)) {
+	if (hsotg->params.host_dma && (chan->xfer_dma & 0x3) &&
+	    chan->ep_type == USB_ENDPOINT_XFER_ISOC) {
 		dev_vdbg(hsotg->dev, "Non-aligned buffer\n");
-		if (dwc2_alloc_split_dma_aligned_buf(hsotg, qh, chan)) {
+		if (dwc2_alloc_qh_dma_aligned_buf(hsotg, qh, qtd, chan)) {
 			dev_err(hsotg->dev,
 				"Failed to allocate memory to handle non-aligned buffer\n");
 			/* Add channel back to free list */
@@ -2642,8 +2661,8 @@ static int dwc2_assign_and_init_hc(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
 		}
 	} else {
 		/*
-		 * We assume that DMA is always aligned in non-split
-		 * case or split out case. Warn if not.
+		 * We assume that DMA is always aligned in other case,
+		 * Warn if not.
 		 */
 		WARN_ON_ONCE(hsotg->params.host_dma &&
 			     (chan->xfer_dma & 0x3));
@@ -2701,8 +2720,11 @@ enum dwc2_transaction_type dwc2_hcd_select_transactions(
 			hsotg->available_host_channels--;
 		}
 		qh = list_entry(qh_ptr, struct dwc2_qh, qh_list_entry);
-		if (dwc2_assign_and_init_hc(hsotg, qh))
+		if (dwc2_assign_and_init_hc(hsotg, qh)) {
+			if (hsotg->params.uframe_sched)
+				hsotg->available_host_channels++;
 			break;
+		}
 
 		/*
 		 * Move the QH from the periodic ready schedule to the
@@ -2735,8 +2757,11 @@ enum dwc2_transaction_type dwc2_hcd_select_transactions(
 			hsotg->available_host_channels--;
 		}
 
-		if (dwc2_assign_and_init_hc(hsotg, qh))
+		if (dwc2_assign_and_init_hc(hsotg, qh)) {
+			if (hsotg->params.uframe_sched)
+				hsotg->available_host_channels++;
 			break;
+		}
 
 		/*
 		 * Move the QH from the non-periodic inactive schedule to the
@@ -2814,7 +2839,7 @@ static int dwc2_queue_transaction(struct dwc2_hsotg *hsotg,
 			if (!chan->xfer_started) {
 				dwc2_hc_start_transfer(hsotg, chan);
 				retval = 1;
-			} else {
+			} else if (!hsotg->params.host_dma) {
 				retval = dwc2_hc_continue_transfer(hsotg, chan);
 			}
 		} else {
@@ -2824,7 +2849,7 @@ static int dwc2_queue_transaction(struct dwc2_hsotg *hsotg,
 		if (!chan->xfer_started) {
 			dwc2_hc_start_transfer(hsotg, chan);
 			retval = 1;
-		} else {
+		} else if (!hsotg->params.host_dma) {
 			retval = dwc2_hc_continue_transfer(hsotg, chan);
 		}
 	}
@@ -3138,6 +3163,9 @@ static void dwc2_conn_id_status_change(struct work_struct *work)
 
 	dev_dbg(hsotg->dev, "%s()\n", __func__);
 
+	if (!hsotg->ll_phy_enabled && dwc2_is_host_mode(hsotg))
+		dwc2_lowlevel_phy_enable(hsotg);
+
 	gotgctl = dwc2_readl(hsotg, GOTGCTL);
 	dev_dbg(hsotg->dev, "gotgctl=%0x\n", gotgctl);
 	dev_dbg(hsotg->dev, "gotgctl.b.conidsts=%d\n",
@@ -3305,7 +3333,8 @@ int dwc2_port_suspend(struct dwc2_hsotg *hsotg, u16 windex)
 		 * If not hibernation nor partial power down are supported,
 		 * clock gating is used to save power.
 		 */
-		if (!hsotg->params.no_clock_gating)
+		if (!hsotg->params.no_clock_gating ||
+		    IS_REACHABLE(CONFIG_ARCH_ROCKCHIP))
 			dwc2_host_enter_clock_gating(hsotg);
 		break;
 	}
@@ -4143,6 +4172,8 @@ void dwc2_host_complete(struct dwc2_hsotg *hsotg, struct dwc2_qtd *qtd,
 			 urb->actual_length);
 
 	if (usb_pipetype(urb->pipe) == PIPE_ISOCHRONOUS) {
+		if (!hsotg->params.dma_desc_enable)
+			urb->start_frame = qtd->qh->start_active_frame;
 		urb->error_count = dwc2_hcd_urb_get_error_count(qtd->urb);
 		for (i = 0; i < urb->number_of_packets; ++i) {
 			urb->iso_frame_desc[i].actual_length =
@@ -4370,7 +4401,8 @@ static int _dwc2_hcd_suspend(struct usb_hcd *hcd)
 		 * If not hibernation nor partial power down are supported,
 		 * clock gating is used to save power.
 		 */
-		if (!hsotg->params.no_clock_gating) {
+		if (!hsotg->params.no_clock_gating ||
+		    IS_REACHABLE(CONFIG_ARCH_ROCKCHIP)) {
 			dwc2_host_enter_clock_gating(hsotg);
 
 			/* After entering suspend, hardware is not accessible */
@@ -4415,20 +4447,19 @@ static int _dwc2_hcd_resume(struct usb_hcd *hcd)
 	if (hsotg->lx_state != DWC2_L2)
 		goto unlock;
 
-	hprt0 = dwc2_read_hprt0(hsotg);
-
-	/*
-	 * Added port connection status checking which prevents exiting from
-	 * Partial Power Down mode from _dwc2_hcd_resume() if not in Partial
-	 * Power Down mode.
-	 */
-	if (hprt0 & HPRT0_CONNSTS) {
-		hsotg->lx_state = DWC2_L0;
-		goto unlock;
-	}
-
 	switch (hsotg->params.power_down) {
 	case DWC2_POWER_DOWN_PARAM_PARTIAL:
+		hprt0 = dwc2_read_hprt0(hsotg);
+		/*
+		 * Added port connection status checking which prevents exiting from
+		 * Partial Power Down mode from _dwc2_hcd_resume() if not in Partial
+		 * Power Down mode.
+		 */
+		if (hprt0 & HPRT0_CONNSTS) {
+			hsotg->lx_state = DWC2_L0;
+			goto unlock;
+		}
+
 		ret = dwc2_exit_partial_power_down(hsotg, 0, true);
 		if (ret)
 			dev_err(hsotg->dev,
@@ -4479,7 +4510,8 @@ static int _dwc2_hcd_resume(struct usb_hcd *hcd)
 	}
 
 	/* Change Root port status, as port status change occurred after resume.*/
-	hsotg->flags.b.port_suspend_change = 1;
+	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_PARTIAL)
+		hsotg->flags.b.port_suspend_change = 1;
 
 	/*
 	 * Enable power if not already done.
@@ -4649,7 +4681,7 @@ static int _dwc2_hcd_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 	}
 
 	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_NONE &&
-	    hsotg->bus_suspended) {
+	    hsotg->bus_suspended && !hsotg->params.no_clock_gating) {
 		if (dwc2_is_device_mode(hsotg))
 			dwc2_gadget_exit_clock_gating(hsotg, 0);
 		else
@@ -4769,8 +4801,8 @@ fail3:
 	if (qh_allocated && qh->channel && qh->channel->qh == qh)
 		qh->channel->qh = NULL;
 fail2:
-	spin_unlock_irqrestore(&hsotg->lock, flags);
 	urb->hcpriv = NULL;
+	spin_unlock_irqrestore(&hsotg->lock, flags);
 	kfree(qtd);
 fail1:
 	if (qh_allocated) {
@@ -5316,6 +5348,13 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 		otg_set_host(hsotg->uphy->otg, &hcd->self);
 
 	/*
+	 * do not manage the PHY state in the HCD core, instead let the driver
+	 * handle this (for example if the PHY can only be turned on after a
+	 * specific event)
+	 */
+	hcd->skip_phy_initialization = 1;
+
+	/*
 	 * Finish generic HCD initialization and start the HCD. This function
 	 * allocates the DMA buffer pool, registers the USB bus, requests the
 	 * IRQ line, and calls hcd_start method.
@@ -5406,9 +5445,16 @@ int dwc2_backup_host_registers(struct dwc2_hsotg *hsotg)
 	/* Backup Host regs */
 	hr = &hsotg->hr_backup;
 	hr->hcfg = dwc2_readl(hsotg, HCFG);
+	hr->hflbaddr = dwc2_readl(hsotg, HFLBADDR);
 	hr->haintmsk = dwc2_readl(hsotg, HAINTMSK);
-	for (i = 0; i < hsotg->params.host_channels; ++i)
+	for (i = 0; i < hsotg->params.host_channels; ++i) {
+		hr->hcchar[i] = dwc2_readl(hsotg, HCCHAR(i));
+		hr->hcsplt[i] = dwc2_readl(hsotg, HCSPLT(i));
 		hr->hcintmsk[i] = dwc2_readl(hsotg, HCINTMSK(i));
+		hr->hctsiz[i] = dwc2_readl(hsotg, HCTSIZ(i));
+		hr->hcidma[i] = dwc2_readl(hsotg, HCDMA(i));
+		hr->hcidmab[i] = dwc2_readl(hsotg, HCDMAB(i));
+	}
 
 	hr->hprt0 = dwc2_read_hprt0(hsotg);
 	hr->hfir = dwc2_readl(hsotg, HFIR);
@@ -5442,10 +5488,17 @@ int dwc2_restore_host_registers(struct dwc2_hsotg *hsotg)
 	hr->valid = false;
 
 	dwc2_writel(hsotg, hr->hcfg, HCFG);
+	dwc2_writel(hsotg, hr->hflbaddr, HFLBADDR);
 	dwc2_writel(hsotg, hr->haintmsk, HAINTMSK);
 
-	for (i = 0; i < hsotg->params.host_channels; ++i)
+	for (i = 0; i < hsotg->params.host_channels; ++i) {
+		dwc2_writel(hsotg, hr->hcchar[i], HCCHAR(i));
+		dwc2_writel(hsotg, hr->hcsplt[i], HCSPLT(i));
 		dwc2_writel(hsotg, hr->hcintmsk[i], HCINTMSK(i));
+		dwc2_writel(hsotg, hr->hctsiz[i], HCTSIZ(i));
+		dwc2_writel(hsotg, hr->hcidma[i], HCDMA(i));
+		dwc2_writel(hsotg, hr->hcidmab[i], HCDMAB(i));
+	}
 
 	dwc2_writel(hsotg, hr->hprt0, HPRT0);
 	dwc2_writel(hsotg, hr->hfir, HFIR);
@@ -5610,10 +5663,12 @@ int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg, int rem_wakeup,
 	dwc2_writel(hsotg, hr->hcfg, HCFG);
 
 	/* De-assert Wakeup Logic */
-	gpwrdn = dwc2_readl(hsotg, GPWRDN);
-	gpwrdn &= ~GPWRDN_PMUACTV;
-	dwc2_writel(hsotg, gpwrdn, GPWRDN);
-	udelay(10);
+	if (!(rem_wakeup && hsotg->hw_params.snpsid >= DWC2_CORE_REV_4_30a)) {
+		gpwrdn = dwc2_readl(hsotg, GPWRDN);
+		gpwrdn &= ~GPWRDN_PMUACTV;
+		dwc2_writel(hsotg, gpwrdn, GPWRDN);
+		udelay(10);
+	}
 
 	hprt0 = hr->hprt0;
 	hprt0 |= HPRT0_PWR;
@@ -5638,6 +5693,13 @@ int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg, int rem_wakeup,
 		hprt0 |= HPRT0_RES;
 		dwc2_writel(hsotg, hprt0, HPRT0);
 
+		/* De-assert Wakeup Logic */
+		if ((rem_wakeup && hsotg->hw_params.snpsid >= DWC2_CORE_REV_4_30a)) {
+			gpwrdn = dwc2_readl(hsotg, GPWRDN);
+			gpwrdn &= ~GPWRDN_PMUACTV;
+			dwc2_writel(hsotg, gpwrdn, GPWRDN);
+			udelay(10);
+		}
 		/* Wait for Resume time and then program HPRT again */
 		mdelay(100);
 		hprt0 &= ~HPRT0_RES;
@@ -5892,11 +5954,13 @@ void dwc2_host_enter_clock_gating(struct dwc2_hsotg *hsotg)
 	dwc2_writel(hsotg, pcgctl, PCGCTL);
 	udelay(5);
 
+#ifndef CONFIG_ARCH_ROCKCHIP
 	/* Set the Gate hclk as suspend is received. */
 	pcgctl = dwc2_readl(hsotg, PCGCTL);
 	pcgctl |= PCGCTL_GATEHCLK;
 	dwc2_writel(hsotg, pcgctl, PCGCTL);
 	udelay(5);
+#endif
 
 	hsotg->bus_suspended = true;
 	hsotg->lx_state = DWC2_L2;

@@ -33,7 +33,6 @@
 #include <linux/jiffies.h>
 #include <linux/completion.h>
 #include <linux/of.h>
-#include <linux/pm_wakeirq.h>
 #include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <asm/unaligned.h>
@@ -86,6 +85,8 @@ struct elan_tp_data {
 	u16			fw_validpage_count;
 	u16			fw_page_size;
 	u32			fw_signature_address;
+
+	bool			irq_wake;
 
 	u8			min_baseline;
 	u8			max_baseline;
@@ -1187,7 +1188,8 @@ static void elan_disable_regulator(void *_data)
 	regulator_disable(data->vcc);
 }
 
-static int elan_probe(struct i2c_client *client)
+static int elan_probe(struct i2c_client *client,
+		      const struct i2c_device_id *dev_id)
 {
 	const struct elan_transport_ops *transport_ops;
 	struct device *dev = &client->dev;
@@ -1325,6 +1327,13 @@ static int elan_probe(struct i2c_client *client)
 		}
 	}
 
+	/*
+	 * Systems using device tree should set up wakeup via DTS,
+	 * the rest will configure device as wakeup source by default.
+	 */
+	if (!dev->of_node)
+		device_init_wakeup(dev, true);
+
 	return 0;
 }
 
@@ -1347,6 +1356,8 @@ static int __maybe_unused elan_suspend(struct device *dev)
 
 	if (device_may_wakeup(dev)) {
 		ret = elan_sleep(data);
+		/* Enable wake from IRQ */
+		data->irq_wake = (enable_irq_wake(client->irq) == 0);
 	} else {
 		ret = elan_set_power(data, false);
 		if (ret)
@@ -1377,6 +1388,9 @@ static int __maybe_unused elan_resume(struct device *dev)
 			dev_err(dev, "error %d enabling regulator\n", error);
 			goto err;
 		}
+	} else if (data->irq_wake) {
+		disable_irq_wake(client->irq);
+		data->irq_wake = false;
 	}
 
 	error = elan_set_power(data, true);
@@ -1424,7 +1438,7 @@ static struct i2c_driver elan_driver = {
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.dev_groups = elan_sysfs_groups,
 	},
-	.probe_new	= elan_probe,
+	.probe		= elan_probe,
 	.id_table	= elan_id,
 };
 

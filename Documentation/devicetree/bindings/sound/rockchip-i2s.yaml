@@ -13,9 +13,6 @@ description:
 maintainers:
   - Heiko Stuebner <heiko@sntech.de>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     oneOf:
@@ -114,7 +111,7 @@ required:
   - dma-names
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

@@ -43,7 +43,7 @@
 /* Occasionally, engineering (release candidate) firmware is provided for testing. */
 static bool debug_ignore_fw_version;
 module_param_named(ignore_fw_version, debug_ignore_fw_version, bool, 0444);
-MODULE_PARM_DESC(ignore_fw_version, "Ignore firmware version check 0=no (default), 1=yes");
+MODULE_PARM_DESC(ignore_fw_version, "Verify FW version 0=yes (default), 1=no");
 
 #define AVS_LIB_NAME_SIZE	8
 
@@ -224,18 +224,10 @@ static int avs_cldma_load_module(struct avs_dev *adev, struct avs_module_entry *
 	if (ret < 0)
 		return ret;
 
-	avs_hda_power_gating_enable(adev, false);
-	avs_hda_clock_gating_enable(adev, false);
-	avs_hda_l1sen_enable(adev, false);
-
 	hda_cldma_set_data(cl, (void *)mod->data, mod->size);
 	hda_cldma_transfer(cl, msecs_to_jiffies(AVS_CLDMA_START_DELAY_MS));
 	ret = avs_ipc_load_modules(adev, &mentry->module_id, 1);
 	hda_cldma_stop(cl);
-
-	avs_hda_l1sen_enable(adev, true);
-	avs_hda_clock_gating_enable(adev, true);
-	avs_hda_power_gating_enable(adev, true);
 
 	if (ret) {
 		dev_err(adev->dev, "load module %d failed: %d\n", mentry->module_id, ret);
@@ -377,8 +369,8 @@ int avs_hda_load_basefw(struct avs_dev *adev, struct firmware *fw)
 		goto release_stream;
 
 	/* enable SPIB for hda stream */
-	snd_hdac_stream_spbcap_enable(bus, true, hstream->index);
-	ret = snd_hdac_stream_set_spib(bus, hstream, fw->size);
+	snd_hdac_ext_stream_spbcap_enable(bus, true, hstream->index);
+	ret = snd_hdac_ext_stream_set_spib(bus, estream, fw->size);
 	if (ret)
 		goto cleanup_resources;
 
@@ -408,8 +400,8 @@ int avs_hda_load_basefw(struct avs_dev *adev, struct firmware *fw)
 
 cleanup_resources:
 	/* disable SPIB for hda stream */
-	snd_hdac_stream_spbcap_enable(bus, false, hstream->index);
-	snd_hdac_stream_set_spib(bus, hstream, 0);
+	snd_hdac_ext_stream_spbcap_enable(bus, false, hstream->index);
+	snd_hdac_ext_stream_set_spib(bus, estream, 0);
 
 	snd_hdac_dsp_cleanup(hstream, &dmab);
 release_stream:
@@ -444,8 +436,8 @@ int avs_hda_load_library(struct avs_dev *adev, struct firmware *lib, u32 id)
 		goto release_stream;
 
 	/* enable SPIB for hda stream */
-	snd_hdac_stream_spbcap_enable(bus, true, stream->index);
-	snd_hdac_stream_set_spib(bus, stream, lib->size);
+	snd_hdac_ext_stream_spbcap_enable(bus, true, stream->index);
+	snd_hdac_ext_stream_set_spib(bus, estream, lib->size);
 
 	memcpy(dmab.area, lib->data, lib->size);
 
@@ -459,8 +451,8 @@ int avs_hda_load_library(struct avs_dev *adev, struct firmware *lib, u32 id)
 	}
 
 	/* disable SPIB for hda stream */
-	snd_hdac_stream_spbcap_enable(bus, false, stream->index);
-	snd_hdac_stream_set_spib(bus, stream, 0);
+	snd_hdac_ext_stream_spbcap_enable(bus, false, stream->index);
+	snd_hdac_ext_stream_set_spib(bus, estream, 0);
 
 	snd_hdac_dsp_cleanup(stream, &dmab);
 release_stream:
@@ -613,7 +605,6 @@ int avs_dsp_boot_firmware(struct avs_dev *adev, bool purge)
 	for (i = 1; i < adev->fw_cfg.max_libs_count; i++)
 		memset(adev->lib_names[i], 0, AVS_LIB_NAME_SIZE);
 
-	avs_hda_power_gating_enable(adev, false);
 	avs_hda_clock_gating_enable(adev, false);
 	avs_hda_l1sen_enable(adev, false);
 
@@ -634,7 +625,6 @@ int avs_dsp_boot_firmware(struct avs_dev *adev, bool purge)
 reenable_gating:
 	avs_hda_l1sen_enable(adev, true);
 	avs_hda_clock_gating_enable(adev, true);
-	avs_hda_power_gating_enable(adev, true);
 
 	if (ret < 0)
 		return ret;

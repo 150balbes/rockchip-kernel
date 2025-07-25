@@ -27,12 +27,10 @@
 
 #include <nvif/class.h>
 
-void
-gv100_fault_buffer_process(struct work_struct *work)
+static void
+gv100_fault_buffer_process(struct nvkm_fault_buffer *buffer)
 {
-	struct nvkm_fault *fault = container_of(work, typeof(*fault), nrpfb_work);
-	struct nvkm_fault_buffer *buffer = fault->buffer[0];
-	struct nvkm_device *device = fault->subdev.device;
+	struct nvkm_device *device = buffer->fault->subdev.device;
 	struct nvkm_memory *mem = buffer->mem;
 	u32 get = nvkm_rd32(device, buffer->get);
 	u32 put = nvkm_rd32(device, buffer->put);
@@ -117,12 +115,11 @@ gv100_fault_buffer_info(struct nvkm_fault_buffer *buffer)
 }
 
 static int
-gv100_fault_ntfy_nrpfb(struct nvkm_event_ntfy *ntfy, u32 bits)
+gv100_fault_ntfy_nrpfb(struct nvkm_notify *notify)
 {
-	struct nvkm_fault *fault = container_of(ntfy, typeof(*fault), nrpfb);
-
-	schedule_work(&fault->nrpfb_work);
-	return NVKM_EVENT_KEEP;
+	struct nvkm_fault *fault = container_of(notify, typeof(*fault), nrpfb);
+	gv100_fault_buffer_process(fault->buffer[0]);
+	return NVKM_NOTIFY_KEEP;
 }
 
 static void
@@ -166,14 +163,14 @@ gv100_fault_intr(struct nvkm_fault *fault)
 
 	if (stat & 0x20000000) {
 		if (fault->buffer[0]) {
-			nvkm_event_ntfy(&fault->event, 0, NVKM_FAULT_BUFFER_EVENT_PENDING);
+			nvkm_event_send(&fault->event, 1, 0, NULL, 0);
 			stat &= ~0x20000000;
 		}
 	}
 
 	if (stat & 0x08000000) {
 		if (fault->buffer[1]) {
-			nvkm_event_ntfy(&fault->event, 1, NVKM_FAULT_BUFFER_EVENT_PENDING);
+			nvkm_event_send(&fault->event, 1, 1, NULL, 0);
 			stat &= ~0x08000000;
 		}
 	}
@@ -186,12 +183,9 @@ gv100_fault_intr(struct nvkm_fault *fault)
 static void
 gv100_fault_fini(struct nvkm_fault *fault)
 {
-	nvkm_event_ntfy_block(&fault->nrpfb);
-	flush_work(&fault->nrpfb_work);
-
+	nvkm_notify_put(&fault->nrpfb);
 	if (fault->buffer[0])
 		fault->func->buffer.fini(fault->buffer[0]);
-
 	nvkm_mask(fault->subdev.device, 0x100a34, 0x80000000, 0x80000000);
 }
 
@@ -200,15 +194,15 @@ gv100_fault_init(struct nvkm_fault *fault)
 {
 	nvkm_mask(fault->subdev.device, 0x100a2c, 0x80000000, 0x80000000);
 	fault->func->buffer.init(fault->buffer[0]);
-	nvkm_event_ntfy_allow(&fault->nrpfb);
+	nvkm_notify_get(&fault->nrpfb);
 }
 
 int
 gv100_fault_oneinit(struct nvkm_fault *fault)
 {
-	nvkm_event_ntfy_add(&fault->event, 0, NVKM_FAULT_BUFFER_EVENT_PENDING, true,
-			    gv100_fault_ntfy_nrpfb, &fault->nrpfb);
-	return 0;
+	return nvkm_notify_init(&fault->buffer[0]->object, &fault->event,
+				gv100_fault_ntfy_nrpfb, true, NULL, 0, 0,
+				&fault->nrpfb);
 }
 
 static const struct nvkm_fault_func
@@ -237,10 +231,5 @@ int
 gv100_fault_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 		struct nvkm_fault **pfault)
 {
-	int ret = nvkm_fault_new_(&gv100_fault, device, type, inst, pfault);
-	if (ret)
-		return ret;
-
-	INIT_WORK(&(*pfault)->nrpfb_work, gv100_fault_buffer_process);
-	return 0;
+	return nvkm_fault_new_(&gv100_fault, device, type, inst, pfault);
 }

@@ -441,8 +441,8 @@ static int __platform_get_irq_byname(struct platform_device *dev,
 	struct resource *r;
 	int ret;
 
-	if (!dev->dev.of_node || IS_ENABLED(CONFIG_OF_IRQ)) {
-		ret = fwnode_irq_get_byname(dev_fwnode(&dev->dev), name);
+	if (IS_ENABLED(CONFIG_OF_IRQ) && dev->dev.of_node) {
+		ret = of_irq_get_byname(dev->dev.of_node, name);
 		if (ret > 0 || ret == -EPROBE_DEFER)
 			return ret;
 	}
@@ -1416,7 +1416,9 @@ static void platform_remove(struct device *_dev)
 	struct platform_driver *drv = to_platform_driver(_dev->driver);
 	struct platform_device *dev = to_platform_device(_dev);
 
-	if (drv->remove) {
+	if (drv->remove_new) {
+		drv->remove_new(dev);
+	} else if (drv->remove) {
 		int ret = drv->remove(dev);
 
 		if (ret)

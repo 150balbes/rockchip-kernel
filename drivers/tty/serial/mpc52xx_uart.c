@@ -1428,11 +1428,42 @@ mpc52xx_uart_int_rx_chars(struct uart_port *port)
 static inline bool
 mpc52xx_uart_int_tx_chars(struct uart_port *port)
 {
-	u8 ch;
+	struct circ_buf *xmit = &port->state->xmit;
 
-	return uart_port_tx(port, ch,
-		psc_ops->raw_tx_rdy(port),
-		psc_ops->write_char(port, ch));
+	/* Process out of band chars */
+	if (port->x_char) {
+		psc_ops->write_char(port, port->x_char);
+		port->icount.tx++;
+		port->x_char = 0;
+		return true;
+	}
+
+	/* Nothing to do ? */
+	if (uart_circ_empty(xmit) || uart_tx_stopped(port)) {
+		mpc52xx_uart_stop_tx(port);
+		return false;
+	}
+
+	/* Send chars */
+	while (psc_ops->raw_tx_rdy(port)) {
+		psc_ops->write_char(port, xmit->buf[xmit->tail]);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
+		if (uart_circ_empty(xmit))
+			break;
+	}
+
+	/* Wake up */
+	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
+		uart_write_wakeup(port);
+
+	/* Maybe we're done after all */
+	if (uart_circ_empty(xmit)) {
+		mpc52xx_uart_stop_tx(port);
+		return false;
+	}
+
+	return true;
 }
 
 static irqreturn_t

@@ -248,14 +248,14 @@ struct aic_info {
 	bool fast_ipi;
 };
 
-static const struct aic_info aic1_info __initconst = {
+static const struct aic_info aic1_info = {
 	.version	= 1,
 
 	.event		= AIC_EVENT,
 	.target_cpu	= AIC_TARGET_CPU,
 };
 
-static const struct aic_info aic1_fipi_info __initconst = {
+static const struct aic_info aic1_fipi_info = {
 	.version	= 1,
 
 	.event		= AIC_EVENT,
@@ -264,7 +264,7 @@ static const struct aic_info aic1_fipi_info __initconst = {
 	.fast_ipi	= true,
 };
 
-static const struct aic_info aic2_info __initconst = {
+static const struct aic_info aic2_info = {
 	.version	= 2,
 
 	.irq_cfg	= AIC2_IRQ_CFG,

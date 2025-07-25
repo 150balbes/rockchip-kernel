@@ -160,15 +160,12 @@ properties:
       2: +2dBm
       3: +5dBm
 
+additionalProperties: false
+
 required:
   - compatible
   - reg
   - clocks
-
-allOf:
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
-
-unevaluatedProperties: false
 
 examples:
   - |

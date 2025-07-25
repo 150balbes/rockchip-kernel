@@ -39,59 +39,59 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-power-white {
+		power-white {
 			label = "bcm53xx:white:power";
 			gpios = <&chipcommon 2 GPIO_ACTIVE_LOW>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-power-amber {
+		power-amber {
 			label = "bcm53xx:amber:power";
 			gpios = <&chipcommon 3 GPIO_ACTIVE_LOW>;
 		};
 
-		led-wan-white {
+		wan-white {
 			label = "bcm53xx:white:wan";
 			gpios = <&chipcommon 8 GPIO_ACTIVE_LOW>;
 			linux,default-trigger = "default-on";
 		};
 
-		led-wan-amber {
+		wan-amber {
 			label = "bcm53xx:amber:wan";
 			gpios = <&chipcommon 9 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-5ghz-1 {
+		5ghz-1 {
 			label = "bcm53xx:white:5ghz-1";
 			gpios = <&chipcommon 12 GPIO_ACTIVE_LOW>;
 		};
 
-		led-2ghz {
+		2ghz {
 			label = "bcm53xx:white:2ghz";
 			gpios = <&chipcommon 13 GPIO_ACTIVE_LOW>;
 		};
 
-		led-wireless {
+		wireless {
 			label = "bcm53xx:white:wireless";
 			gpios = <&chipcommon 14 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-wps {
+		wps {
 			label = "bcm53xx:white:wps";
 			gpios = <&chipcommon 15 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-5ghz-2 {
+		5ghz-2 {
 			label = "bcm53xx:white:5ghz-2";
 			gpios = <&chipcommon 16 GPIO_ACTIVE_LOW>;
 		};
 
-		led-usb3 {
+		usb3 {
 			label = "bcm53xx:white:usb3";
 			gpios = <&chipcommon 17 GPIO_ACTIVE_LOW>;
 		};
 
-		led-usb2 {
+		usb2 {
 			label = "bcm53xx:white:usb2";
 			gpios = <&chipcommon 18 GPIO_ACTIVE_LOW>;
 		};

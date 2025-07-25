@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/mips/loongson/devices.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Loongson based Platforms
+title: Loongson based Platforms Device Tree Bindings
 
 maintainers:
   - Jiaxun Yang <jiaxun.yang@flygoat.com>

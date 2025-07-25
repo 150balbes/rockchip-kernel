@@ -41,19 +41,6 @@ struct cedrus_h265_sram_pred_weight {
 	__s8	offset;
 } __packed;
 
-static unsigned int cedrus_h265_2bit_size(unsigned int width,
-					  unsigned int height)
-{
-	/*
-	 * Vendor library additionally aligns width and height to 16,
-	 * but all capture formats are already aligned to that anyway,
-	 * so we can skip that here. All formats are also one form of
-	 * YUV 4:2:0 or another, so we can safely assume multiplication
-	 * factor of 1.5.
-	 */
-	return ALIGN(width / 4, 32) * height * 3 / 2;
-}
-
 static enum cedrus_irq_status cedrus_h265_irq_status(struct cedrus_ctx *ctx)
 {
 	struct cedrus_dev *dev = ctx->dev;
@@ -427,11 +414,11 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	unsigned int ctb_addr_x, ctb_addr_y;
 	struct cedrus_buffer *cedrus_buf;
 	dma_addr_t src_buf_addr;
-	dma_addr_t src_buf_end_addr;
 	u32 chroma_log2_weight_denom;
 	u32 num_entry_point_offsets;
 	u32 output_pic_list_index;
 	u32 pic_order_cnt[2];
+	size_t slice_bytes;
 	u8 padding;
 	int count;
 	u32 reg;
@@ -443,6 +430,7 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	pred_weight_table = &slice_params->pred_weight_table;
 	num_entry_point_offsets = slice_params->num_entry_point_offsets;
 	cedrus_buf = vb2_to_cedrus_buffer(&run->dst->vb2_buf);
+	slice_bytes = vb2_get_plane_payload(&run->src->vb2_buf, 0);
 
 	/*
 	 * If entry points offsets are present, we should get them
@@ -484,13 +472,13 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	}
 
 	/* Activate H265 engine. */
-	cedrus_engine_enable(ctx);
+	cedrus_engine_enable(ctx, CEDRUS_CODEC_H265);
 
 	/* Source offset and length in bits. */
 
 	cedrus_write(dev, VE_DEC_H265_BITS_OFFSET, 0);
 
-	reg = slice_params->bit_size;
+	reg = slice_bytes * 8;
 	cedrus_write(dev, VE_DEC_H265_BITS_LEN, reg);
 
 	/* Source beginning and end addresses. */
@@ -504,10 +492,7 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	cedrus_write(dev, VE_DEC_H265_BITS_ADDR, reg);
 
-	src_buf_end_addr = src_buf_addr +
-			   DIV_ROUND_UP(slice_params->bit_size, 8);
-
-	reg = VE_DEC_H265_BITS_END_ADDR_BASE(src_buf_end_addr);
+	reg = VE_DEC_H265_BITS_END_ADDR_BASE(src_buf_addr + slice_bytes);
 	cedrus_write(dev, VE_DEC_H265_BITS_END_ADDR, reg);
 
 	/* Coding tree block address */
@@ -815,18 +800,6 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 						      VE_DEC_H265_SRAM_OFFSET_PRED_WEIGHT_CHROMA_L1);
 	}
 
-	if (ctx->bit_depth > 8) {
-		unsigned int stride = ALIGN(ctx->dst_fmt.width / 4, 32);
-
-		reg = ctx->dst_fmt.sizeimage -
-		      cedrus_h265_2bit_size(ctx->dst_fmt.width,
-					    ctx->dst_fmt.height);
-		cedrus_write(dev, VE_DEC_H265_OFFSET_ADDR_FIRST_OUT, reg);
-
-		reg = VE_DEC_H265_10BIT_CONFIGURE_FIRST_2BIT_STRIDE(stride);
-		cedrus_write(dev, VE_DEC_H265_10BIT_CONFIGURE, reg);
-	}
-
 	/* Enable appropriate interruptions. */
 	cedrus_write(dev, VE_DEC_H265_CTRL, VE_DEC_H265_CTRL_IRQ_MASK);
 
@@ -899,15 +872,6 @@ static void cedrus_h265_trigger(struct cedrus_ctx *ctx)
 	cedrus_write(dev, VE_DEC_H265_TRIGGER, VE_DEC_H265_TRIGGER_DEC_SLICE);
 }
 
-static unsigned int cedrus_h265_extra_cap_size(struct cedrus_ctx *ctx,
-					       struct v4l2_pix_format *pix_fmt)
-{
-	if (ctx->bit_depth > 8)
-		return cedrus_h265_2bit_size(pix_fmt->width, pix_fmt->height);
-
-	return 0;
-}
-
 struct cedrus_dec_ops cedrus_dec_ops_h265 = {
 	.irq_clear	= cedrus_h265_irq_clear,
 	.irq_disable	= cedrus_h265_irq_disable,
@@ -916,5 +880,4 @@ struct cedrus_dec_ops cedrus_dec_ops_h265 = {
 	.start		= cedrus_h265_start,
 	.stop		= cedrus_h265_stop,
 	.trigger	= cedrus_h265_trigger,
-	.extra_cap_size	= cedrus_h265_extra_cap_size,
 };

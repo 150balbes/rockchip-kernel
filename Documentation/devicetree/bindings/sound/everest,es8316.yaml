@@ -10,9 +10,6 @@ maintainers:
   - Daniel Drake <drake@endlessm.com>
   - Katsuhiro Suzuki <katsuhiro@katsuster.net>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     const: everest,es8316
@@ -36,7 +33,7 @@ required:
   - reg
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

@@ -394,10 +394,23 @@ int sata_link_scr_lpm(struct ata_link *link, enum ata_lpm_policy policy,
 	case ATA_LPM_MED_POWER_WITH_DIPM:
 	case ATA_LPM_MIN_POWER_WITH_PARTIAL:
 	case ATA_LPM_MIN_POWER:
-		if (ata_link_nr_enabled(link) > 0)
-			/* no restrictions on LPM transitions */
+		if (ata_link_nr_enabled(link) > 0) {
+			/* assume no restrictions on LPM transitions */
 			scontrol &= ~(0x7 << 8);
-		else {
+
+			/*
+			 * If the controller does not support partial, slumber,
+			 * or devsleep, then disallow these transitions.
+			 */
+			if (link->ap->host->flags & ATA_HOST_NO_PART)
+				scontrol |= (0x1 << 8);
+
+			if (link->ap->host->flags & ATA_HOST_NO_SSC)
+				scontrol |= (0x2 << 8);
+
+			if (link->ap->host->flags & ATA_HOST_NO_DEVSLP)
+				scontrol |= (0x4 << 8);
+		} else {
 			/* empty port, power off */
 			scontrol &= ~0xf;
 			scontrol |= (0x1 << 2);
@@ -1392,7 +1405,8 @@ static int ata_eh_read_log_10h(struct ata_device *dev,
 	tf->hob_lbah = buf[10];
 	tf->nsect = buf[12];
 	tf->hob_nsect = buf[13];
-	if (ata_id_has_ncq_autosense(dev->id) && (tf->status & ATA_SENSE))
+	if (dev->class == ATA_DEV_ZAC && ata_id_has_ncq_autosense(dev->id) &&
+	    (tf->status & ATA_SENSE))
 		tf->auxiliary = buf[14] << 16 | buf[15] << 8 | buf[16];
 
 	return 0;
@@ -1420,7 +1434,7 @@ void ata_eh_analyze_ncq_error(struct ata_link *link)
 	int tag, rc;
 
 	/* if frozen, we can't do much */
-	if (ata_port_is_frozen(ap))
+	if (ap->pflags & ATA_PFLAG_FROZEN)
 		return;
 
 	/* is it NCQ device error? */
@@ -1467,40 +1481,10 @@ void ata_eh_analyze_ncq_error(struct ata_link *link)
 		sense_key = (qc->result_tf.auxiliary >> 16) & 0xff;
 		asc = (qc->result_tf.auxiliary >> 8) & 0xff;
 		ascq = qc->result_tf.auxiliary & 0xff;
-		if (ata_scsi_sense_is_valid(sense_key, asc, ascq)) {
-			ata_scsi_set_sense(dev, qc->scsicmd, sense_key, asc,
-					   ascq);
-			ata_scsi_set_sense_information(dev, qc->scsicmd,
-						       &qc->result_tf);
-			qc->flags |= ATA_QCFLAG_SENSE_VALID;
-		}
-	}
-
-	ata_qc_for_each_raw(ap, qc, tag) {
-		if (!(qc->flags & ATA_QCFLAG_FAILED) ||
-		    ata_dev_phys_link(qc->dev) != link)
-			continue;
-
-		/* Skip the single QC which caused the NCQ error. */
-		if (qc->err_mask)
-			continue;
-
-		/*
-		 * For SATA, the STATUS and ERROR fields are shared for all NCQ
-		 * commands that were completed with the same SDB FIS.
-		 * Therefore, we have to clear the ATA_ERR bit for all QCs
-		 * except the one that caused the NCQ error.
-		 */
-		qc->result_tf.status &= ~ATA_ERR;
-		qc->result_tf.error = 0;
-
-		/*
-		 * If we get a NCQ error, that means that a single command was
-		 * aborted. All other failed commands for our link should be
-		 * retried and has no business of going though further scrutiny
-		 * by ata_eh_link_autopsy().
-		 */
-		qc->flags |= ATA_QCFLAG_RETRY;
+		ata_scsi_set_sense(dev, qc->scsicmd, sense_key, asc, ascq);
+		ata_scsi_set_sense_information(dev, qc->scsicmd,
+					       &qc->result_tf);
+		qc->flags |= ATA_QCFLAG_SENSE_VALID;
 	}
 
 	ehc->i.err_mask &= ~AC_ERR_DEV;

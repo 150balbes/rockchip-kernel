@@ -797,7 +797,7 @@ static int isl1208_setup_irq(struct i2c_client *client, int irq)
 }
 
 static int
-isl1208_probe(struct i2c_client *client)
+isl1208_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	int rc = 0;
 	struct isl1208_state *isl1208;
@@ -821,8 +821,6 @@ isl1208_probe(struct i2c_client *client)
 		if (!isl1208->config)
 			return -ENODEV;
 	} else {
-		const struct i2c_device_id *id = i2c_match_id(isl1208_id, client);
-
 		if (id->driver_data >= ISL_LAST_ID)
 			return -ENODEV;
 		isl1208->config = &isl1208_configs[id->driver_data];
@@ -908,7 +906,7 @@ static struct i2c_driver isl1208_driver = {
 		.name = "rtc-isl1208",
 		.of_match_table = of_match_ptr(isl1208_of_match),
 	},
-	.probe_new = isl1208_probe,
+	.probe = isl1208_probe,
 	.id_table = isl1208_id,
 };
 

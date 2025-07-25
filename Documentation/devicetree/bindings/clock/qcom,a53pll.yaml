@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/clock/qcom,a53pll.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Qualcomm A53 PLL clock
+title: Qualcomm A53 PLL Binding
 
 maintainers:
   - Bjorn Andersson <andersson@kernel.org>

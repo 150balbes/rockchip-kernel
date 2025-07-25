@@ -24,9 +24,10 @@ struct pair {
 
 int main(int argc, char **argv)
 {
-	int i, sock, fd, main_prog_fd, hash_map_fd;
+	int i, sock, key, fd, main_prog_fd, jmp_table_fd, hash_map_fd;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
+	const char *section;
 	char filename[256];
 	FILE *f;
 
@@ -44,24 +45,26 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	jmp_table_fd = bpf_object__find_map_fd_by_name(obj, "jmp_table");
 	hash_map_fd = bpf_object__find_map_fd_by_name(obj, "hash_map");
-	if (hash_map_fd < 0) {
+	if (jmp_table_fd < 0 || hash_map_fd < 0) {
 		fprintf(stderr, "ERROR: finding a map in obj file failed\n");
 		goto cleanup;
 	}
 
-	/* find BPF main program */
-	main_prog_fd = 0;
 	bpf_object__for_each_program(prog, obj) {
 		fd = bpf_program__fd(prog);
 
-		if (!strcmp(bpf_program__name(prog), "main_prog"))
-			main_prog_fd = fd;
-	}
+		section = bpf_program__section_name(prog);
+		if (sscanf(section, "socket/%d", &key) != 1) {
+			fprintf(stderr, "ERROR: finding prog failed\n");
+			goto cleanup;
+		}
 
-	if (main_prog_fd == 0) {
-		fprintf(stderr, "ERROR: can't find main_prog\n");
-		goto cleanup;
+		if (key == 0)
+			main_prog_fd = fd;
+		else
+			bpf_map_update_elem(jmp_table_fd, &key, &fd, BPF_ANY);
 	}
 
 	sock = open_raw_sock("lo");

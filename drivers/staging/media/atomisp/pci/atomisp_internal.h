@@ -195,6 +195,7 @@ struct atomisp_regs {
 };
 
 struct atomisp_sw_contex {
+	int power_state;
 	int running_freq;
 };
 

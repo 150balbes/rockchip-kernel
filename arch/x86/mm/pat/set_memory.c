@@ -20,7 +20,6 @@
 #include <linux/kernel.h>
 #include <linux/cc_platform.h>
 #include <linux/set_memory.h>
-#include <linux/memregion.h>
 
 #include <asm/e820/api.h>
 #include <asm/processor.h>
@@ -220,23 +219,6 @@ within_inclusive(unsigned long addr, unsigned long start, unsigned long end)
 
 #ifdef CONFIG_X86_64
 
-/*
- * The kernel image is mapped into two places in the virtual address space
- * (addresses without KASLR, of course):
- *
- * 1. The kernel direct map (0xffff880000000000)
- * 2. The "high kernel map" (0xffffffff81000000)
- *
- * We actually execute out of #2. If we get the address of a kernel symbol, it
- * points to #2, but almost all physical-to-virtual translations point to #1.
- *
- * This is so that we can have both a directmap of all physical memory *and*
- * take full advantage of the the limited (s32) immediate addressing range (2G)
- * of x86_64.
- *
- * See Documentation/x86/x86_64/mm.rst for more detail.
- */
-
 static inline unsigned long highmap_start_pfn(void)
 {
 	return __pa_symbol(_text) >> PAGE_SHIFT;
@@ -346,23 +328,6 @@ void arch_invalidate_pmem(void *addr, size_t size)
 	clflush_cache_range(addr, size);
 }
 EXPORT_SYMBOL_GPL(arch_invalidate_pmem);
-#endif
-
-#ifdef CONFIG_ARCH_HAS_CPU_CACHE_INVALIDATE_MEMREGION
-bool cpu_cache_has_invalidate_memregion(void)
-{
-	return !cpu_feature_enabled(X86_FEATURE_HYPERVISOR);
-}
-EXPORT_SYMBOL_NS_GPL(cpu_cache_has_invalidate_memregion, DEVMEM);
-
-int cpu_cache_invalidate_memregion(int res_desc)
-{
-	if (WARN_ON_ONCE(!cpu_cache_has_invalidate_memregion()))
-		return -ENXIO;
-	wbinvd_on_all_cpus();
-	return 0;
-}
-EXPORT_SYMBOL_NS_GPL(cpu_cache_invalidate_memregion, DEVMEM);
 #endif
 
 static void __cpa_flush_all(void *arg)
@@ -618,9 +583,14 @@ static inline pgprot_t static_protections(pgprot_t prot, unsigned long start,
  * Validate strict W^X semantics.
  */
 static inline pgprot_t verify_rwx(pgprot_t old, pgprot_t new, unsigned long start,
-				  unsigned long pfn, unsigned long npg)
+				  unsigned long pfn, unsigned long npg,
+				  bool nx, bool rw)
 {
 	unsigned long end;
+
+	/* Kernel text is rw at boot up */
+	if (system_state == SYSTEM_BOOTING)
+		return new;
 
 	/*
 	 * 32-bit has some unfixable W+X issues, like EFI code
@@ -640,6 +610,10 @@ static inline pgprot_t verify_rwx(pgprot_t old, pgprot_t new, unsigned long star
 	if ((pgprot_val(new) & (_PAGE_RW | _PAGE_NX)) != _PAGE_RW)
 		return new;
 
+	/* Non-leaf translation entries can disable writing or execution. */
+	if (!rw || nx)
+		return new;
+
 	end = start + npg * PAGE_SIZE - 1;
 	WARN_ONCE(1, "CPA detected W^X violation: %016llx -> %016llx range: 0x%016lx - 0x%016lx PFN %lx\n",
 		  (unsigned long long)pgprot_val(old),
@@ -656,19 +630,25 @@ static inline pgprot_t verify_rwx(pgprot_t old, pgprot_t new, unsigned long star
 
 /*
  * Lookup the page table entry for a virtual address in a specific pgd.
- * Return a pointer to the entry and the level of the mapping.
+ * Return a pointer to the entry, the level of the mapping, and the effective
+ * NX and RW bits of all page table levels.
  */
-pte_t *lookup_address_in_pgd(pgd_t *pgd, unsigned long address,
-			     unsigned int *level)
+pte_t *lookup_address_in_pgd_attr(pgd_t *pgd, unsigned long address,
+				  unsigned int *level, bool *nx, bool *rw)
 {
 	p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 
 	*level = PG_LEVEL_NONE;
+	*nx = false;
+	*rw = true;
 
 	if (pgd_none(*pgd))
 		return NULL;
+
+	*nx |= pgd_flags(*pgd) & _PAGE_NX;
+	*rw &= pgd_flags(*pgd) & _PAGE_RW;
 
 	p4d = p4d_offset(pgd, address);
 	if (p4d_none(*p4d))
@@ -678,6 +658,9 @@ pte_t *lookup_address_in_pgd(pgd_t *pgd, unsigned long address,
 	if (p4d_large(*p4d) || !p4d_present(*p4d))
 		return (pte_t *)p4d;
 
+	*nx |= p4d_flags(*p4d) & _PAGE_NX;
+	*rw &= p4d_flags(*p4d) & _PAGE_RW;
+
 	pud = pud_offset(p4d, address);
 	if (pud_none(*pud))
 		return NULL;
@@ -685,6 +668,9 @@ pte_t *lookup_address_in_pgd(pgd_t *pgd, unsigned long address,
 	*level = PG_LEVEL_1G;
 	if (pud_large(*pud) || !pud_present(*pud))
 		return (pte_t *)pud;
+
+	*nx |= pud_flags(*pud) & _PAGE_NX;
+	*rw &= pud_flags(*pud) & _PAGE_RW;
 
 	pmd = pmd_offset(pud, address);
 	if (pmd_none(*pmd))
@@ -694,9 +680,24 @@ pte_t *lookup_address_in_pgd(pgd_t *pgd, unsigned long address,
 	if (pmd_large(*pmd) || !pmd_present(*pmd))
 		return (pte_t *)pmd;
 
+	*nx |= pmd_flags(*pmd) & _PAGE_NX;
+	*rw &= pmd_flags(*pmd) & _PAGE_RW;
+
 	*level = PG_LEVEL_4K;
 
 	return pte_offset_kernel(pmd, address);
+}
+
+/*
+ * Lookup the page table entry for a virtual address in a specific pgd.
+ * Return a pointer to the entry and the level of the mapping.
+ */
+pte_t *lookup_address_in_pgd(pgd_t *pgd, unsigned long address,
+			     unsigned int *level)
+{
+	bool nx, rw;
+
+	return lookup_address_in_pgd_attr(pgd, address, level, &nx, &rw);
 }
 
 /*
@@ -714,13 +715,16 @@ pte_t *lookup_address(unsigned long address, unsigned int *level)
 EXPORT_SYMBOL_GPL(lookup_address);
 
 static pte_t *_lookup_address_cpa(struct cpa_data *cpa, unsigned long address,
-				  unsigned int *level)
+				  unsigned int *level, bool *nx, bool *rw)
 {
-	if (cpa->pgd)
-		return lookup_address_in_pgd(cpa->pgd + pgd_index(address),
-					       address, level);
+	pgd_t *pgd;
 
-	return lookup_address(address, level);
+	if (!cpa->pgd)
+		pgd = pgd_offset_k(address);
+	else
+		pgd = cpa->pgd + pgd_index(address);
+
+	return lookup_address_in_pgd_attr(pgd, address, level, nx, rw);
 }
 
 /*
@@ -844,12 +848,13 @@ static int __should_split_large_page(pte_t *kpte, unsigned long address,
 	pgprot_t old_prot, new_prot, req_prot, chk_prot;
 	pte_t new_pte, *tmp;
 	enum pg_level level;
+	bool nx, rw;
 
 	/*
 	 * Check for races, another CPU might have split this page
 	 * up already:
 	 */
-	tmp = _lookup_address_cpa(cpa, address, &level);
+	tmp = _lookup_address_cpa(cpa, address, &level, &nx, &rw);
 	if (tmp != kpte)
 		return 1;
 
@@ -960,7 +965,8 @@ static int __should_split_large_page(pte_t *kpte, unsigned long address,
 	new_prot = static_protections(req_prot, lpaddr, old_pfn, numpages,
 				      psize, CPA_DETECT);
 
-	new_prot = verify_rwx(old_prot, new_prot, lpaddr, old_pfn, numpages);
+	new_prot = verify_rwx(old_prot, new_prot, lpaddr, old_pfn, numpages,
+			      nx, rw);
 
 	/*
 	 * If there is a conflict, split the large page.
@@ -1041,6 +1047,7 @@ __split_large_page(struct cpa_data *cpa, pte_t *kpte, unsigned long address,
 	pte_t *pbase = (pte_t *)page_address(base);
 	unsigned int i, level;
 	pgprot_t ref_prot;
+	bool nx, rw;
 	pte_t *tmp;
 
 	spin_lock(&pgd_lock);
@@ -1048,7 +1055,7 @@ __split_large_page(struct cpa_data *cpa, pte_t *kpte, unsigned long address,
 	 * Check for races, another CPU might have split this page
 	 * up for us already:
 	 */
-	tmp = _lookup_address_cpa(cpa, address, &level);
+	tmp = _lookup_address_cpa(cpa, address, &level, &nx, &rw);
 	if (tmp != kpte) {
 		spin_unlock(&pgd_lock);
 		return 1;
@@ -1589,10 +1596,11 @@ static int __change_page_attr(struct cpa_data *cpa, int primary)
 	int do_split, err;
 	unsigned int level;
 	pte_t *kpte, old_pte;
+	bool nx, rw;
 
 	address = __cpa_addr(cpa, cpa->curpage);
 repeat:
-	kpte = _lookup_address_cpa(cpa, address, &level);
+	kpte = _lookup_address_cpa(cpa, address, &level, &nx, &rw);
 	if (!kpte)
 		return __cpa_process_fault(cpa, address, primary);
 
@@ -1614,7 +1622,8 @@ repeat:
 		new_prot = static_protections(new_prot, address, pfn, 1, 0,
 					      CPA_PROTECT);
 
-		new_prot = verify_rwx(old_prot, new_prot, address, pfn, 1);
+		new_prot = verify_rwx(old_prot, new_prot, address, pfn, 1,
+				      nx, rw);
 
 		new_prot = pgprot_clear_protnone_bits(new_prot);
 
@@ -1659,11 +1668,8 @@ repeat:
 	return err;
 }
 
-static int __change_page_attr_set_clr(struct cpa_data *cpa, int primary);
+static int __change_page_attr_set_clr(struct cpa_data *cpa, int checkalias);
 
-/*
- * Check the directmap and "high kernel map" 'aliases'.
- */
 static int cpa_process_alias(struct cpa_data *cpa)
 {
 	struct cpa_data alias_cpa;
@@ -1687,12 +1693,6 @@ static int cpa_process_alias(struct cpa_data *cpa)
 		alias_cpa.flags &= ~(CPA_PAGES_ARRAY | CPA_ARRAY);
 		alias_cpa.curpage = 0;
 
-		/* Directmap always has NX set, do not modify. */
-		if (__supported_pte_mask & _PAGE_NX) {
-			alias_cpa.mask_clr.pgprot &= ~_PAGE_NX;
-			alias_cpa.mask_set.pgprot &= ~_PAGE_NX;
-		}
-
 		cpa->force_flush_all = 1;
 
 		ret = __change_page_attr_set_clr(&alias_cpa, 0);
@@ -1715,15 +1715,6 @@ static int cpa_process_alias(struct cpa_data *cpa)
 		alias_cpa.flags &= ~(CPA_PAGES_ARRAY | CPA_ARRAY);
 		alias_cpa.curpage = 0;
 
-		/*
-		 * [_text, _brk_end) also covers data, do not modify NX except
-		 * in cases where the highmap is the primary target.
-		 */
-		if (__supported_pte_mask & _PAGE_NX) {
-			alias_cpa.mask_clr.pgprot &= ~_PAGE_NX;
-			alias_cpa.mask_set.pgprot &= ~_PAGE_NX;
-		}
-
 		cpa->force_flush_all = 1;
 		/*
 		 * The high mapping range is imprecise, so ignore the
@@ -1736,18 +1727,11 @@ static int cpa_process_alias(struct cpa_data *cpa)
 	return 0;
 }
 
-static int __change_page_attr_set_clr(struct cpa_data *cpa, int primary)
+static int __change_page_attr_set_clr(struct cpa_data *cpa, int checkalias)
 {
 	unsigned long numpages = cpa->numpages;
 	unsigned long rempages = numpages;
 	int ret = 0;
-
-	/*
-	 * No changes, easy!
-	 */
-	if (!(pgprot_val(cpa->mask_set) | pgprot_val(cpa->mask_clr)) &&
-	    !cpa->force_split)
-		return ret;
 
 	while (rempages) {
 		/*
@@ -1761,13 +1745,13 @@ static int __change_page_attr_set_clr(struct cpa_data *cpa, int primary)
 
 		if (!debug_pagealloc_enabled())
 			spin_lock(&cpa_lock);
-		ret = __change_page_attr(cpa, primary);
+		ret = __change_page_attr(cpa, checkalias);
 		if (!debug_pagealloc_enabled())
 			spin_unlock(&cpa_lock);
 		if (ret)
 			goto out;
 
-		if (primary && !(cpa->flags & CPA_NO_CHECK_ALIAS)) {
+		if (checkalias) {
 			ret = cpa_process_alias(cpa);
 			if (ret)
 				goto out;
@@ -1795,7 +1779,7 @@ static int change_page_attr_set_clr(unsigned long *addr, int numpages,
 				    struct page **pages)
 {
 	struct cpa_data cpa;
-	int ret, cache;
+	int ret, cache, checkalias;
 
 	memset(&cpa, 0, sizeof(cpa));
 
@@ -1841,11 +1825,20 @@ static int change_page_attr_set_clr(unsigned long *addr, int numpages,
 	cpa.numpages = numpages;
 	cpa.mask_set = mask_set;
 	cpa.mask_clr = mask_clr;
-	cpa.flags = in_flag;
+	cpa.flags = 0;
 	cpa.curpage = 0;
 	cpa.force_split = force_split;
 
-	ret = __change_page_attr_set_clr(&cpa, 1);
+	if (in_flag & (CPA_ARRAY | CPA_PAGES_ARRAY))
+		cpa.flags |= in_flag;
+
+	/* No alias checking for _NX bit modifications */
+	checkalias = (pgprot_val(mask_set) | pgprot_val(mask_clr)) != _PAGE_NX;
+	/* Has caller explicitly disabled alias checking? */
+	if (in_flag & CPA_NO_CHECK_ALIAS)
+		checkalias = 0;
+
+	ret = __change_page_attr_set_clr(&cpa, checkalias);
 
 	/*
 	 * Check whether we really changed something:
@@ -2076,16 +2069,6 @@ int set_memory_ro(unsigned long addr, int numpages)
 	return change_page_attr_clear(&addr, numpages, __pgprot(_PAGE_RW), 0);
 }
 
-int set_memory_rox(unsigned long addr, int numpages)
-{
-	pgprot_t clr = __pgprot(_PAGE_RW);
-
-	if (__supported_pte_mask & _PAGE_NX)
-		clr.pgprot |= _PAGE_NX;
-
-	return change_page_attr_clear(&addr, numpages, clr, 0);
-}
-
 int set_memory_rw(unsigned long addr, int numpages)
 {
 	return change_page_attr_set(&addr, numpages, __pgprot(_PAGE_RW), 0);
@@ -2098,9 +2081,11 @@ int set_memory_np(unsigned long addr, int numpages)
 
 int set_memory_np_noalias(unsigned long addr, int numpages)
 {
+	int cpa_flags = CPA_NO_CHECK_ALIAS;
+
 	return change_page_attr_set_clr(&addr, numpages, __pgprot(0),
 					__pgprot(_PAGE_PRESENT), 0,
-					CPA_NO_CHECK_ALIAS, NULL);
+					cpa_flags, NULL);
 }
 
 int set_memory_4k(unsigned long addr, int numpages)
@@ -2151,7 +2136,8 @@ static int __set_memory_enc_pgtable(unsigned long addr, int numpages, bool enc)
 		cpa_flush(&cpa, x86_platform.guest.enc_cache_flush_required());
 
 	/* Notify hypervisor that we are about to set/clr encryption attribute. */
-	x86_platform.guest.enc_status_change_prepare(addr, numpages, enc);
+	if (!x86_platform.guest.enc_status_change_prepare(addr, numpages, enc))
+		return -EIO;
 
 	ret = __change_page_attr_set_clr(&cpa, 1);
 
@@ -2317,7 +2303,7 @@ static int __set_pages_p(struct page *page, int numpages)
 				.numpages = numpages,
 				.mask_set = __pgprot(_PAGE_PRESENT | _PAGE_RW),
 				.mask_clr = __pgprot(0),
-				.flags = CPA_NO_CHECK_ALIAS };
+				.flags = 0};
 
 	/*
 	 * No alias checking needed for setting present flag. otherwise,
@@ -2325,7 +2311,7 @@ static int __set_pages_p(struct page *page, int numpages)
 	 * mappings (this adds to complexity if we want to do this from
 	 * atomic context especially). Let's keep it simple!
 	 */
-	return __change_page_attr_set_clr(&cpa, 1);
+	return __change_page_attr_set_clr(&cpa, 0);
 }
 
 static int __set_pages_np(struct page *page, int numpages)
@@ -2336,7 +2322,7 @@ static int __set_pages_np(struct page *page, int numpages)
 				.numpages = numpages,
 				.mask_set = __pgprot(0),
 				.mask_clr = __pgprot(_PAGE_PRESENT | _PAGE_RW),
-				.flags = CPA_NO_CHECK_ALIAS };
+				.flags = 0};
 
 	/*
 	 * No alias checking needed for setting not present flag. otherwise,
@@ -2344,7 +2330,7 @@ static int __set_pages_np(struct page *page, int numpages)
 	 * mappings (this adds to complexity if we want to do this from
 	 * atomic context especially). Let's keep it simple!
 	 */
-	return __change_page_attr_set_clr(&cpa, 1);
+	return __change_page_attr_set_clr(&cpa, 0);
 }
 
 int set_direct_map_invalid_noflush(struct page *page)
@@ -2415,7 +2401,7 @@ int __init kernel_map_pages_in_pgd(pgd_t *pgd, u64 pfn, unsigned long address,
 		.numpages = numpages,
 		.mask_set = __pgprot(0),
 		.mask_clr = __pgprot(~page_flags & (_PAGE_NX|_PAGE_RW)),
-		.flags = CPA_NO_CHECK_ALIAS,
+		.flags = 0,
 	};
 
 	WARN_ONCE(num_online_cpus() > 1, "Don't call after initializing SMP");
@@ -2428,7 +2414,7 @@ int __init kernel_map_pages_in_pgd(pgd_t *pgd, u64 pfn, unsigned long address,
 
 	cpa.mask_set = __pgprot(_PAGE_PRESENT | page_flags);
 
-	retval = __change_page_attr_set_clr(&cpa, 1);
+	retval = __change_page_attr_set_clr(&cpa, 0);
 	__flush_tlb_all();
 
 out:
@@ -2458,12 +2444,12 @@ int __init kernel_unmap_pages_in_pgd(pgd_t *pgd, unsigned long address,
 		.numpages	= numpages,
 		.mask_set	= __pgprot(0),
 		.mask_clr	= __pgprot(_PAGE_PRESENT | _PAGE_RW),
-		.flags		= CPA_NO_CHECK_ALIAS,
+		.flags		= 0,
 	};
 
 	WARN_ONCE(num_online_cpus() > 1, "Don't call after initializing SMP");
 
-	retval = __change_page_attr_set_clr(&cpa, 1);
+	retval = __change_page_attr_set_clr(&cpa, 0);
 	__flush_tlb_all();
 
 	return retval;

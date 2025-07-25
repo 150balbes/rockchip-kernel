@@ -11,7 +11,6 @@
 
 &alc5682 {
 	compatible = "realtek,rt5682s";
-	/delete-property/ VBAT-supply;
 	realtek,dmic1-clk-pin = <2>;
 	realtek,dmic-clk-rate-hz = <2048000>;
 };
@@ -88,7 +87,13 @@ ap_ts_pen_1v8: &i2c4 {
 /* PINCTRL - modifications to sc7180-trogdor.dtsi */
 
 &en_pp3300_dx_edp {
-	pins = "gpio67";
+	pinmux {
+		pins = "gpio67";
+	};
+
+	pinconf {
+		pins = "gpio67";
+	};
 };
 
 /* PINCTRL - board-specific pinctrl */

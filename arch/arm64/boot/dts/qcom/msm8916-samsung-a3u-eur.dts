@@ -81,10 +81,6 @@
 	};
 };
 
-&clk_pwm {
-	status = "okay";
-};
-
 &dsi0 {
 	panel@0 {
 		reg = <0>;
@@ -108,12 +104,8 @@
 	remote-endpoint = <&panel_in>;
 };
 
-&vibrator {
-	status = "okay";
-};
-
 &msmgpio {
-	panel_vdd3_default: panel-vdd3-default-state {
+	panel_vdd3_default: panel-vdd3-default {
 		pins = "gpio9";
 		function = "gpio";
 
@@ -121,7 +113,7 @@
 		bias-disable;
 	};
 
-	tkey_en_default: tkey-en-default-state {
+	tkey_en_default: tkey-en-default {
 		pins = "gpio86";
 		function = "gpio";
 
@@ -129,7 +121,7 @@
 		bias-disable;
 	};
 
-	tkey_led_en_default: tkey-led-en-default-state {
+	tkey_led_en_default: tkey-led-en-default {
 		pins = "gpio60";
 		function = "gpio";
 

@@ -398,10 +398,10 @@ static ssize_t show_control_state(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	if (lighting_control_state == LEGACY_BOOTING)
-		return sysfs_emit(buf, "[booting] running suspend\n");
+		return scnprintf(buf, PAGE_SIZE, "[booting] running suspend\n");
 	else if (lighting_control_state == LEGACY_SUSPEND)
-		return sysfs_emit(buf, "booting running [suspend]\n");
-	return sysfs_emit(buf, "booting [running] suspend\n");
+		return scnprintf(buf, PAGE_SIZE, "booting running [suspend]\n");
+	return scnprintf(buf, PAGE_SIZE, "booting [running] suspend\n");
 }
 
 static ssize_t store_control_state(struct device *dev,
@@ -547,12 +547,14 @@ static ssize_t show_hdmi_cable(struct device *dev,
 				   (u32 *) &out_data);
 	if (ACPI_SUCCESS(status)) {
 		if (out_data == 0)
-			return sysfs_emit(buf, "[unconnected] connected unknown\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "[unconnected] connected unknown\n");
 		else if (out_data == 1)
-			return sysfs_emit(buf, "unconnected [connected] unknown\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "unconnected [connected] unknown\n");
 	}
 	pr_err("alienware-wmi: unknown HDMI cable status: %d\n", status);
-	return sysfs_emit(buf, "unconnected connected [unknown]\n");
+	return scnprintf(buf, PAGE_SIZE, "unconnected connected [unknown]\n");
 }
 
 static ssize_t show_hdmi_source(struct device *dev,
@@ -569,12 +571,14 @@ static ssize_t show_hdmi_source(struct device *dev,
 
 	if (ACPI_SUCCESS(status)) {
 		if (out_data == 1)
-			return sysfs_emit(buf, "[input] gpu unknown\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "[input] gpu unknown\n");
 		else if (out_data == 2)
-			return sysfs_emit(buf, "input [gpu] unknown\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "input [gpu] unknown\n");
 	}
 	pr_err("alienware-wmi: unknown HDMI source status: %u\n", status);
-	return sysfs_emit(buf, "input gpu [unknown]\n");
+	return scnprintf(buf, PAGE_SIZE, "input gpu [unknown]\n");
 }
 
 static ssize_t toggle_hdmi_source(struct device *dev,
@@ -648,12 +652,14 @@ static ssize_t show_amplifier_status(struct device *dev,
 				   (u32 *) &out_data);
 	if (ACPI_SUCCESS(status)) {
 		if (out_data == 0)
-			return sysfs_emit(buf, "[unconnected] connected unknown\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "[unconnected] connected unknown\n");
 		else if (out_data == 1)
-			return sysfs_emit(buf, "unconnected [connected] unknown\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "unconnected [connected] unknown\n");
 	}
 	pr_err("alienware-wmi: unknown amplifier cable status: %d\n", status);
-	return sysfs_emit(buf, "unconnected connected [unknown]\n");
+	return scnprintf(buf, PAGE_SIZE, "unconnected connected [unknown]\n");
 }
 
 static DEVICE_ATTR(status, S_IRUGO, show_amplifier_status, NULL);
@@ -700,14 +706,17 @@ static ssize_t show_deepsleep_status(struct device *dev,
 					(u32 *) &out_data);
 	if (ACPI_SUCCESS(status)) {
 		if (out_data == 0)
-			return sysfs_emit(buf, "[disabled] s5 s5_s4\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "[disabled] s5 s5_s4\n");
 		else if (out_data == 1)
-			return sysfs_emit(buf, "disabled [s5] s5_s4\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "disabled [s5] s5_s4\n");
 		else if (out_data == 2)
-			return sysfs_emit(buf, "disabled s5 [s5_s4]\n");
+			return scnprintf(buf, PAGE_SIZE,
+					 "disabled s5 [s5_s4]\n");
 	}
 	pr_err("alienware-wmi: unknown deep sleep status: %d\n", status);
-	return sysfs_emit(buf, "disabled s5 s5_s4 [unknown]\n");
+	return scnprintf(buf, PAGE_SIZE, "disabled s5 s5_s4 [unknown]\n");
 }
 
 static ssize_t toggle_deepsleep(struct device *dev,

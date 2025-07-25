@@ -156,7 +156,8 @@ static const struct regmap_config drv2665_regmap_config = {
 	.cache_type = REGCACHE_NONE,
 };
 
-static int drv2665_probe(struct i2c_client *client)
+static int drv2665_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct drv2665_data *haptics;
 	int error;
@@ -297,7 +298,7 @@ MODULE_DEVICE_TABLE(of, drv2665_of_match);
 #endif
 
 static struct i2c_driver drv2665_driver = {
-	.probe_new	= drv2665_probe,
+	.probe		= drv2665_probe,
 	.driver		= {
 		.name	= "drv2665-haptics",
 		.of_match_table = of_match_ptr(drv2665_of_match),

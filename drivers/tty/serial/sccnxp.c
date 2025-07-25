@@ -468,7 +468,8 @@ static void sccnxp_handle_tx(struct uart_port *port)
 			break;
 
 		sccnxp_port_write(port, SCCNXP_THR_REG, xmit->buf[xmit->tail]);
-		uart_xmit_advance(port, 1);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
 	}
 
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)

@@ -100,7 +100,7 @@ config GPIO_GENERIC
 	tristate
 
 config GPIO_REGMAP
-	depends on REGMAP
+	select REGMAP
 	tristate
 
 # put drivers in the right section, in alphabetical order
@@ -108,15 +108,6 @@ config GPIO_REGMAP
 # This symbol is selected by both I2C and SPI expanders
 config GPIO_MAX730X
 	tristate
-
-config GPIO_IDIO_16
-	tristate
-	help
-	  Enables support for the idio-16 library functions. The idio-16 library
-	  provides functions to facilitate communication with devices within the
-	  ACCES IDIO-16 family such as the 104-IDIO-16 and the PCI-IDIO-16.
-
-	  If built as a module its name will be gpio-idio-16.
 
 menu "Memory mapped GPIO drivers"
 	depends on HAS_IOMEM
@@ -228,7 +219,7 @@ config GPIO_CLPS711X
 	  Say yes here to support GPIO on CLPS711X SoCs.
 
 config GPIO_DAVINCI
-	tristate "TI Davinci/Keystone GPIO support"
+	bool "TI Davinci/Keystone GPIO support"
 	default y if ARCH_DAVINCI
 	depends on (ARM || ARM64) && (ARCH_DAVINCI || ARCH_KEYSTONE || ARCH_K3)
 	help
@@ -319,7 +310,7 @@ config GPIO_GRGPIO
 
 config GPIO_HISI
 	tristate "HiSilicon GPIO controller driver"
-	depends on ARM64 || COMPILE_TEST
+	depends on (ARM64 && ACPI) || COMPILE_TEST
 	select GPIO_GENERIC
 	select GPIOLIB_IRQCHIP
 	help
@@ -609,6 +600,14 @@ config GPIO_SPRD
 	help
 	  Say yes here to support Spreadtrum GPIO device.
 
+config GPIO_STA2X11
+	bool "STA2x11/ConneXt GPIO support"
+	depends on MFD_STA2X11
+	select GENERIC_IRQ_CHIP
+	help
+	  Say yes here to support the STA2x11/ConneXt GPIO device.
+	  The GPIO module has 128 GPIO pins with alternate functions.
+
 config GPIO_STP_XWAY
 	bool "XWAY STP GPIOs"
 	depends on SOC_XWAY || COMPILE_TEST
@@ -680,7 +679,8 @@ config GPIO_UNIPHIER
 	  Say yes here to support UniPhier GPIOs.
 
 config GPIO_VF610
-	def_bool y
+	bool "VF610 GPIO support"
+	default y if SOC_VF610
 	depends on ARCH_MXC
 	select GPIOLIB_IRQCHIP
 	help
@@ -858,7 +858,6 @@ config GPIO_104_IDIO_16
 	depends on PC104
 	select ISA_BUS_API
 	select GPIOLIB_IRQCHIP
-	select GPIO_IDIO_16
 	help
 	  Enables GPIO support for the ACCES 104-IDIO-16 family (104-IDIO-16,
 	  104-IDIO-16E, 104-IDO-16, 104-IDIO-8, 104-IDIO-8E, 104-IDO-8). The
@@ -884,7 +883,7 @@ config GPIO_F7188X
 	help
 	  This option enables support for GPIOs found on Fintek Super-I/O
 	  chips F71869, F71869A, F71882FG, F71889F and F81866.
-	  As well as Nuvoton Super-I/O chip NCT6116D.
+	  As well as Nuvoton Super-I/O chip NCT6126D.
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called f7188x-gpio.
@@ -1004,6 +1003,21 @@ config GPIO_ADNP
 	  enough to represent all pins, but the driver will assume a
 	  register layout for 64 pins (8 registers).
 
+config GPIO_AW9110
+	tristate "AW9110 I2C GPIO expanders"
+	select GPIOLIB_IRQCHIP
+	select IRQ_DOMAIN
+	help
+	  Say yes here to provide access to I2C
+	  GPIO expanders used for additional digital outputs or inputs.
+	  Your board setup code will need to declare the expanders in
+	  use, and assign numbers to the GPIOs they expose.  Those GPIOs
+	  can then be used from drivers and other kernel code, just like
+	  other GPIOs, but only accessible from task contexts.
+
+	  This driver provides an in-kernel interface to those GPIOs using
+	  platform-neutral GPIO calls.
+
 config GPIO_GW_PLD
 	tristate "Gateworks PLD GPIO Expander"
 	depends on OF_GPIO
@@ -1042,6 +1056,14 @@ config GPIO_MAX732X_IRQ
 	help
 	  Say yes here to enable the max732x to be used as an interrupt
 	  controller. It requires the driver to be built in the kernel.
+
+config GPIO_NCA9539
+	tristate "NCA9539 I2C GPIO expander"
+	depends on I2C || COMPILE_TEST
+	select REGMAP_I2C
+	help
+	  Say yes here to support the NCA9539 series of I2C Expanders.
+	  GPIO expanders used for additional digital outputs or inputs.
 
 config GPIO_PCA953X
 	tristate "PCA95[357]x, PCA9698, TCA64xx, and MAX7310 I/O ports"
@@ -1417,7 +1439,7 @@ config GPIO_TPS68470
 	  are "output only" GPIOs.
 
 config GPIO_TQMX86
-	tristate "TQ-Systems QTMX86 GPIO"
+	tristate "TQ-Systems TQMx86 GPIO"
 	depends on MFD_TQMX86 || COMPILE_TEST
 	depends on HAS_IOPORT_MAP
 	select GPIOLIB_IRQCHIP
@@ -1563,7 +1585,6 @@ config GPIO_PCH
 config GPIO_PCI_IDIO_16
 	tristate "ACCES PCI-IDIO-16 GPIO support"
 	select GPIOLIB_IRQCHIP
-	select GPIO_IDIO_16
 	help
 	  Enables GPIO support for the ACCES PCI-IDIO-16. An interrupt is
 	  generated when any of the inputs change state (low to high or high to
@@ -1683,12 +1704,6 @@ config GPIO_AGGREGATOR
 	    - Provide a generic driver for a GPIO-operated device in an
 	      industrial control context, to be operated from userspace using
 	      the GPIO chardev interface.
-
-config GPIO_LATCH
-	tristate "GPIO latch driver"
-	help
-	  Say yes here to enable a driver for GPIO multiplexers based on latches
-	  connected to other GPIOs.
 
 config GPIO_MOCKUP
 	tristate "GPIO Testing Driver"

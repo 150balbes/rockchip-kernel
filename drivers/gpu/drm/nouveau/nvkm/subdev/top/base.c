@@ -117,15 +117,11 @@ nvkm_top_fault(struct nvkm_device *device, int fault)
 	return NULL;
 }
 
-int
-nvkm_top_parse(struct nvkm_device *device)
+static int
+nvkm_top_oneinit(struct nvkm_subdev *subdev)
 {
-	struct nvkm_top *top = device->top;
-
-	if (!top || !list_empty(&top->device))
-		return 0;
-
-	return top->func->parse(top);
+	struct nvkm_top *top = nvkm_top(subdev);
+	return top->func->oneinit(top);
 }
 
 static void *
@@ -145,6 +141,7 @@ nvkm_top_dtor(struct nvkm_subdev *subdev)
 static const struct nvkm_subdev_func
 nvkm_top = {
 	.dtor = nvkm_top_dtor,
+	.oneinit = nvkm_top_oneinit,
 };
 
 int

@@ -17,6 +17,13 @@
 
 #include "acp63.h"
 
+struct acp63_dev_data {
+	void __iomem *acp63_base;
+	struct resource *res;
+	bool acp63_audio_mode;
+	struct platform_device *pdev[ACP6x_DEVS];
+};
+
 static int acp63_power_on(void __iomem *acp_base)
 {
 	u32 val;
@@ -91,7 +98,6 @@ static int acp63_init(void __iomem *acp_base, struct device *dev)
 		dev_err(dev, "ACP reset failed\n");
 		return ret;
 	}
-	acp63_writel(0x03, acp_base + ACP_CLKMUX_SEL);
 	acp63_enable_interrupts(acp_base);
 	return 0;
 }
@@ -106,7 +112,6 @@ static int acp63_deinit(void __iomem *acp_base, struct device *dev)
 		dev_err(dev, "ACP reset failed\n");
 		return ret;
 	}
-	acp63_writel(0, acp_base + ACP_CLKMUX_SEL);
 	acp63_writel(0, acp_base + ACP_CONTROL);
 	return 0;
 }
@@ -136,7 +141,7 @@ static int snd_acp63_probe(struct pci_dev *pci,
 			   const struct pci_device_id *pci_id)
 {
 	struct acp63_dev_data *adata;
-	struct platform_device_info pdevinfo[ACP63_DEVS];
+	struct platform_device_info pdevinfo[ACP6x_DEVS];
 	int index, ret;
 	int val = 0x00;
 	struct acpi_device *adev;
@@ -212,8 +217,8 @@ static int snd_acp63_probe(struct pci_dev *pci,
 			adata->res->name = "acp_iomem";
 			adata->res->flags = IORESOURCE_MEM;
 			adata->res->start = addr;
-			adata->res->end = addr + (ACP63_REG_END - ACP63_REG_START);
-			adata->acp63_audio_mode = ACP63_PDM_MODE;
+			adata->res->end = addr + (ACP6x_REG_END - ACP6x_REG_START);
+			adata->acp63_audio_mode = ACP6x_PDM_MODE;
 
 			memset(&pdevinfo, 0, sizeof(pdevinfo));
 			pdevinfo[0].name = "acp_ps_pdm_dma";
@@ -230,7 +235,7 @@ static int snd_acp63_probe(struct pci_dev *pci,
 			pdevinfo[2].id = 0;
 			pdevinfo[2].parent = &pci->dev;
 
-			for (index = 0; index < ACP63_DEVS; index++) {
+			for (index = 0; index < ACP6x_DEVS; index++) {
 				adata->pdev[index] =
 					platform_device_register_full(&pdevinfo[index]);
 
@@ -305,8 +310,8 @@ static void snd_acp63_remove(struct pci_dev *pci)
 	int ret, index;
 
 	adata = pci_get_drvdata(pci);
-	if (adata->acp63_audio_mode == ACP63_PDM_MODE) {
-		for (index = 0; index < ACP63_DEVS; index++)
+	if (adata->acp63_audio_mode == ACP6x_PDM_MODE) {
+		for (index = 0; index < ACP6x_DEVS; index++)
 			platform_device_unregister(adata->pdev[index]);
 	}
 	ret = acp63_deinit(adata->acp63_base, &pci->dev);

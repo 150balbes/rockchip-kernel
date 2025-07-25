@@ -298,9 +298,7 @@ EXPORT_SYMBOL(drm_plane_helper_destroy);
  * scale and positioning are not expected to change since the plane is always
  * a fullscreen scanout buffer.
  *
- * This is often the case for the primary plane of simple framebuffers. See
- * also drm_crtc_helper_atomic_check() for the respective CRTC-state check
- * helper function.
+ * This is often the case for the primary plane of simple framebuffers.
  *
  * RETURNS:
  * Zero on success, or an errno code otherwise.

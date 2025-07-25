@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+#include "dt-bindings/usb/pd.h"
+
+&dsi1 {
+	status = "okay";
+	//rockchip,lane-rate = <1000>;
+	dsi1_panel: panel@0 {
+		status = "okay";
+		compatible = "simple-panel-dsi";
+		reg = <0>;
+		backlight = <&backlight_lvds>;
+		enable-gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_HIGH>;
+		reset-delay-ms = <10>;
+		enable-delay-ms = <10>;
+		prepare-delay-ms = <10>;
+		unprepare-delay-ms = <10>;
+		disable-delay-ms = <60>;
+		dsi,flags = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
+			      MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_NO_EOT_PACKET)>;
+		dsi,format = <MIPI_DSI_FMT_RGB888>;
+		dsi,lanes  = <4>;
+
+		panel-init-sequence = [
+		];
+
+		panel-exit-sequence = [
+		];
+
+		display-timings {
+			native-mode = <&timing1>;
+			//					     //hfp, hs, hbp,hact,htotal,vfp, vs, vbp, vact,vtotal,pixclk_khz
+			//struct video_timing video_1920x1080_60Hz   ={88, 44, 148,1920,  2200,  4,  5,  36, 1080, 1125, 148500};
+			//struct video_timing video_1280x720_60Hz    ={110,40, 220,1280,  1650,  5,  5,  20, 720,   750,  74250};
+			//struct video_timing video_1280x800_60Hz    ={72,128, 200,1280,  1680,  3,  6,  22, 800,   831,  83500};
+			//struct video_timing video_1280x800_60Hz    ={75,10, 75,1280,  1440,  10,  3,  10, 800,   823,  68000};
+			//struct video_timing video_1280x800_60Hz    ={20,10, 20,1280,  1330,  5,  2,  5, 800,   812,  65000};
+			timing1: timing1 {
+				clock-frequency = <71100000>;
+				hactive = <1280>;
+				vactive = <800>;
+				hback-porch = <120>;
+				hfront-porch = <20>;
+				vback-porch = <11>;
+				vfront-porch = <11>;
+				hsync-len = <20>;
+				vsync-len = <1>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+				};
+			/*timing1: timing1 {
+				clock-frequency = <65000000>;
+				hactive = <1280>;
+				vactive = <800>;
+				hback-porch = <20>;
+				hfront-porch = <20>;
+				vback-porch = <5>;
+				vfront-porch = <5>;
+				hsync-len = <10>;
+				vsync-len = <2>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+				};
+*//*
+			timing1: timing1 {
+				clock-frequency = <68000000>;
+				hactive = <1280>;
+				vactive = <800>;
+				hback-porch = <75>;
+				hfront-porch = <75>;
+				vback-porch = <10>;
+				vfront-porch = <10>;
+				hsync-len = <10>;
+				vsync-len = <3>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+				};*/
+
+/*
+			timing1: timing1 {
+				clock-frequency = <83500000>;
+				hactive = <1280>;
+				vactive = <800>; //<2160>;
+				hback-porch = <200>;
+				hfront-porch = <72>;
+				hsync-len = <128>;
+				vback-porch = <22>;
+				vfront-porch = <3>;
+				vsync-len = <6>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+				};*/
+		};
+
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
+	};
+
+};
+
+&dsi1 {
+	status = "okay";
+};
+
+&mipi_dcphy1 {
+	status = "okay";
+};
+
+&dsi1_in_vp2 {
+	status = "disabled";
+};
+
+&dsi1_in_vp3 {
+	status = "okay";
+};
+
+&route_dsi1 {
+	status = "okay";
+	connect = <&vp3_out_dsi1>;
+};
+

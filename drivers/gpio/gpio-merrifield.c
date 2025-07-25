@@ -14,7 +14,6 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pinctrl/consumer.h>
-#include <linux/string_helpers.h>
 
 #define GCCR		0x000	/* controller configuration */
 #define GPLR		0x004	/* pin level r/o */
@@ -332,7 +331,7 @@ static int mrfld_irq_set_wake(struct irq_data *d, unsigned int on)
 
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 
-	dev_dbg(priv->dev, "%s wake for gpio %u\n", str_enable_disable(on), gpio);
+	dev_dbg(priv->dev, "%sable wake for gpio %u\n", on ? "en" : "dis", gpio);
 	return 0;
 }
 

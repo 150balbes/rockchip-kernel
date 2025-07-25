@@ -23,7 +23,6 @@
 #include <linux/blkdev.h>
 #include <linux/file.h>
 #include <linux/fs.h>
-#include <linux/kstrtox.h>
 #include <linux/usb/composite.h>
 
 #include "storage_common.h"
@@ -397,7 +396,7 @@ ssize_t fsg_store_ro(struct fsg_lun *curlun, struct rw_semaphore *filesem,
 	ssize_t		rc;
 	bool		ro;
 
-	rc = kstrtobool(buf, &ro);
+	rc = strtobool(buf, &ro);
 	if (rc)
 		return rc;
 
@@ -420,7 +419,7 @@ ssize_t fsg_store_nofua(struct fsg_lun *curlun, const char *buf, size_t count)
 	bool		nofua;
 	int		ret;
 
-	ret = kstrtobool(buf, &nofua);
+	ret = strtobool(buf, &nofua);
 	if (ret)
 		return ret;
 
@@ -471,7 +470,7 @@ ssize_t fsg_store_cdrom(struct fsg_lun *curlun, struct rw_semaphore *filesem,
 	bool		cdrom;
 	int		ret;
 
-	ret = kstrtobool(buf, &cdrom);
+	ret = strtobool(buf, &cdrom);
 	if (ret)
 		return ret;
 
@@ -494,7 +493,7 @@ ssize_t fsg_store_removable(struct fsg_lun *curlun, const char *buf,
 	bool		removable;
 	int		ret;
 
-	ret = kstrtobool(buf, &removable);
+	ret = strtobool(buf, &removable);
 	if (ret)
 		return ret;
 

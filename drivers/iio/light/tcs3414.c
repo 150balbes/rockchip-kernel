@@ -279,7 +279,8 @@ static void tcs3414_powerdown_cleanup(void *data)
 	tcs3414_powerdown(data);
 }
 
-static int tcs3414_probe(struct i2c_client *client)
+static int tcs3414_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
 	struct tcs3414_data *data;
 	struct iio_dev *indio_dev;
@@ -373,7 +374,7 @@ static struct i2c_driver tcs3414_driver = {
 		.name	= TCS3414_DRV_NAME,
 		.pm	= pm_sleep_ptr(&tcs3414_pm_ops),
 	},
-	.probe_new	= tcs3414_probe,
+	.probe		= tcs3414_probe,
 	.id_table	= tcs3414_id,
 };
 module_i2c_driver(tcs3414_driver);

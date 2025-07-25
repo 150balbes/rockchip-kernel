@@ -847,7 +847,7 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 	struct amdgpu_atif *atif = &amdgpu_acpi_priv.atif;
 
 	if (atif->notifications.brightness_change) {
-		if (adev->dc_enabled) {
+		if (amdgpu_device_has_dc_support(adev)) {
 #if defined(CONFIG_DRM_AMD_DC)
 			struct amdgpu_display_manager *dm = &adev->dm;
 
@@ -971,6 +971,34 @@ static bool amdgpu_atcs_pci_probe_handle(struct pci_dev *pdev)
 	return true;
 }
 
+
+/**
+ * amdgpu_acpi_should_gpu_reset
+ *
+ * @adev: amdgpu_device_pointer
+ *
+ * returns true if should reset GPU, false if not
+ */
+bool amdgpu_acpi_should_gpu_reset(struct amdgpu_device *adev)
+{
+	if ((adev->flags & AMD_IS_APU) &&
+	    adev->gfx.imu.funcs) /* Not need to do mode2 reset for IMU enabled APUs */
+		return false;
+
+	if ((adev->flags & AMD_IS_APU) &&
+	    amdgpu_acpi_is_s3_active(adev))
+		return false;
+
+	if (amdgpu_sriov_vf(adev))
+		return false;
+
+#if IS_ENABLED(CONFIG_SUSPEND)
+	return pm_suspend_target_state != PM_SUSPEND_TO_IDLE;
+#else
+	return true;
+#endif
+}
+
 /*
  * amdgpu_acpi_detect - detect ACPI ATIF/ATCS methods
  *
@@ -1043,24 +1071,6 @@ bool amdgpu_acpi_is_s3_active(struct amdgpu_device *adev)
 }
 
 /**
- * amdgpu_acpi_should_gpu_reset
- *
- * @adev: amdgpu_device_pointer
- *
- * returns true if should reset GPU, false if not
- */
-bool amdgpu_acpi_should_gpu_reset(struct amdgpu_device *adev)
-{
-	if (adev->flags & AMD_IS_APU)
-		return false;
-
-	if (amdgpu_sriov_vf(adev))
-		return false;
-
-	return pm_suspend_target_state != PM_SUSPEND_TO_IDLE;
-}
-
-/**
  * amdgpu_acpi_is_s0ix_active
  *
  * @adev: amdgpu_device_pointer
@@ -1071,6 +1081,9 @@ bool amdgpu_acpi_is_s0ix_active(struct amdgpu_device *adev)
 {
 	if (!(adev->flags & AMD_IS_APU) ||
 	    (pm_suspend_target_state != PM_SUSPEND_TO_IDLE))
+		return false;
+
+	if (adev->asic_type < CHIP_RAVEN)
 		return false;
 
 	/*

@@ -14,7 +14,6 @@
 #include <linux/dmi.h>
 #include "edac_module.h"
 #include <ras/ras_event.h>
-#include <linux/notifier.h>
 
 #define OTHER_DETAIL_LEN	400
 
@@ -54,9 +53,11 @@ static DEFINE_MUTEX(ghes_reg_mutex);
  */
 static DEFINE_SPINLOCK(ghes_lock);
 
-static bool system_scanned;
+/* "ghes_edac.force_load=1" skips the platform check */
+static bool __read_mostly force_load;
+module_param(force_load, bool, 0);
 
-static struct list_head *ghes_devs;
+static bool system_scanned;
 
 /* Memory Device - Type 17 of SMBIOS spec */
 struct memdev_dmi_entry {
@@ -266,14 +267,11 @@ out:
 	return n;
 }
 
-static int ghes_edac_report_mem_error(struct notifier_block *nb,
-				      unsigned long val, void *data)
+void ghes_edac_report_mem_error(int sev, struct cper_sec_mem_err *mem_err)
 {
-	struct cper_sec_mem_err *mem_err = (struct cper_sec_mem_err *)data;
 	struct cper_mem_err_compact cmem;
 	struct edac_raw_error_desc *e;
 	struct mem_ctl_info *mci;
-	unsigned long sev = val;
 	struct ghes_pvt *pvt;
 	unsigned long flags;
 	char *p;
@@ -284,7 +282,7 @@ static int ghes_edac_report_mem_error(struct notifier_block *nb,
 	 * know.
 	 */
 	if (WARN_ON_ONCE(in_nmi()))
-		return NOTIFY_OK;
+		return;
 
 	spin_lock_irqsave(&ghes_lock, flags);
 
@@ -376,23 +374,35 @@ static int ghes_edac_report_mem_error(struct notifier_block *nb,
 
 unlock:
 	spin_unlock_irqrestore(&ghes_lock, flags);
-
-	return NOTIFY_OK;
 }
 
-static struct notifier_block ghes_edac_mem_err_nb = {
-	.notifier_call	= ghes_edac_report_mem_error,
-	.priority	= 0,
+/*
+ * Known systems that are safe to enable this module.
+ */
+static struct acpi_platform_list plat_list[] = {
+	{"HPE   ", "Server  ", 0, ACPI_SIG_FADT, all_versions},
+	{ } /* End */
 };
 
-static int ghes_edac_register(struct device *dev)
+int ghes_edac_register(struct ghes *ghes, struct device *dev)
 {
 	bool fake = false;
 	struct mem_ctl_info *mci;
 	struct ghes_pvt *pvt;
 	struct edac_mc_layer layers[1];
 	unsigned long flags;
+	int idx = -1;
 	int rc = 0;
+
+	if (IS_ENABLED(CONFIG_X86)) {
+		/* Check if safe to enable on this system */
+		idx = acpi_match_platform_list(plat_list);
+		if (!force_load && idx < 0)
+			return -ENODEV;
+	} else {
+		force_load = true;
+		idx = 0;
+	}
 
 	/* finish another registration/unregistration instance first */
 	mutex_lock(&ghes_reg_mutex);
@@ -437,9 +447,14 @@ static int ghes_edac_register(struct device *dev)
 		pr_info("This system has a very crappy BIOS: It doesn't even list the DIMMS.\n");
 		pr_info("Its SMBIOS info is wrong. It is doubtful that the error report would\n");
 		pr_info("work on such system. Use this driver with caution\n");
+	} else if (idx < 0) {
+		pr_info("This EDAC driver relies on BIOS to enumerate memory and get error reports.\n");
+		pr_info("Unfortunately, not all BIOSes reflect the memory layout correctly.\n");
+		pr_info("So, the end result of using this driver varies from vendor to vendor.\n");
+		pr_info("If you find incorrect reports, please contact your hardware vendor\n");
+		pr_info("to correct its BIOS.\n");
+		pr_info("This system has %d DIMM sockets.\n", ghes_hw.num_dimms);
 	}
-
-	pr_info("This system has %d DIMM sockets.\n", ghes_hw.num_dimms);
 
 	if (!fake) {
 		struct dimm_info *src, *dst;
@@ -488,8 +503,6 @@ static int ghes_edac_register(struct device *dev)
 	ghes_pvt = pvt;
 	spin_unlock_irqrestore(&ghes_lock, flags);
 
-	ghes_register_report_chain(&ghes_edac_mem_err_nb);
-
 	/* only set on success */
 	refcount_set(&ghes_refcount, 1);
 
@@ -504,10 +517,13 @@ unlock:
 	return rc;
 }
 
-static void ghes_edac_unregister(struct ghes *ghes)
+void ghes_edac_unregister(struct ghes *ghes)
 {
 	struct mem_ctl_info *mci;
 	unsigned long flags;
+
+	if (!force_load)
+		return;
 
 	mutex_lock(&ghes_reg_mutex);
 
@@ -532,42 +548,6 @@ static void ghes_edac_unregister(struct ghes *ghes)
 	if (mci)
 		edac_mc_free(mci);
 
-	ghes_unregister_report_chain(&ghes_edac_mem_err_nb);
-
 unlock:
 	mutex_unlock(&ghes_reg_mutex);
 }
-
-static int __init ghes_edac_init(void)
-{
-	struct ghes *g, *g_tmp;
-
-	ghes_devs = ghes_get_devices();
-	if (!ghes_devs)
-		return -ENODEV;
-
-	if (list_empty(ghes_devs)) {
-		pr_info("GHES probing device list is empty");
-		return -ENODEV;
-	}
-
-	list_for_each_entry_safe(g, g_tmp, ghes_devs, elist) {
-		ghes_edac_register(g->dev);
-	}
-
-	return 0;
-}
-module_init(ghes_edac_init);
-
-static void __exit ghes_edac_exit(void)
-{
-	struct ghes *g, *g_tmp;
-
-	list_for_each_entry_safe(g, g_tmp, ghes_devs, elist) {
-		ghes_edac_unregister(g);
-	}
-}
-module_exit(ghes_edac_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Output ACPI APEI/GHES BIOS detected errors via EDAC");

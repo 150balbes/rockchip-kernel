@@ -243,47 +243,42 @@ static bool ipa_endpoint_data_valid_one(struct ipa *ipa, u32 count,
 	return true;
 }
 
-/* Validate endpoint configuration data.  Return max defined endpoint ID */
-static u32 ipa_endpoint_max(struct ipa *ipa, u32 count,
-			    const struct ipa_gsi_endpoint_data *data)
+static bool ipa_endpoint_data_valid(struct ipa *ipa, u32 count,
+				    const struct ipa_gsi_endpoint_data *data)
 {
 	const struct ipa_gsi_endpoint_data *dp = data;
 	struct device *dev = &ipa->pdev->dev;
 	enum ipa_endpoint_name name;
-	u32 max;
 
 	if (count > IPA_ENDPOINT_COUNT) {
 		dev_err(dev, "too many endpoints specified (%u > %u)\n",
 			count, IPA_ENDPOINT_COUNT);
-		return 0;
+		return false;
 	}
 
 	/* Make sure needed endpoints have defined data */
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_COMMAND_TX])) {
 		dev_err(dev, "command TX endpoint not defined\n");
-		return 0;
+		return false;
 	}
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_LAN_RX])) {
 		dev_err(dev, "LAN RX endpoint not defined\n");
-		return 0;
+		return false;
 	}
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_MODEM_TX])) {
 		dev_err(dev, "AP->modem TX endpoint not defined\n");
-		return 0;
+		return false;
 	}
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_MODEM_RX])) {
 		dev_err(dev, "AP<-modem RX endpoint not defined\n");
-		return 0;
+		return false;
 	}
 
-	max = 0;
-	for (name = 0; name < count; name++, dp++) {
+	for (name = 0; name < count; name++, dp++)
 		if (!ipa_endpoint_data_valid_one(ipa, count, data, dp))
-			return 0;
-		max = max_t(u32, max, dp->endpoint_id);
-	}
+			return false;
 
-	return max;
+	return true;
 }
 
 /* Allocate a transaction to use on a non-command endpoint */
@@ -350,32 +345,29 @@ ipa_endpoint_program_delay(struct ipa_endpoint *endpoint, bool enable)
 
 static bool ipa_endpoint_aggr_active(struct ipa_endpoint *endpoint)
 {
-	u32 endpoint_id = endpoint->endpoint_id;
+	u32 mask = BIT(endpoint->endpoint_id);
 	struct ipa *ipa = endpoint->ipa;
-	u32 unit = endpoint_id / 32;
 	const struct ipa_reg *reg;
 	u32 val;
 
-	WARN_ON(!test_bit(endpoint_id, ipa->available));
+	WARN_ON(!(mask & ipa->available));
 
 	reg = ipa_reg(ipa, STATE_AGGR_ACTIVE);
-	val = ioread32(ipa->reg_virt + ipa_reg_n_offset(reg, unit));
+	val = ioread32(ipa->reg_virt + ipa_reg_offset(reg));
 
-	return !!(val & BIT(endpoint_id % 32));
+	return !!(val & mask);
 }
 
 static void ipa_endpoint_force_close(struct ipa_endpoint *endpoint)
 {
-	u32 endpoint_id = endpoint->endpoint_id;
-	u32 mask = BIT(endpoint_id % 32);
+	u32 mask = BIT(endpoint->endpoint_id);
 	struct ipa *ipa = endpoint->ipa;
-	u32 unit = endpoint_id / 32;
 	const struct ipa_reg *reg;
 
-	WARN_ON(!test_bit(endpoint_id, ipa->available));
+	WARN_ON(!(mask & ipa->available));
 
 	reg = ipa_reg(ipa, AGGR_FORCE_CLOSE);
-	iowrite32(mask, ipa->reg_virt + ipa_reg_n_offset(reg, unit));
+	iowrite32(mask, ipa->reg_virt + ipa_reg_offset(reg));
 }
 
 /**
@@ -434,10 +426,10 @@ ipa_endpoint_program_suspend(struct ipa_endpoint *endpoint, bool enable)
  */
 void ipa_endpoint_modem_pause_all(struct ipa *ipa, bool enable)
 {
-	u32 endpoint_id = 0;
+	u32 endpoint_id;
 
-	while (endpoint_id < ipa->endpoint_count) {
-		struct ipa_endpoint *endpoint = &ipa->endpoint[endpoint_id++];
+	for (endpoint_id = 0; endpoint_id < IPA_ENDPOINT_MAX; endpoint_id++) {
+		struct ipa_endpoint *endpoint = &ipa->endpoint[endpoint_id];
 
 		if (endpoint->ee_id != GSI_EE_MODEM)
 			continue;
@@ -456,8 +448,8 @@ void ipa_endpoint_modem_pause_all(struct ipa *ipa, bool enable)
 /* Reset all modem endpoints to use the default exception endpoint */
 int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa)
 {
+	u32 initialized = ipa->initialized;
 	struct gsi_trans *trans;
-	u32 endpoint_id;
 	u32 count;
 
 	/* We need one command per modem TX endpoint, plus the commands
@@ -471,10 +463,13 @@ int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa)
 		return -EBUSY;
 	}
 
-	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count) {
+	while (initialized) {
+		u32 endpoint_id = __ffs(initialized);
 		struct ipa_endpoint *endpoint;
 		const struct ipa_reg *reg;
 		u32 offset;
+
+		initialized ^= BIT(endpoint_id);
 
 		/* We only reset modem TX endpoints */
 		endpoint = &ipa->endpoint[endpoint_id];
@@ -1013,10 +1008,10 @@ static void ipa_endpoint_init_hol_block_disable(struct ipa_endpoint *endpoint)
 
 void ipa_endpoint_modem_hol_block_clear_all(struct ipa *ipa)
 {
-	u32 endpoint_id = 0;
+	u32 i;
 
-	while (endpoint_id < ipa->endpoint_count) {
-		struct ipa_endpoint *endpoint = &ipa->endpoint[endpoint_id++];
+	for (i = 0; i < IPA_ENDPOINT_MAX; i++) {
+		struct ipa_endpoint *endpoint = &ipa->endpoint[i];
 
 		if (endpoint->toward_ipa || endpoint->ee_id != GSI_EE_MODEM)
 			continue;
@@ -1666,7 +1661,6 @@ static void ipa_endpoint_program(struct ipa_endpoint *endpoint)
 
 int ipa_endpoint_enable_one(struct ipa_endpoint *endpoint)
 {
-	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
 	struct gsi *gsi = &ipa->gsi;
 	int ret;
@@ -1676,35 +1670,37 @@ int ipa_endpoint_enable_one(struct ipa_endpoint *endpoint)
 		dev_err(&ipa->pdev->dev,
 			"error %d starting %cX channel %u for endpoint %u\n",
 			ret, endpoint->toward_ipa ? 'T' : 'R',
-			endpoint->channel_id, endpoint_id);
+			endpoint->channel_id, endpoint->endpoint_id);
 		return ret;
 	}
 
 	if (!endpoint->toward_ipa) {
-		ipa_interrupt_suspend_enable(ipa->interrupt, endpoint_id);
+		ipa_interrupt_suspend_enable(ipa->interrupt,
+					     endpoint->endpoint_id);
 		ipa_endpoint_replenish_enable(endpoint);
 	}
 
-	__set_bit(endpoint_id, ipa->enabled);
+	ipa->enabled |= BIT(endpoint->endpoint_id);
 
 	return 0;
 }
 
 void ipa_endpoint_disable_one(struct ipa_endpoint *endpoint)
 {
-	u32 endpoint_id = endpoint->endpoint_id;
+	u32 mask = BIT(endpoint->endpoint_id);
 	struct ipa *ipa = endpoint->ipa;
 	struct gsi *gsi = &ipa->gsi;
 	int ret;
 
-	if (!test_bit(endpoint_id, ipa->enabled))
+	if (!(ipa->enabled & mask))
 		return;
 
-	__clear_bit(endpoint_id, endpoint->ipa->enabled);
+	ipa->enabled ^= mask;
 
 	if (!endpoint->toward_ipa) {
 		ipa_endpoint_replenish_disable(endpoint);
-		ipa_interrupt_suspend_disable(ipa->interrupt, endpoint_id);
+		ipa_interrupt_suspend_disable(ipa->interrupt,
+					      endpoint->endpoint_id);
 	}
 
 	/* Note that if stop fails, the channel's state is not well-defined */
@@ -1712,7 +1708,7 @@ void ipa_endpoint_disable_one(struct ipa_endpoint *endpoint)
 	if (ret)
 		dev_err(&ipa->pdev->dev,
 			"error %d attempting to stop endpoint %u\n", ret,
-			endpoint_id);
+			endpoint->endpoint_id);
 }
 
 void ipa_endpoint_suspend_one(struct ipa_endpoint *endpoint)
@@ -1721,7 +1717,7 @@ void ipa_endpoint_suspend_one(struct ipa_endpoint *endpoint)
 	struct gsi *gsi = &endpoint->ipa->gsi;
 	int ret;
 
-	if (!test_bit(endpoint->endpoint_id, endpoint->ipa->enabled))
+	if (!(endpoint->ipa->enabled & BIT(endpoint->endpoint_id)))
 		return;
 
 	if (!endpoint->toward_ipa) {
@@ -1741,7 +1737,7 @@ void ipa_endpoint_resume_one(struct ipa_endpoint *endpoint)
 	struct gsi *gsi = &endpoint->ipa->gsi;
 	int ret;
 
-	if (!test_bit(endpoint->endpoint_id, endpoint->ipa->enabled))
+	if (!(endpoint->ipa->enabled & BIT(endpoint->endpoint_id)))
 		return;
 
 	if (!endpoint->toward_ipa)
@@ -1801,12 +1797,12 @@ static void ipa_endpoint_setup_one(struct ipa_endpoint *endpoint)
 
 	ipa_endpoint_program(endpoint);
 
-	__set_bit(endpoint->endpoint_id, endpoint->ipa->set_up);
+	endpoint->ipa->set_up |= BIT(endpoint->endpoint_id);
 }
 
 static void ipa_endpoint_teardown_one(struct ipa_endpoint *endpoint)
 {
-	__clear_bit(endpoint->endpoint_id, endpoint->ipa->set_up);
+	endpoint->ipa->set_up &= ~BIT(endpoint->endpoint_id);
 
 	if (!endpoint->toward_ipa)
 		cancel_delayed_work_sync(&endpoint->replenish_work);
@@ -1816,39 +1812,45 @@ static void ipa_endpoint_teardown_one(struct ipa_endpoint *endpoint)
 
 void ipa_endpoint_setup(struct ipa *ipa)
 {
-	u32 endpoint_id;
+	u32 initialized = ipa->initialized;
 
-	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count)
+	ipa->set_up = 0;
+	while (initialized) {
+		u32 endpoint_id = __ffs(initialized);
+
+		initialized ^= BIT(endpoint_id);
+
 		ipa_endpoint_setup_one(&ipa->endpoint[endpoint_id]);
+	}
 }
 
 void ipa_endpoint_teardown(struct ipa *ipa)
 {
-	u32 endpoint_id;
+	u32 set_up = ipa->set_up;
 
-	for_each_set_bit(endpoint_id, ipa->set_up, ipa->endpoint_count)
+	while (set_up) {
+		u32 endpoint_id = __fls(set_up);
+
+		set_up ^= BIT(endpoint_id);
+
 		ipa_endpoint_teardown_one(&ipa->endpoint[endpoint_id]);
-}
-
-void ipa_endpoint_deconfig(struct ipa *ipa)
-{
-	ipa->available_count = 0;
-	bitmap_free(ipa->available);
-	ipa->available = NULL;
+	}
+	ipa->set_up = 0;
 }
 
 int ipa_endpoint_config(struct ipa *ipa)
 {
 	struct device *dev = &ipa->pdev->dev;
 	const struct ipa_reg *reg;
-	u32 endpoint_id;
-	u32 tx_count;
-	u32 rx_count;
+	u32 initialized;
 	u32 rx_base;
-	u32 limit;
+	u32 rx_mask;
+	u32 tx_mask;
+	int ret = 0;
+	u32 max;
 	u32 val;
 
-	/* Prior to IPA v3.5, the FLAVOR_0 register was not supported.
+	/* Prior to IPAv3.5, the FLAVOR_0 register was not supported.
 	 * Furthermore, the endpoints were not grouped such that TX
 	 * endpoint numbers started with 0 and RX endpoints had numbers
 	 * higher than all TX endpoints, so we can't do the simple
@@ -1859,78 +1861,61 @@ int ipa_endpoint_config(struct ipa *ipa)
 	 * assume the configuration is valid.
 	 */
 	if (ipa->version < IPA_VERSION_3_5) {
-		ipa->available = bitmap_zalloc(IPA_ENDPOINT_MAX, GFP_KERNEL);
-		if (!ipa->available)
-			return -ENOMEM;
-		ipa->available_count = IPA_ENDPOINT_MAX;
-
-		bitmap_set(ipa->available, 0, IPA_ENDPOINT_MAX);
-
+		ipa->available = ~0;
 		return 0;
 	}
 
 	/* Find out about the endpoints supplied by the hardware, and ensure
-	 * the highest one doesn't exceed the number supported by software.
+	 * the highest one doesn't exceed the number we support.
 	 */
 	reg = ipa_reg(ipa, FLAVOR_0);
 	val = ioread32(ipa->reg_virt + ipa_reg_offset(reg));
 
-	/* Our RX is an IPA producer; our TX is an IPA consumer. */
-	tx_count = ipa_reg_decode(reg, MAX_CONS_PIPES, val);
-	rx_count = ipa_reg_decode(reg, MAX_PROD_PIPES, val);
+	/* Our RX is an IPA producer */
 	rx_base = ipa_reg_decode(reg, PROD_LOWEST, val);
-
-	limit = rx_base + rx_count;
-	if (limit > IPA_ENDPOINT_MAX) {
-		dev_err(dev, "too many endpoints, %u > %u\n",
-			limit, IPA_ENDPOINT_MAX);
+	max = rx_base + ipa_reg_decode(reg, MAX_PROD_PIPES, val);
+	if (max > IPA_ENDPOINT_MAX) {
+		dev_err(dev, "too many endpoints (%u > %u)\n",
+			max, IPA_ENDPOINT_MAX);
 		return -EINVAL;
 	}
+	rx_mask = GENMASK(max - 1, rx_base);
 
-	/* Allocate and initialize the available endpoint bitmap */
-	ipa->available = bitmap_zalloc(limit, GFP_KERNEL);
-	if (!ipa->available)
-		return -ENOMEM;
-	ipa->available_count = limit;
+	/* Our TX is an IPA consumer */
+	max = ipa_reg_decode(reg, MAX_CONS_PIPES, val);
+	tx_mask = GENMASK(max - 1, 0);
 
-	/* Mark all supported RX and TX endpoints as available */
-	bitmap_set(ipa->available, 0, tx_count);
-	bitmap_set(ipa->available, rx_base, rx_count);
+	ipa->available = rx_mask | tx_mask;
 
-	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count) {
+	/* Check for initialized endpoints not supported by the hardware */
+	if (ipa->initialized & ~ipa->available) {
+		dev_err(dev, "unavailable endpoint id(s) 0x%08x\n",
+			ipa->initialized & ~ipa->available);
+		ret = -EINVAL;		/* Report other errors too */
+	}
+
+	initialized = ipa->initialized;
+	while (initialized) {
+		u32 endpoint_id = __ffs(initialized);
 		struct ipa_endpoint *endpoint;
 
-		if (endpoint_id >= limit) {
-			dev_err(dev, "invalid endpoint id, %u > %u\n",
-				endpoint_id, limit - 1);
-			goto err_free_bitmap;
-		}
-
-		if (!test_bit(endpoint_id, ipa->available)) {
-			dev_err(dev, "unavailable endpoint id %u\n",
-				endpoint_id);
-			goto err_free_bitmap;
-		}
+		initialized ^= BIT(endpoint_id);
 
 		/* Make sure it's pointing in the right direction */
 		endpoint = &ipa->endpoint[endpoint_id];
-		if (endpoint->toward_ipa) {
-			if (endpoint_id < tx_count)
-				continue;
-		} else if (endpoint_id >= rx_base) {
-			continue;
+		if ((endpoint_id < rx_base) != endpoint->toward_ipa) {
+			dev_err(dev, "endpoint id %u wrong direction\n",
+				endpoint_id);
+			ret = -EINVAL;
 		}
-
-		dev_err(dev, "endpoint id %u wrong direction\n", endpoint_id);
-		goto err_free_bitmap;
 	}
 
-	return 0;
+	return ret;
+}
 
-err_free_bitmap:
-	ipa_endpoint_deconfig(ipa);
-
-	return -EINVAL;
+void ipa_endpoint_deconfig(struct ipa *ipa)
+{
+	ipa->available = 0;	/* Nothing more to do */
 }
 
 static void ipa_endpoint_init_one(struct ipa *ipa, enum ipa_endpoint_name name,
@@ -1951,64 +1936,46 @@ static void ipa_endpoint_init_one(struct ipa *ipa, enum ipa_endpoint_name name,
 	endpoint->toward_ipa = data->toward_ipa;
 	endpoint->config = data->endpoint.config;
 
-	__set_bit(endpoint->endpoint_id, ipa->defined);
+	ipa->initialized |= BIT(endpoint->endpoint_id);
 }
 
 static void ipa_endpoint_exit_one(struct ipa_endpoint *endpoint)
 {
-	__clear_bit(endpoint->endpoint_id, endpoint->ipa->defined);
+	endpoint->ipa->initialized &= ~BIT(endpoint->endpoint_id);
 
 	memset(endpoint, 0, sizeof(*endpoint));
 }
 
 void ipa_endpoint_exit(struct ipa *ipa)
 {
-	u32 endpoint_id;
+	u32 initialized = ipa->initialized;
 
-	ipa->filtered = 0;
+	while (initialized) {
+		u32 endpoint_id = __fls(initialized);
 
-	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count)
+		initialized ^= BIT(endpoint_id);
+
 		ipa_endpoint_exit_one(&ipa->endpoint[endpoint_id]);
-
-	bitmap_free(ipa->enabled);
-	ipa->enabled = NULL;
-	bitmap_free(ipa->set_up);
-	ipa->set_up = NULL;
-	bitmap_free(ipa->defined);
-	ipa->defined = NULL;
-
+	}
 	memset(ipa->name_map, 0, sizeof(ipa->name_map));
 	memset(ipa->channel_map, 0, sizeof(ipa->channel_map));
 }
 
 /* Returns a bitmask of endpoints that support filtering, or 0 on error */
-int ipa_endpoint_init(struct ipa *ipa, u32 count,
+u32 ipa_endpoint_init(struct ipa *ipa, u32 count,
 		      const struct ipa_gsi_endpoint_data *data)
 {
 	enum ipa_endpoint_name name;
-	u32 filtered;
+	u32 filter_map;
 
 	BUILD_BUG_ON(!IPA_REPLENISH_BATCH);
 
-	/* Number of endpoints is one more than the maximum ID */
-	ipa->endpoint_count = ipa_endpoint_max(ipa, count, data) + 1;
-	if (!ipa->endpoint_count)
-		return -EINVAL;
+	if (!ipa_endpoint_data_valid(ipa, count, data))
+		return 0;	/* Error */
 
-	/* Initialize endpoint state bitmaps */
-	ipa->defined = bitmap_zalloc(ipa->endpoint_count, GFP_KERNEL);
-	if (!ipa->defined)
-		return -ENOMEM;
+	ipa->initialized = 0;
 
-	ipa->set_up = bitmap_zalloc(ipa->endpoint_count, GFP_KERNEL);
-	if (!ipa->set_up)
-		goto err_free_defined;
-
-	ipa->enabled = bitmap_zalloc(ipa->endpoint_count, GFP_KERNEL);
-	if (!ipa->enabled)
-		goto err_free_set_up;
-
-	filtered = 0;
+	filter_map = 0;
 	for (name = 0; name < count; name++, data++) {
 		if (ipa_gsi_endpoint_data_empty(data))
 			continue;	/* Skip over empty slots */
@@ -2016,28 +1983,18 @@ int ipa_endpoint_init(struct ipa *ipa, u32 count,
 		ipa_endpoint_init_one(ipa, name, data);
 
 		if (data->endpoint.filter_support)
-			filtered |= BIT(data->endpoint_id);
+			filter_map |= BIT(data->endpoint_id);
 		if (data->ee_id == GSI_EE_MODEM && data->toward_ipa)
 			ipa->modem_tx_count++;
 	}
 
-	/* Make sure the set of filtered endpoints is valid */
-	if (!ipa_filtered_valid(ipa, filtered)) {
-		ipa_endpoint_exit(ipa);
+	if (!ipa_filter_map_valid(ipa, filter_map))
+		goto err_endpoint_exit;
 
-		return -EINVAL;
-	}
+	return filter_map;	/* Non-zero bitmask */
 
-	ipa->filtered = filtered;
+err_endpoint_exit:
+	ipa_endpoint_exit(ipa);
 
-	return 0;
-
-err_free_set_up:
-	bitmap_free(ipa->set_up);
-	ipa->set_up = NULL;
-err_free_defined:
-	bitmap_free(ipa->defined);
-	ipa->defined = NULL;
-
-	return -ENOMEM;
+	return 0;	/* Error */
 }

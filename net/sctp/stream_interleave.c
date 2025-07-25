@@ -490,8 +490,11 @@ static int sctp_enqueue_event(struct sctp_ulpq *ulpq,
 	if (!sctp_ulpevent_is_enabled(event, ulpq->asoc->subscribe))
 		goto out_free;
 
-	skb_queue_splice_tail_init(skb_list,
-				   &sk->sk_receive_queue);
+	if (skb_list)
+		skb_queue_splice_tail_init(skb_list,
+					   &sk->sk_receive_queue);
+	else
+		__skb_queue_tail(&sk->sk_receive_queue, skb);
 
 	if (!sp->data_ready_signalled) {
 		sp->data_ready_signalled = 1;
@@ -501,7 +504,10 @@ static int sctp_enqueue_event(struct sctp_ulpq *ulpq,
 	return 1;
 
 out_free:
-	sctp_queue_purge_ulpevents(skb_list);
+	if (skb_list)
+		sctp_queue_purge_ulpevents(skb_list);
+	else
+		sctp_ulpevent_free(event);
 
 	return 0;
 }
@@ -1154,7 +1160,8 @@ static void sctp_generate_iftsn(struct sctp_outq *q, __u32 ctsn)
 
 #define _sctp_walk_ifwdtsn(pos, chunk, end) \
 	for (pos = chunk->subh.ifwdtsn_hdr->skip; \
-	     (void *)pos < (void *)chunk->subh.ifwdtsn_hdr->skip + (end); pos++)
+	     (void *)pos <= (void *)chunk->subh.ifwdtsn_hdr->skip + (end) - \
+			    sizeof(struct sctp_ifwdtsn_skip); pos++)
 
 #define sctp_walk_ifwdtsn(pos, ch) \
 	_sctp_walk_ifwdtsn((pos), (ch), ntohs((ch)->chunk_hdr->length) - \

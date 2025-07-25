@@ -115,20 +115,12 @@ static void regmap_irq_sync_unlock(struct irq_data *data)
 	 */
 	for (i = 0; i < d->chip->num_regs; i++) {
 		if (d->mask_base) {
-			if (d->chip->handle_mask_sync)
-				d->chip->handle_mask_sync(d->map, i,
-							  d->mask_buf_def[i],
-							  d->mask_buf[i],
-							  d->chip->irq_drv_data);
-			else {
-				reg = d->get_irq_reg(d, d->mask_base, i);
-				ret = regmap_update_bits(d->map, reg,
-						d->mask_buf_def[i],
-						d->mask_buf[i]);
-				if (ret)
-					dev_err(d->map->dev, "Failed to sync masks in %x\n",
-						reg);
-			}
+			reg = d->get_irq_reg(d, d->mask_base, i);
+			ret = regmap_update_bits(d->map, reg,
+					d->mask_buf_def[i], d->mask_buf[i]);
+			if (ret)
+				dev_err(d->map->dev, "Failed to sync masks in %x\n",
+					reg);
 		}
 
 		if (d->unmask_base) {
@@ -851,7 +843,7 @@ int regmap_add_irq_chip_fwnode(struct fwnode_handle *fwnode,
 		if (!d->config_buf)
 			goto err_alloc;
 
-		for (i = 0; i < chip->num_config_regs; i++) {
+		for (i = 0; i < chip->num_config_bases; i++) {
 			d->config_buf[i] = kcalloc(chip->num_config_regs,
 						   sizeof(**d->config_buf),
 						   GFP_KERNEL);
@@ -932,23 +924,13 @@ int regmap_add_irq_chip_fwnode(struct fwnode_handle *fwnode,
 		d->mask_buf[i] = d->mask_buf_def[i];
 
 		if (d->mask_base) {
-			if (chip->handle_mask_sync) {
-				ret = chip->handle_mask_sync(d->map, i,
-							     d->mask_buf_def[i],
-							     d->mask_buf[i],
-							     chip->irq_drv_data);
-				if (ret)
-					goto err_alloc;
-			} else {
-				reg = d->get_irq_reg(d, d->mask_base, i);
-				ret = regmap_update_bits(d->map, reg,
-						d->mask_buf_def[i],
-						d->mask_buf[i]);
-				if (ret) {
-					dev_err(map->dev, "Failed to set masks in 0x%x: %d\n",
-						reg, ret);
-					goto err_alloc;
-				}
+			reg = d->get_irq_reg(d, d->mask_base, i);
+			ret = regmap_update_bits(d->map, reg,
+					d->mask_buf_def[i], d->mask_buf[i]);
+			if (ret) {
+				dev_err(map->dev, "Failed to set masks in 0x%x: %d\n",
+					reg, ret);
+				goto err_alloc;
 			}
 		}
 

@@ -477,23 +477,12 @@ static int max30102_read_raw(struct iio_dev *indio_dev,
 		 * Temperature reading can only be acquired when not in
 		 * shutdown; leave shutdown briefly when buffer not running
 		 */
-any_mode_retry:
-		if (iio_device_claim_buffer_mode(indio_dev)) {
-			/*
-			 * This one is a *bit* hacky. If we cannot claim buffer
-			 * mode, then try direct mode so that we make sure
-			 * things cannot concurrently change. And we just keep
-			 * trying until we get one of the modes...
-			 */
-			if (iio_device_claim_direct_mode(indio_dev))
-				goto any_mode_retry;
-
+		mutex_lock(&indio_dev->mlock);
+		if (!iio_buffer_enabled(indio_dev))
 			ret = max30102_get_temp(data, val, true);
-			iio_device_release_direct_mode(indio_dev);
-		} else {
+		else
 			ret = max30102_get_temp(data, val, false);
-			iio_device_release_buffer_mode(indio_dev);
-		}
+		mutex_unlock(&indio_dev->mlock);
 		if (ret)
 			return ret;
 
@@ -513,9 +502,9 @@ static const struct iio_info max30102_info = {
 	.read_raw = max30102_read_raw,
 };
 
-static int max30102_probe(struct i2c_client *client)
+static int max30102_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct max30102_data *data;
 	struct iio_dev *indio_dev;
 	int ret;
@@ -631,7 +620,7 @@ static struct i2c_driver max30102_driver = {
 		.name	= MAX30102_DRV_NAME,
 		.of_match_table	= max30102_dt_ids,
 	},
-	.probe_new	= max30102_probe,
+	.probe		= max30102_probe,
 	.remove		= max30102_remove,
 	.id_table	= max30102_id,
 };

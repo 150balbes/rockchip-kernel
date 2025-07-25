@@ -89,12 +89,12 @@ struct intel_uncore_type {
 	 * to identify which platform component each PMON block of that type is
 	 * supposed to monitor.
 	 */
-	struct intel_uncore_topology **topology;
+	struct intel_uncore_topology *topology;
 	/*
 	 * Optional callbacks for managing mapping of Uncore units to PMONs
 	 */
 	int (*get_topology)(struct intel_uncore_type *type);
-	void (*set_mapping)(struct intel_uncore_type *type);
+	int (*set_mapping)(struct intel_uncore_type *type);
 	void (*cleanup_mapping)(struct intel_uncore_type *type);
 };
 
@@ -179,24 +179,9 @@ struct freerunning_counters {
 	unsigned *box_offsets;
 };
 
-struct uncore_iio_topology {
-	int pci_bus_no;
-	int segment;
-};
-
-struct uncore_upi_topology {
-	int die_to;
-	int pmu_idx_to;
-	int enabled;
-};
-
 struct intel_uncore_topology {
-	int pmu_idx;
-	union {
-		void *untyped;
-		struct uncore_iio_topology *iio;
-		struct uncore_upi_topology *upi;
-	};
+	u64 configuration;
+	int segment;
 };
 
 struct pci2phy_map {
@@ -602,6 +587,7 @@ void skl_uncore_cpu_init(void);
 void icl_uncore_cpu_init(void);
 void tgl_uncore_cpu_init(void);
 void adl_uncore_cpu_init(void);
+void mtl_uncore_cpu_init(void);
 void tgl_uncore_mmio_init(void);
 void tgl_l_uncore_mmio_init(void);
 void adl_uncore_mmio_init(void);

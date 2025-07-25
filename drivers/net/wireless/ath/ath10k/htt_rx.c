@@ -1379,7 +1379,7 @@ static void ath10k_process_rx(struct ath10k *ar, struct sk_buff *skb)
 		   ath10k_get_tid(hdr, tid, sizeof(tid)),
 		   is_multicast_ether_addr(ieee80211_get_DA(hdr)) ?
 							"mcast" : "ucast",
-		   IEEE80211_SEQ_TO_SN(__le16_to_cpu(hdr->seq_ctrl)),
+		   (__le16_to_cpu(hdr->seq_ctrl) & IEEE80211_SCTL_SEQ) >> 4,
 		   (status->encoding == RX_ENC_LEGACY) ? "legacy" : "",
 		   (status->encoding == RX_ENC_HT) ? "ht" : "",
 		   (status->encoding == RX_ENC_VHT) ? "vht" : "",
@@ -1844,14 +1844,15 @@ static void ath10k_htt_rx_h_csum_offload(struct ath10k_hw_params *hw,
 }
 
 static u64 ath10k_htt_rx_h_get_pn(struct ath10k *ar, struct sk_buff *skb,
+				  u16 offset,
 				  enum htt_rx_mpdu_encrypt_type enctype)
 {
 	struct ieee80211_hdr *hdr;
 	u64 pn = 0;
 	u8 *ehdr;
 
-	hdr = (struct ieee80211_hdr *)skb->data;
-	ehdr = skb->data + ieee80211_hdrlen(hdr->frame_control);
+	hdr = (struct ieee80211_hdr *)(skb->data + offset);
+	ehdr = skb->data + offset + ieee80211_hdrlen(hdr->frame_control);
 
 	if (enctype == HTT_RX_MPDU_ENCRYPT_AES_CCM_WPA2) {
 		pn = ehdr[0];
@@ -1865,17 +1866,19 @@ static u64 ath10k_htt_rx_h_get_pn(struct ath10k *ar, struct sk_buff *skb,
 }
 
 static bool ath10k_htt_rx_h_frag_multicast_check(struct ath10k *ar,
-						 struct sk_buff *skb)
+						 struct sk_buff *skb,
+						 u16 offset)
 {
 	struct ieee80211_hdr *hdr;
 
-	hdr = (struct ieee80211_hdr *)skb->data;
+	hdr = (struct ieee80211_hdr *)(skb->data + offset);
 	return !is_multicast_ether_addr(hdr->addr1);
 }
 
 static bool ath10k_htt_rx_h_frag_pn_check(struct ath10k *ar,
 					  struct sk_buff *skb,
 					  u16 peer_id,
+					  u16 offset,
 					  enum htt_rx_mpdu_encrypt_type enctype)
 {
 	struct ath10k_peer *peer;
@@ -1890,16 +1893,16 @@ static bool ath10k_htt_rx_h_frag_pn_check(struct ath10k *ar,
 		return false;
 	}
 
-	hdr = (struct ieee80211_hdr *)skb->data;
+	hdr = (struct ieee80211_hdr *)(skb->data + offset);
 	if (ieee80211_is_data_qos(hdr->frame_control))
 		tid = ieee80211_get_tid(hdr);
 	else
 		tid = ATH10K_TXRX_NON_QOS_TID;
 
 	last_pn = &peer->frag_tids_last_pn[tid];
-	new_pn.pn48 = ath10k_htt_rx_h_get_pn(ar, skb, enctype);
+	new_pn.pn48 = ath10k_htt_rx_h_get_pn(ar, skb, offset, enctype);
 	frag_number = le16_to_cpu(hdr->seq_ctrl) & IEEE80211_SCTL_FRAG;
-	seq = IEEE80211_SEQ_TO_SN(__le16_to_cpu(hdr->seq_ctrl));
+	seq = (__le16_to_cpu(hdr->seq_ctrl) & IEEE80211_SCTL_SEQ) >> 4;
 
 	if (frag_number == 0) {
 		last_pn->pn48 = new_pn.pn48;
@@ -2056,11 +2059,13 @@ static void ath10k_htt_rx_h_mpdu(struct ath10k *ar,
 			frag_pn_check = ath10k_htt_rx_h_frag_pn_check(ar,
 								      msdu,
 								      peer_id,
+								      0,
 								      enctype);
 
 		if (frag)
 			multicast_check = ath10k_htt_rx_h_frag_multicast_check(ar,
-									       msdu);
+									       msdu,
+									       0);
 
 		if (!frag_pn_check || !multicast_check) {
 			/* Discard the fragment with invalid PN or multicast DA
@@ -2819,7 +2824,7 @@ static bool ath10k_htt_rx_proc_rx_frag_ind_hl(struct ath10k_htt *htt,
 
 	hdr_space = ieee80211_hdrlen(hdr->frame_control);
 	sc = __le16_to_cpu(hdr->seq_ctrl);
-	seq = IEEE80211_SEQ_TO_SN(sc);
+	seq = (sc & IEEE80211_SCTL_SEQ) >> 4;
 	frag = sc & IEEE80211_SCTL_FRAG;
 
 	sec_index = MS(rx_desc_info, HTT_RX_DESC_HL_INFO_MCAST_BCAST) ?

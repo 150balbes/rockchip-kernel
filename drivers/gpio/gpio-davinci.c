@@ -217,6 +217,9 @@ static int davinci_gpio_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	if (WARN_ON(ARCH_NR_GPIOS < ngpio))
+		ngpio = ARCH_NR_GPIOS;
+
 	/*
 	 * If there are unbanked interrupts then the number of
 	 * interrupts is equal to number of gpios else all are banked so
@@ -226,6 +229,11 @@ static int davinci_gpio_probe(struct platform_device *pdev)
 		nirq = pdata->gpio_unbanked;
 	else
 		nirq = DIV_ROUND_UP(ngpio, 16);
+
+	if (nirq > MAX_INT_PER_BANK) {
+		dev_err(dev, "Too many IRQs!\n");
+		return -EINVAL;
+	}
 
 	chips = devm_kzalloc(dev, sizeof(*chips), GFP_KERNEL);
 	if (!chips)
@@ -325,7 +333,7 @@ static struct irq_chip gpio_irqchip = {
 	.irq_enable	= gpio_irq_enable,
 	.irq_disable	= gpio_irq_disable,
 	.irq_set_type	= gpio_irq_type,
-	.flags		= IRQCHIP_SET_TYPE_MASKED,
+	.flags		= IRQCHIP_SET_TYPE_MASKED | IRQCHIP_SKIP_SET_WAKE,
 };
 
 static void gpio_irq_handler(struct irq_desc *desc)
@@ -642,9 +650,6 @@ static void davinci_gpio_save_context(struct davinci_gpio_controller *chips,
 		context->set_falling = readl_relaxed(&g->set_falling);
 	}
 
-	/* Clear Bank interrupt enable bit */
-	writel_relaxed(0, base + BINTEN);
-
 	/* Clear all interrupt status registers */
 	writel_relaxed(GENMASK(31, 0), &g->intstat);
 }
@@ -727,14 +732,3 @@ static int __init davinci_gpio_drv_reg(void)
 	return platform_driver_register(&davinci_gpio_driver);
 }
 postcore_initcall(davinci_gpio_drv_reg);
-
-static void __exit davinci_gpio_exit(void)
-{
-	platform_driver_unregister(&davinci_gpio_driver);
-}
-module_exit(davinci_gpio_exit);
-
-MODULE_AUTHOR("Jan Kotas <jank@cadence.com>");
-MODULE_DESCRIPTION("DAVINCI GPIO driver");
-MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:gpio-davinci");

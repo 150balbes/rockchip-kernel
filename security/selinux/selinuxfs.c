@@ -294,7 +294,7 @@ static ssize_t sel_write_disable(struct file *file, const char __user *buf,
 	 */
 	pr_err("SELinux:  Runtime disable is deprecated, use selinux=0 on the kernel cmdline.\n");
 	pr_err("SELinux:  https://github.com/SELinuxProject/selinux-kernel/wiki/DEPRECATE-runtime-disable\n");
-	ssleep(15);
+	ssleep(5);
 
 	if (count >= PAGE_SIZE)
 		return -ENOMEM;
@@ -763,7 +763,7 @@ static ssize_t sel_write_checkreqprot(struct file *file, const char __user *buf,
 
 	checkreqprot_set(fsi->state, (new_value ? 1 : 0));
 	if (new_value)
-		ssleep(15);
+		ssleep(5);
 	length = count;
 
 	selinux_ima_measure_state(fsi->state);

@@ -224,7 +224,7 @@ int fsync_bdev(struct block_device *bdev)
 EXPORT_SYMBOL(fsync_bdev);
 
 /**
- * freeze_bdev - lock a filesystem and force it into a consistent state
+ * freeze_bdev  --  lock a filesystem and force it into a consistent state
  * @bdev:	blockdevice to lock
  *
  * If a superblock is found on this device, we take the s_umount semaphore
@@ -268,7 +268,7 @@ done:
 EXPORT_SYMBOL(freeze_bdev);
 
 /**
- * thaw_bdev - unlock filesystem
+ * thaw_bdev  -- unlock filesystem
  * @bdev:	blockdevice to unlock
  *
  * Unlocks the filesystem and marks it writeable again after freeze_bdev().
@@ -507,6 +507,8 @@ struct block_device *bdev_alloc(struct gendisk *disk, u8 partno)
 
 void bdev_add(struct block_device *bdev, dev_t dev)
 {
+	if (bdev_stable_writes(bdev))
+		mapping_set_stable_writes(bdev->bd_inode->i_mapping);
 	bdev->bd_dev = dev;
 	bdev->bd_inode->i_rdev = dev;
 	bdev->bd_inode->i_ino = dev;

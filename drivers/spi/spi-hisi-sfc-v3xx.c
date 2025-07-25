@@ -165,7 +165,7 @@ static int hisi_sfc_v3xx_adjust_op_size(struct spi_mem *mem,
 }
 
 /*
- * The controller only supports Standard SPI mode, Dual mode and
+ * The controller only supports Standard SPI mode, Duall mode and
  * Quad mode. Double sanitize the ops here to avoid OOB access.
  */
 static bool hisi_sfc_v3xx_supports_op(struct spi_mem *mem,
@@ -377,6 +377,11 @@ static const struct spi_controller_mem_ops hisi_sfc_v3xx_mem_ops = {
 static irqreturn_t hisi_sfc_v3xx_isr(int irq, void *data)
 {
 	struct hisi_sfc_v3xx_host *host = data;
+	u32 reg;
+
+	reg = readl(host->regbase + HISI_SFC_V3XX_INT_STAT);
+	if (!reg)
+		return IRQ_NONE;
 
 	hisi_sfc_v3xx_disable_int(host);
 

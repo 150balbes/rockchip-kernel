@@ -16,7 +16,6 @@ struct nvkm_disp {
 	struct list_head conns;
 
 	struct nvkm_event hpd;
-#define NVKM_DISP_HEAD_EVENT_VBLANK BIT(0)
 	struct nvkm_event vblank;
 
 	struct {
@@ -32,7 +31,13 @@ struct nvkm_disp {
 	struct {
 		unsigned long mask;
 		int nr;
-	} wndw, head, dac, sor;
+	} wndw, head, dac;
+
+	struct {
+		unsigned long mask;
+		int nr;
+		u32 lvdsconf;
+	} sor;
 
 	struct {
 		unsigned long mask;

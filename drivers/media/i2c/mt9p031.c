@@ -307,7 +307,6 @@ static inline int mt9p031_pll_disable(struct mt9p031 *mt9p031)
 
 static int mt9p031_power_on(struct mt9p031 *mt9p031)
 {
-	unsigned long rate, delay;
 	int ret;
 
 	/* Ensure RESET_BAR is active */
@@ -335,12 +334,7 @@ static int mt9p031_power_on(struct mt9p031 *mt9p031)
 	/* Now RESET_BAR must be high */
 	if (mt9p031->reset) {
 		gpiod_set_value(mt9p031->reset, 0);
-		/* Wait 850000 EXTCLK cycles before de-asserting reset. */
-		rate = clk_get_rate(mt9p031->clk);
-		if (!rate)
-			rate = 6000000;	/* Slowest supported clock, 6 MHz */
-		delay = DIV_ROUND_UP(850000 * 1000, rate);
-		msleep(delay);
+		usleep_range(1000, 2000);
 	}
 
 	return 0;

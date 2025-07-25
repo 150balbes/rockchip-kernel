@@ -25,7 +25,6 @@ properties:
           - qcom,sdm630-imem
           - qcom,sdm845-imem
           - qcom,sdx55-imem
-          - qcom,sdx65-imem
       - const: syscon
       - const: simple-mfd
 

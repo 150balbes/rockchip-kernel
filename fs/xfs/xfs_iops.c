@@ -651,7 +651,6 @@ xfs_vn_change_ok(
 static int
 xfs_setattr_nonsize(
 	struct user_namespace	*mnt_userns,
-	struct dentry		*dentry,
 	struct xfs_inode	*ip,
 	struct iattr		*iattr)
 {
@@ -758,7 +757,7 @@ xfs_setattr_nonsize(
 	 * 	     Posix ACL code seems to care about this issue either.
 	 */
 	if (mask & ATTR_MODE) {
-		error = posix_acl_chmod(mnt_userns, dentry, inode->i_mode);
+		error = posix_acl_chmod(mnt_userns, inode, inode->i_mode);
 		if (error)
 			return error;
 	}
@@ -780,7 +779,6 @@ out_dqrele:
 STATIC int
 xfs_setattr_size(
 	struct user_namespace	*mnt_userns,
-	struct dentry		*dentry,
 	struct xfs_inode	*ip,
 	struct iattr		*iattr)
 {
@@ -812,7 +810,7 @@ xfs_setattr_size(
 		 * Use the regular setattr path to update the timestamps.
 		 */
 		iattr->ia_valid &= ~ATTR_SIZE;
-		return xfs_setattr_nonsize(mnt_userns, dentry, ip, iattr);
+		return xfs_setattr_nonsize(mnt_userns, ip, iattr);
 	}
 
 	/*
@@ -989,7 +987,7 @@ xfs_vn_setattr_size(
 	error = xfs_vn_change_ok(mnt_userns, dentry, iattr);
 	if (error)
 		return error;
-	return xfs_setattr_size(mnt_userns, dentry, ip, iattr);
+	return xfs_setattr_size(mnt_userns, ip, iattr);
 }
 
 STATIC int
@@ -1021,7 +1019,7 @@ xfs_vn_setattr(
 
 		error = xfs_vn_change_ok(mnt_userns, dentry, iattr);
 		if (!error)
-			error = xfs_setattr_nonsize(mnt_userns, dentry, ip, iattr);
+			error = xfs_setattr_nonsize(mnt_userns, ip, iattr);
 	}
 
 	return error;
@@ -1103,7 +1101,7 @@ xfs_vn_tmpfile(
 }
 
 static const struct inode_operations xfs_inode_operations = {
-	.get_inode_acl		= xfs_get_acl,
+	.get_acl		= xfs_get_acl,
 	.set_acl		= xfs_set_acl,
 	.getattr		= xfs_vn_getattr,
 	.setattr		= xfs_vn_setattr,
@@ -1130,7 +1128,7 @@ static const struct inode_operations xfs_dir_inode_operations = {
 	.rmdir			= xfs_vn_unlink,
 	.mknod			= xfs_vn_mknod,
 	.rename			= xfs_vn_rename,
-	.get_inode_acl		= xfs_get_acl,
+	.get_acl		= xfs_get_acl,
 	.set_acl		= xfs_set_acl,
 	.getattr		= xfs_vn_getattr,
 	.setattr		= xfs_vn_setattr,
@@ -1157,7 +1155,7 @@ static const struct inode_operations xfs_dir_ci_inode_operations = {
 	.rmdir			= xfs_vn_unlink,
 	.mknod			= xfs_vn_mknod,
 	.rename			= xfs_vn_rename,
-	.get_inode_acl		= xfs_get_acl,
+	.get_acl		= xfs_get_acl,
 	.set_acl		= xfs_set_acl,
 	.getattr		= xfs_vn_getattr,
 	.setattr		= xfs_vn_setattr,
@@ -1185,6 +1183,10 @@ xfs_inode_supports_dax(
 
 	/* Only supported on regular files. */
 	if (!S_ISREG(VFS_I(ip)->i_mode))
+		return false;
+
+	/* Only supported on non-reflinked files. */
+	if (xfs_is_reflink_inode(ip))
 		return false;
 
 	/* Block size must match page size */

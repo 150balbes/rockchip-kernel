@@ -246,10 +246,10 @@ struct vmw_framebuffer_bo {
 
 
 static const uint32_t __maybe_unused vmw_primary_plane_formats[] = {
-	DRM_FORMAT_XRGB1555,
-	DRM_FORMAT_RGB565,
 	DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_RGB565,
+	DRM_FORMAT_XRGB1555,
 };
 
 static const uint32_t __maybe_unused vmw_cursor_plane_formats[] = {
@@ -270,14 +270,6 @@ static const uint32_t __maybe_unused vmw_cursor_plane_formats[] = {
  */
 struct vmw_crtc_state {
 	struct drm_crtc_state base;
-};
-
-struct vmw_cursor_plane_state {
-	struct ttm_buffer_object *bo;
-	struct ttm_bo_kmap_obj map;
-	bool mapped;
-	s32 hotspot_x;
-	s32 hotspot_y;
 };
 
 /**
@@ -303,8 +295,13 @@ struct vmw_plane_state {
 	/* For CPU Blit */
 	unsigned int cpp;
 
-	bool surf_mapped;
-	struct vmw_cursor_plane_state cursor;
+	/* CursorMob flipping index; -1 if cursor mobs not used */
+	unsigned int cursor_mob_idx;
+	/* Currently-active CursorMob */
+	struct ttm_buffer_object *cm_bo;
+	/* CursorMob kmap_obj; expected valid at cursor_plane_atomic_update
+	   IFF currently-active CursorMob above is valid */
+	struct ttm_bo_kmap_obj cm_map;
 };
 
 
@@ -341,12 +338,11 @@ struct vmw_connector_state {
  * Derived class for cursor plane object
  *
  * @base DRM plane object
- * @cursor.cursor_mobs Cursor mobs available for re-use
+ * @cursor_mob array of two MOBs for CursorMob flipping
  */
 struct vmw_cursor_plane {
 	struct drm_plane base;
-
-	struct ttm_buffer_object *cursor_mobs[3];
+	struct ttm_buffer_object *cursor_mob[2];
 };
 
 /**
@@ -383,7 +379,6 @@ struct vmw_display_unit {
 	unsigned pref_width;
 	unsigned pref_height;
 	bool pref_active;
-	struct drm_display_mode *pref_mode;
 
 	/*
 	 * Gui positioning
@@ -433,8 +428,6 @@ void vmw_du_connector_save(struct drm_connector *connector);
 void vmw_du_connector_restore(struct drm_connector *connector);
 enum drm_connector_status
 vmw_du_connector_detect(struct drm_connector *connector, bool force);
-int vmw_du_connector_fill_modes(struct drm_connector *connector,
-				uint32_t max_width, uint32_t max_height);
 int vmw_kms_helper_dirty(struct vmw_private *dev_priv,
 			 struct vmw_framebuffer *framebuffer,
 			 const struct drm_clip_rect *clips,
@@ -443,6 +436,9 @@ int vmw_kms_helper_dirty(struct vmw_private *dev_priv,
 			 int num_clips,
 			 int increment,
 			 struct vmw_kms_dirty *dirty);
+enum drm_mode_status vmw_connector_mode_valid(struct drm_connector *connector,
+					      struct drm_display_mode *mode);
+int vmw_connector_get_modes(struct drm_connector *connector);
 
 void vmw_kms_helper_validation_finish(struct vmw_private *dev_priv,
 				      struct drm_file *file_priv,
@@ -469,6 +465,8 @@ void vmw_kms_create_implicit_placement_property(struct vmw_private *dev_priv);
 /* Universal Plane Helpers */
 void vmw_du_primary_plane_destroy(struct drm_plane *plane);
 void vmw_du_cursor_plane_destroy(struct drm_plane *plane);
+int vmw_du_create_cursor_mob_array(struct vmw_cursor_plane *vcp);
+void vmw_du_destroy_cursor_mob_array(struct vmw_cursor_plane *vcp);
 
 /* Atomic Helpers */
 int vmw_du_primary_plane_atomic_check(struct drm_plane *plane,
@@ -512,11 +510,6 @@ void vmw_du_connector_destroy_state(struct drm_connector *connector,
  */
 int vmw_kms_ldu_init_display(struct vmw_private *dev_priv);
 int vmw_kms_ldu_close_display(struct vmw_private *dev_priv);
-int vmw_kms_ldu_do_bo_dirty(struct vmw_private *dev_priv,
-			    struct vmw_framebuffer *framebuffer,
-			    unsigned int flags, unsigned int color,
-			    struct drm_clip_rect *clips,
-			    unsigned int num_clips, int increment);
 int vmw_kms_update_proxy(struct vmw_resource *res,
 			 const struct drm_clip_rect *clips,
 			 unsigned num_clips,

@@ -12,6 +12,7 @@
 #include "mali_kernel_common.h"
 
 #include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/devfreq.h>
 #include <linux/regulator/consumer.h>
 #include <linux/regulator/driver.h>
@@ -40,7 +41,7 @@
 #include <soc/rockchip/rockchip_system_monitor.h>
 
 static struct monitor_dev_profile mali_mdevp = {
-	.type = MONITOR_TPYE_DEV,
+	.type = MONITOR_TYPE_DEV,
 	.low_temp_adjust = rockchip_monitor_dev_low_temp_adjust,
 	.high_temp_adjust = rockchip_monitor_dev_high_temp_adjust,
 };
@@ -87,13 +88,17 @@ mali_devfreq_target(struct device *dev, unsigned long *target_freq, u32 flags)
 		return 0;
 	}
 
+	err = clk_bulk_enable(mdev->num_clks, mdev->clks);
+	if (err)
+		return err;
+
 #ifdef CONFIG_REGULATOR
 	if (mdev->regulator && mdev->current_voltage != voltage &&
 	    old_freq < freq) {
 		err = regulator_set_voltage(mdev->regulator, voltage, INT_MAX);
 		if (err) {
 			MALI_PRINT_ERROR(("Failed to increase voltage (%d)\n", err));
-			return err;
+			goto err;
 		}
 	}
 #endif
@@ -101,8 +106,9 @@ mali_devfreq_target(struct device *dev, unsigned long *target_freq, u32 flags)
 	err = clk_set_rate(mdev->clock, freq);
 	if (err) {
 		MALI_PRINT_ERROR(("Failed to set clock %lu (target %lu)\n", freq, *target_freq));
-		return err;
+		goto err;
 	}
+
 	*target_freq = freq;
 	mdev->current_freq = freq;
 	if (mdev->devfreq)
@@ -114,7 +120,7 @@ mali_devfreq_target(struct device *dev, unsigned long *target_freq, u32 flags)
 		err = regulator_set_voltage(mdev->regulator, voltage, INT_MAX);
 		if (err) {
 			MALI_PRINT_ERROR(("Failed to decrease voltage (%d)\n", err));
-			return err;
+			goto err;
 		}
 	}
 #endif
@@ -122,6 +128,8 @@ mali_devfreq_target(struct device *dev, unsigned long *target_freq, u32 flags)
 	mdev->current_voltage = voltage;
 
 	mali_pm_reset_dvfs_utilisation(mdev);
+err:
+	clk_bulk_disable(mdev->num_clks, mdev->clks);
 
 	return err;
 }
@@ -236,6 +244,7 @@ int mali_devfreq_init(struct mali_device *mdev)
 	struct devfreq_dev_profile *dp;
 	struct dev_pm_opp *opp;
 	unsigned long opp_rate;
+	unsigned int dyn_power_coeff = 0;
 	int err;
 
 	MALI_DEBUG_PRINT(2, ("Init Mali devfreq\n"));
@@ -261,6 +270,10 @@ int mali_devfreq_init(struct mali_device *mdev)
 			     &ondemand_data.upthreshold);
 	of_property_read_u32(np, "downdifferential",
 			     &ondemand_data.downdifferential);
+	of_property_read_u32(np, "dynamic-power-coefficient",
+			     &dyn_power_coeff);
+	if (dyn_power_coeff)
+		dp->is_cooling_device = true;
 
 	mdev->devfreq = devfreq_add_device(mdev->dev, dp,
 					   "simple_ondemand", &ondemand_data);
@@ -282,6 +295,7 @@ int mali_devfreq_init(struct mali_device *mdev)
 	mdev->devfreq->last_status.current_frequency = opp_rate;
 
 	mali_mdevp.data = mdev->devfreq;
+	mali_mdevp.opp_info = &mdev->opp_info;
 	mdev->mdev_info = rockchip_system_monitor_register(mdev->dev,
 							   &mali_mdevp);
 	if (IS_ERR(mdev->mdev_info)) {
@@ -302,9 +316,8 @@ int mali_devfreq_init(struct mali_device *mdev)
 		}
 	}
 
-	if (callbacks) {
-		mdev->devfreq_cooling = of_devfreq_cooling_register_power(
-						mdev->dev->of_node,
+	if (callbacks && !dp->is_cooling_device) {
+		mdev->devfreq_cooling = devfreq_cooling_em_register(
 						mdev->devfreq,
 						callbacks);
 		if (IS_ERR_OR_NULL(mdev->devfreq_cooling)) {
@@ -341,7 +354,8 @@ void mali_devfreq_term(struct mali_device *mdev)
 
 	rockchip_system_monitor_unregister(mdev->mdev_info);
 #ifdef CONFIG_DEVFREQ_THERMAL
-	devfreq_cooling_unregister(mdev->devfreq_cooling);
+	if (!IS_ERR_OR_NULL(mdev->devfreq_cooling))
+		devfreq_cooling_unregister(mdev->devfreq_cooling);
 #endif
 
 	devfreq_unregister_opp_notifier(mdev->dev, mdev->devfreq);

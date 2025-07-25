@@ -8,7 +8,6 @@
 #include "evlist.h"
 #include "header.h"
 #include "debug.h"
-#include "util/sample.h"
 
 static int process_event(struct evlist **pevlist, union perf_event *event)
 {

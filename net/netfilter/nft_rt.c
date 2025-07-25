@@ -146,7 +146,7 @@ static int nft_rt_get_init(const struct nft_ctx *ctx,
 }
 
 static int nft_rt_get_dump(struct sk_buff *skb,
-			   const struct nft_expr *expr, bool reset)
+			   const struct nft_expr *expr)
 {
 	const struct nft_rt *priv = nft_expr_priv(expr);
 
@@ -165,6 +165,11 @@ static int nft_rt_validate(const struct nft_ctx *ctx, const struct nft_expr *exp
 {
 	const struct nft_rt *priv = nft_expr_priv(expr);
 	unsigned int hooks;
+
+	if (ctx->family != NFPROTO_IPV4 &&
+	    ctx->family != NFPROTO_IPV6 &&
+	    ctx->family != NFPROTO_INET)
+		return -EOPNOTSUPP;
 
 	switch (priv->key) {
 	case NFT_RT_NEXTHOP4:

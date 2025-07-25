@@ -19,9 +19,7 @@ description:
 
 properties:
   compatible:
-    enum:
-      - sony,imx412
-      - sony,imx577
+    const: sony,imx412
   reg:
     description: I2C address
     maxItems: 1

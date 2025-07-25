@@ -503,12 +503,15 @@ devlink_trap_drop_cleanup()
 	tc filter del dev $dev egress protocol $proto pref $pref handle $handle flower
 }
 
-devlink_trap_stats_check()
+devlink_trap_stats_test()
 {
+	local test_name=$1; shift
 	local trap_name=$1; shift
 	local send_one="$@"
 	local t0_packets
 	local t1_packets
+
+	RET=0
 
 	t0_packets=$(devlink_trap_rx_packets_get $trap_name)
 
@@ -516,17 +519,9 @@ devlink_trap_stats_check()
 
 	t1_packets=$(devlink_trap_rx_packets_get $trap_name)
 
-	[[ $t1_packets -ne $t0_packets ]]
-}
-
-devlink_trap_stats_test()
-{
-	local test_name=$1; shift
-
-	RET=0
-
-	devlink_trap_stats_check "$@"
-	check_err $? "Trap stats did not increase"
+	if [[ $t1_packets -eq $t0_packets ]]; then
+		check_err 1 "Trap stats did not increase"
+	fi
 
 	log_test "$test_name"
 }

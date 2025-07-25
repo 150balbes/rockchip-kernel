@@ -46,17 +46,21 @@ int mte_save_tags(struct page *page)
 	return 0;
 }
 
-void mte_restore_tags(swp_entry_t entry, struct page *page)
+bool mte_restore_tags(swp_entry_t entry, struct page *page)
 {
 	void *tags = xa_load(&mte_pages, entry.val);
 
 	if (!tags)
-		return;
+		return false;
 
-	if (try_page_mte_tagging(page)) {
+	/*
+	 * Test PG_mte_tagged again in case it was racing with another
+	 * set_pte_at().
+	 */
+	if (!test_and_set_bit(PG_mte_tagged, &page->flags))
 		mte_restore_page_tags(page_address(page), tags);
-		set_page_mte_tagged(page);
-	}
+
+	return true;
 }
 
 void mte_invalidate_tags(int type, pgoff_t offset)

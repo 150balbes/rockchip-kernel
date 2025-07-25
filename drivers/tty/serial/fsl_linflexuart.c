@@ -178,7 +178,8 @@ static inline void linflex_transmit_buffer(struct uart_port *sport)
 
 	while (!uart_circ_empty(xmit)) {
 		linflex_put_char(sport, xmit->buf[xmit->tail]);
-		uart_xmit_advance(sport, 1);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		sport->icount.tx++;
 	}
 
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)

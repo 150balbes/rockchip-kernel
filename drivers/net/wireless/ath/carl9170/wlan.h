@@ -271,7 +271,7 @@ struct ar9170_tx_frame {
 
 	union {
 		struct ieee80211_hdr i3e;
-		DECLARE_FLEX_ARRAY(u8, payload);
+		u8 payload[0];
 	} data;
 } __packed;
 

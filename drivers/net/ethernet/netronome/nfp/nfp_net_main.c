@@ -16,6 +16,7 @@
 #include <linux/lockdep.h>
 #include <linux/pci.h>
 #include <linux/pci_regs.h>
+#include <linux/msi.h>
 #include <linux/random.h>
 #include <linux/rtnetlink.h>
 
@@ -155,17 +156,22 @@ nfp_net_pf_init_vnic(struct nfp_pf *pf, struct nfp_net *nn, unsigned int id)
 
 	nfp_net_debugfs_vnic_add(nn, pf->ddir);
 
+	if (nn->port)
+		nfp_devlink_port_type_eth_set(nn->port);
+
 	nfp_net_info(nn);
 
 	if (nfp_net_is_data_vnic(nn)) {
 		err = nfp_app_vnic_init(pf->app, nn);
 		if (err)
-			goto err_debugfs_vnic_clean;
+			goto err_devlink_port_type_clean;
 	}
 
 	return 0;
 
-err_debugfs_vnic_clean:
+err_devlink_port_type_clean:
+	if (nn->port)
+		nfp_devlink_port_type_clear(nn->port);
 	nfp_net_debugfs_dir_clean(&nn->debugfs_dir);
 	nfp_net_clean(nn);
 err_devlink_port_clean:
@@ -214,6 +220,8 @@ static void nfp_net_pf_clean_vnic(struct nfp_pf *pf, struct nfp_net *nn)
 {
 	if (nfp_net_is_data_vnic(nn))
 		nfp_app_vnic_clean(pf->app, nn);
+	if (nn->port)
+		nfp_devlink_port_type_clear(nn->port);
 	nfp_net_debugfs_dir_clean(&nn->debugfs_dir);
 	nfp_net_clean(nn);
 	if (nn->port)

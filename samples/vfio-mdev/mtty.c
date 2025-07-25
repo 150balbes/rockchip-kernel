@@ -784,6 +784,7 @@ static void mtty_release_dev(struct vfio_device *vdev)
 
 	atomic_add(mdev_state->nr_ports, &mdev_avail_ports);
 	kfree(mdev_state->vconfig);
+	vfio_free_device(vdev);
 }
 
 static void mtty_remove(struct mdev_device *mdev)
@@ -1330,7 +1331,7 @@ static int __init mtty_dev_init(void)
 
 	ret = device_register(&mtty_dev.dev);
 	if (ret)
-		goto err_put;
+		goto err_class;
 
 	ret = mdev_register_parent(&mtty_dev.parent, &mtty_dev.dev,
 				   &mtty_driver, mtty_mdev_types,
@@ -1340,9 +1341,8 @@ static int __init mtty_dev_init(void)
 	return 0;
 
 err_device:
-	device_del(&mtty_dev.dev);
-err_put:
-	put_device(&mtty_dev.dev);
+	device_unregister(&mtty_dev.dev);
+err_class:
 	class_destroy(mtty_dev.vd_class);
 err_driver:
 	mdev_unregister_driver(&mtty_driver);

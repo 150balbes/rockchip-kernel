@@ -1523,7 +1523,7 @@ static int musb_gadget_wakeup(struct usb_gadget *gadget)
 
 	spin_lock_irqsave(&musb->lock, flags);
 
-	switch (musb_get_state(musb)) {
+	switch (musb->xceiv->otg->state) {
 	case OTG_STATE_B_PERIPHERAL:
 		/* NOTE:  OTG state machine doesn't include B_SUSPENDED;
 		 * that's part of the standard usb 1.1 state machine, and
@@ -1552,11 +1552,9 @@ static int musb_gadget_wakeup(struct usb_gadget *gadget)
 				break;
 		}
 
-		if (musb->xceiv) {
-			spin_unlock_irqrestore(&musb->lock, flags);
-			otg_start_srp(musb->xceiv->otg);
-			spin_lock_irqsave(&musb->lock, flags);
-		}
+		spin_unlock_irqrestore(&musb->lock, flags);
+		otg_start_srp(musb->xceiv->otg);
+		spin_lock_irqsave(&musb->lock, flags);
 
 		/* Block idling for at least 1s */
 		musb_platform_try_idle(musb,
@@ -1566,7 +1564,7 @@ static int musb_gadget_wakeup(struct usb_gadget *gadget)
 		goto done;
 	default:
 		musb_dbg(musb, "Unhandled wake: %s",
-			 musb_otg_state_string(musb));
+			usb_otg_state_string(musb->xceiv->otg->state));
 		goto done;
 	}
 
@@ -1787,7 +1785,7 @@ int musb_gadget_setup(struct musb *musb)
 	musb->g.speed = USB_SPEED_UNKNOWN;
 
 	MUSB_DEV_MODE(musb);
-	musb_set_state(musb, OTG_STATE_B_IDLE);
+	musb->xceiv->otg->state = OTG_STATE_B_IDLE;
 
 	/* this "gadget" abstracts/virtualizes the controller */
 	musb->g.name = musb_driver_name;
@@ -1834,6 +1832,7 @@ static int musb_gadget_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver)
 {
 	struct musb		*musb = gadget_to_musb(g);
+	struct usb_otg		*otg = musb->xceiv->otg;
 	unsigned long		flags;
 	int			retval = 0;
 
@@ -1850,12 +1849,8 @@ static int musb_gadget_start(struct usb_gadget *g,
 	spin_lock_irqsave(&musb->lock, flags);
 	musb->is_active = 1;
 
-	if (musb->xceiv)
-		otg_set_peripheral(musb->xceiv->otg, &musb->g);
-	else
-		phy_set_mode(musb->phy, PHY_MODE_USB_DEVICE);
-
-	musb_set_state(musb, OTG_STATE_B_IDLE);
+	otg_set_peripheral(otg, &musb->g);
+	musb->xceiv->otg->state = OTG_STATE_B_IDLE;
 	spin_unlock_irqrestore(&musb->lock, flags);
 
 	musb_start(musb);
@@ -1864,7 +1859,7 @@ static int musb_gadget_start(struct usb_gadget *g,
 	 * handles power budgeting ... this way also
 	 * ensures HdrcStart is indirectly called.
 	 */
-	if (musb->xceiv && musb->xceiv->last_event == USB_EVENT_ID)
+	if (musb->xceiv->last_event == USB_EVENT_ID)
 		musb_platform_set_vbus(musb, 1);
 
 	pm_runtime_mark_last_busy(musb->controller);
@@ -1900,13 +1895,9 @@ static int musb_gadget_stop(struct usb_gadget *g)
 
 	(void) musb_gadget_vbus_draw(&musb->g, 0);
 
-	musb_set_state(musb, OTG_STATE_UNDEFINED);
+	musb->xceiv->otg->state = OTG_STATE_UNDEFINED;
 	musb_stop(musb);
-
-	if (musb->xceiv)
-		otg_set_peripheral(musb->xceiv->otg, NULL);
-	else
-		phy_set_mode(musb->phy, PHY_MODE_INVALID);
+	otg_set_peripheral(musb->xceiv->otg, NULL);
 
 	musb->is_active = 0;
 	musb->gadget_driver = NULL;
@@ -1933,7 +1924,7 @@ static int musb_gadget_stop(struct usb_gadget *g)
 void musb_g_resume(struct musb *musb)
 {
 	musb->is_suspended = 0;
-	switch (musb_get_state(musb)) {
+	switch (musb->xceiv->otg->state) {
 	case OTG_STATE_B_IDLE:
 		break;
 	case OTG_STATE_B_WAIT_ACON:
@@ -1947,7 +1938,7 @@ void musb_g_resume(struct musb *musb)
 		break;
 	default:
 		WARNING("unhandled RESUME transition (%s)\n",
-			musb_otg_state_string(musb));
+				usb_otg_state_string(musb->xceiv->otg->state));
 	}
 }
 
@@ -1959,10 +1950,10 @@ void musb_g_suspend(struct musb *musb)
 	devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 	musb_dbg(musb, "musb_g_suspend: devctl %02x", devctl);
 
-	switch (musb_get_state(musb)) {
+	switch (musb->xceiv->otg->state) {
 	case OTG_STATE_B_IDLE:
 		if ((devctl & MUSB_DEVCTL_VBUS) == MUSB_DEVCTL_VBUS)
-			musb_set_state(musb, OTG_STATE_B_PERIPHERAL);
+			musb->xceiv->otg->state = OTG_STATE_B_PERIPHERAL;
 		break;
 	case OTG_STATE_B_PERIPHERAL:
 		musb->is_suspended = 1;
@@ -1977,7 +1968,7 @@ void musb_g_suspend(struct musb *musb)
 		 * A_PERIPHERAL may need care too
 		 */
 		WARNING("unhandled SUSPEND transition (%s)",
-			musb_otg_state_string(musb));
+				usb_otg_state_string(musb->xceiv->otg->state));
 	}
 }
 
@@ -2008,22 +1999,22 @@ void musb_g_disconnect(struct musb *musb)
 		spin_lock(&musb->lock);
 	}
 
-	switch (musb_get_state(musb)) {
+	switch (musb->xceiv->otg->state) {
 	default:
 		musb_dbg(musb, "Unhandled disconnect %s, setting a_idle",
-			 musb_otg_state_string(musb));
-		musb_set_state(musb, OTG_STATE_A_IDLE);
+			usb_otg_state_string(musb->xceiv->otg->state));
+		musb->xceiv->otg->state = OTG_STATE_A_IDLE;
 		MUSB_HST_MODE(musb);
 		break;
 	case OTG_STATE_A_PERIPHERAL:
-		musb_set_state(musb, OTG_STATE_A_WAIT_BCON);
+		musb->xceiv->otg->state = OTG_STATE_A_WAIT_BCON;
 		MUSB_HST_MODE(musb);
 		break;
 	case OTG_STATE_B_WAIT_ACON:
 	case OTG_STATE_B_HOST:
 	case OTG_STATE_B_PERIPHERAL:
 	case OTG_STATE_B_IDLE:
-		musb_set_state(musb, OTG_STATE_B_IDLE);
+		musb->xceiv->otg->state = OTG_STATE_B_IDLE;
 		break;
 	case OTG_STATE_B_SRP_INIT:
 		break;
@@ -2087,13 +2078,13 @@ __acquires(musb->lock)
 		 * In that case, do not rely on devctl for setting
 		 * peripheral mode.
 		 */
-		musb_set_state(musb, OTG_STATE_B_PERIPHERAL);
+		musb->xceiv->otg->state = OTG_STATE_B_PERIPHERAL;
 		musb->g.is_a_peripheral = 0;
 	} else if (devctl & MUSB_DEVCTL_BDEVICE) {
-		musb_set_state(musb, OTG_STATE_B_PERIPHERAL);
+		musb->xceiv->otg->state = OTG_STATE_B_PERIPHERAL;
 		musb->g.is_a_peripheral = 0;
 	} else {
-		musb_set_state(musb, OTG_STATE_A_PERIPHERAL);
+		musb->xceiv->otg->state = OTG_STATE_A_PERIPHERAL;
 		musb->g.is_a_peripheral = 1;
 	}
 

@@ -85,7 +85,7 @@ void compute_intercept_slope(struct tsens_priv *priv, u32 *p1,
 	for (i = 0; i < priv->num_sensors; i++) {
 		dev_dbg(priv->dev,
 			"%s: sensor%d - data_point1:%#x data_point2:%#x\n",
-			__func__, i, p1[i], p2[i]);
+			__func__, i, p1[i], p2 ? p2[i] : 0);
 
 		if (!priv->sensor[i].slope)
 			priv->sensor[i].slope = SLOPE_DEFAULT;
@@ -532,27 +532,6 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-/**
- * tsens_combined_irq_thread() - Threaded interrupt handler for combined interrupts
- * @irq: irq number
- * @data: tsens controller private data
- *
- * Handle the combined interrupt as if it were 2 separate interrupts, so call the
- * critical handler first and then the up/low one.
- *
- * Return: IRQ_HANDLED
- */
-static irqreturn_t tsens_combined_irq_thread(int irq, void *data)
-{
-	irqreturn_t ret;
-
-	ret = tsens_critical_irq_thread(irq, data);
-	if (ret != IRQ_HANDLED)
-		return ret;
-
-	return tsens_irq_thread(irq, data);
-}
-
 static int tsens_set_trips(struct thermal_zone_device *tz, int low, int high)
 {
 	struct tsens_sensor *s = tz->devdata;
@@ -573,8 +552,8 @@ static int tsens_set_trips(struct thermal_zone_device *tz, int low, int high)
 	dev_dbg(dev, "[%u] %s: proposed thresholds: (%d:%d)\n",
 		hw_id, __func__, low, high);
 
-	cl_high = clamp_val(high, priv->feat->trip_min_temp, priv->feat->trip_max_temp);
-	cl_low  = clamp_val(low, priv->feat->trip_min_temp, priv->feat->trip_max_temp);
+	cl_high = clamp_val(high, -40000, 120000);
+	cl_low  = clamp_val(low, -40000, 120000);
 
 	high_val = tsens_mC_to_hw(s, cl_high);
 	low_val  = tsens_mC_to_hw(s, cl_low);
@@ -713,7 +692,7 @@ static int dbg_version_show(struct seq_file *s, void *data)
 			return ret;
 		seq_printf(s, "%d.%d.%d\n", maj_ver, min_ver, step_ver);
 	} else {
-		seq_printf(s, "0.%d.0\n", priv->feat->ver_major);
+		seq_puts(s, "0.1.0\n");
 	}
 
 	return 0;
@@ -725,14 +704,21 @@ DEFINE_SHOW_ATTRIBUTE(dbg_sensors);
 static void tsens_debug_init(struct platform_device *pdev)
 {
 	struct tsens_priv *priv = platform_get_drvdata(pdev);
+	struct dentry *root, *file;
 
-	priv->debug_root = debugfs_lookup("tsens", NULL);
-	if (!priv->debug_root)
+	root = debugfs_lookup("tsens", NULL);
+	if (!root)
 		priv->debug_root = debugfs_create_dir("tsens", NULL);
+	else
+		priv->debug_root = root;
+
+	file = debugfs_lookup("version", priv->debug_root);
+	if (!file)
+		debugfs_create_file("version", 0444, priv->debug_root,
+				    pdev, &dbg_version_fops);
 
 	/* A directory for each instance of the TSENS IP */
 	priv->debug = debugfs_create_dir(dev_name(&pdev->dev), priv->debug_root);
-	debugfs_create_file("version", 0444, priv->debug, pdev, &dbg_version_fops);
 	debugfs_create_file("sensors", 0444, priv->debug, pdev, &dbg_sensors_fops);
 }
 #else
@@ -932,6 +918,8 @@ int __init init_common(struct tsens_priv *priv)
 	if (tsens_version(priv) >= VER_0_1)
 		tsens_enable_irq(priv);
 
+	tsens_debug_init(op);
+
 err_put_device:
 	put_device(&op->dev);
 	return ret;
@@ -972,9 +960,6 @@ static const struct of_device_id tsens_table[] = {
 		.compatible = "qcom,ipq8064-tsens",
 		.data = &data_8960,
 	}, {
-		.compatible = "qcom,ipq8074-tsens",
-		.data = &data_ipq8074,
-	}, {
 		.compatible = "qcom,mdm9607-tsens",
 		.data = &data_9607,
 	}, {
@@ -983,6 +968,9 @@ static const struct of_device_id tsens_table[] = {
 	}, {
 		.compatible = "qcom,msm8939-tsens",
 		.data = &data_8939,
+	}, {
+		.compatible = "qcom,msm8956-tsens",
+		.data = &data_8956,
 	}, {
 		.compatible = "qcom,msm8960-tsens",
 		.data = &data_8960,
@@ -1086,18 +1074,13 @@ static int tsens_register(struct tsens_priv *priv)
 				   tsens_mC_to_hw(priv->sensor, 0));
 	}
 
-	if (priv->feat->combo_int) {
-		ret = tsens_register_irq(priv, "combined",
-					 tsens_combined_irq_thread);
-	} else {
-		ret = tsens_register_irq(priv, "uplow", tsens_irq_thread);
-		if (ret < 0)
-			return ret;
+	ret = tsens_register_irq(priv, "uplow", tsens_irq_thread);
+	if (ret < 0)
+		return ret;
 
-		if (priv->feat->crit_int)
-			ret = tsens_register_irq(priv, "critical",
-						 tsens_critical_irq_thread);
-	}
+	if (priv->feat->crit_int)
+		ret = tsens_register_irq(priv, "critical",
+					 tsens_critical_irq_thread);
 
 	return ret;
 }
@@ -1173,11 +1156,7 @@ static int tsens_probe(struct platform_device *pdev)
 		}
 	}
 
-	ret = tsens_register(priv);
-	if (!ret)
-		tsens_debug_init(pdev);
-
-	return ret;
+	return tsens_register(priv);
 }
 
 static int tsens_remove(struct platform_device *pdev)

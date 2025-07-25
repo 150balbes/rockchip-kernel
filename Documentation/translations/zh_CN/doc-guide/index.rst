@@ -19,7 +19,7 @@
    contributing
    maintainer-profile
 
-.. only::  subproject and html
+.. only::  子项目与HTML
 
    目录
    ====

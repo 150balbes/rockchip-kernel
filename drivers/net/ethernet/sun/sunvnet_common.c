@@ -1085,13 +1085,13 @@ static inline int vnet_skb_map(struct ldc_channel *lp, struct sk_buff *skb,
 		u8 *vaddr;
 
 		if (nc < ncookies) {
-			vaddr = kmap_local_page(skb_frag_page(f));
+			vaddr = kmap_atomic(skb_frag_page(f));
 			blen = skb_frag_size(f);
 			blen += 8 - (blen & 7);
 			err = ldc_map_single(lp, vaddr + skb_frag_off(f),
 					     blen, cookies + nc, ncookies - nc,
 					     map_perm);
-			kunmap_local(vaddr);
+			kunmap_atomic(vaddr);
 		} else {
 			err = -EMSGSIZE;
 		}

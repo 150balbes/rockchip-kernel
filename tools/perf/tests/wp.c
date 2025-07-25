@@ -59,10 +59,8 @@ static int __event(int wp_type, void *wp_addr, unsigned long wp_len)
 	get__perf_event_attr(&attr, wp_type, wp_addr, wp_len);
 	fd = sys_perf_event_open(&attr, 0, -1, -1,
 				 perf_event_open_cloexec_flag());
-	if (fd < 0) {
-		fd = -errno;
+	if (fd < 0)
 		pr_debug("failed opening event %x\n", attr.bp_type);
-	}
 
 	return fd;
 }
@@ -79,7 +77,7 @@ static int test__wp_ro(struct test_suite *test __maybe_unused,
 
 	fd = __event(HW_BREAKPOINT_R, (void *)&data1, sizeof(data1));
 	if (fd < 0)
-		return fd == -ENODEV ? TEST_SKIP : -1;
+		return -1;
 
 	tmp = data1;
 	WP_TEST_ASSERT_VAL(fd, "RO watchpoint", 1);
@@ -103,7 +101,7 @@ static int test__wp_wo(struct test_suite *test __maybe_unused,
 
 	fd = __event(HW_BREAKPOINT_W, (void *)&data1, sizeof(data1));
 	if (fd < 0)
-		return fd == -ENODEV ? TEST_SKIP : -1;
+		return -1;
 
 	tmp = data1;
 	WP_TEST_ASSERT_VAL(fd, "WO watchpoint", 0);
@@ -128,7 +126,7 @@ static int test__wp_rw(struct test_suite *test __maybe_unused,
 	fd = __event(HW_BREAKPOINT_R | HW_BREAKPOINT_W, (void *)&data1,
 		     sizeof(data1));
 	if (fd < 0)
-		return fd == -ENODEV ? TEST_SKIP : -1;
+		return -1;
 
 	tmp = data1;
 	WP_TEST_ASSERT_VAL(fd, "RW watchpoint", 1);
@@ -152,7 +150,7 @@ static int test__wp_modify(struct test_suite *test __maybe_unused, int subtest _
 
 	fd = __event(HW_BREAKPOINT_W, (void *)&data1, sizeof(data1));
 	if (fd < 0)
-		return fd == -ENODEV ? TEST_SKIP : -1;
+		return -1;
 
 	data1 = tmp;
 	WP_TEST_ASSERT_VAL(fd, "Modify watchpoint", 1);

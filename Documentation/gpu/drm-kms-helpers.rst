@@ -116,9 +116,6 @@ fbdev Helper Functions Reference
 .. kernel-doc:: drivers/gpu/drm/drm_fb_helper.c
    :export:
 
-.. kernel-doc:: drivers/gpu/drm/drm_fbdev_generic.c
-   :export:
-
 format Helper Functions Reference
 =================================
 

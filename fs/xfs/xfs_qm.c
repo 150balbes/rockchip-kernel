@@ -423,14 +423,6 @@ xfs_qm_dquot_isolate(
 		goto out_miss_busy;
 
 	/*
-	 * If something else is freeing this dquot and hasn't yet removed it
-	 * from the LRU, leave it for the freeing task to complete the freeing
-	 * process rather than risk it being free from under us here.
-	 */
-	if (dqp->q_flags & XFS_DQFLAG_FREEING)
-		goto out_miss_unlock;
-
-	/*
 	 * This dquot has acquired a reference in the meantime remove it from
 	 * the freelist and try again.
 	 */
@@ -449,8 +441,10 @@ xfs_qm_dquot_isolate(
 	 * skip it so there is time for the IO to complete before we try to
 	 * reclaim it again on the next LRU pass.
 	 */
-	if (!xfs_dqflock_nowait(dqp))
-		goto out_miss_unlock;
+	if (!xfs_dqflock_nowait(dqp)) {
+		xfs_dqunlock(dqp);
+		goto out_miss_busy;
+	}
 
 	if (XFS_DQ_IS_DIRTY(dqp)) {
 		struct xfs_buf	*bp = NULL;
@@ -484,8 +478,6 @@ xfs_qm_dquot_isolate(
 	XFS_STATS_INC(dqp->q_mount, xs_qm_dqreclaims);
 	return LRU_REMOVED;
 
-out_miss_unlock:
-	xfs_dqunlock(dqp);
 out_miss_busy:
 	trace_xfs_dqreclaim_busy(dqp);
 	XFS_STATS_INC(dqp->q_mount, xs_qm_dqreclaim_misses);

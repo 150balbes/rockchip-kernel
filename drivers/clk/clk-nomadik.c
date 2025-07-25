@@ -138,7 +138,7 @@ out_put:
 }
 
 /**
- * struct clk_pll - Nomadik PLL clock
+ * struct clk_pll1 - Nomadik PLL1 clock
  * @hw: corresponding clock hardware entry
  * @id: PLL instance: 1 or 2
  */

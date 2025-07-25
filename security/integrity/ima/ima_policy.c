@@ -71,30 +71,6 @@ struct ima_rule_opt_list {
 	char *items[];
 };
 
-/*
- * These comparators are needed nowhere outside of ima so just define them here.
- * This pattern should hopefully never be needed outside of ima.
- */
-static inline bool vfsuid_gt_kuid(vfsuid_t vfsuid, kuid_t kuid)
-{
-	return __vfsuid_val(vfsuid) > __kuid_val(kuid);
-}
-
-static inline bool vfsgid_gt_kgid(vfsgid_t vfsgid, kgid_t kgid)
-{
-	return __vfsgid_val(vfsgid) > __kgid_val(kgid);
-}
-
-static inline bool vfsuid_lt_kuid(vfsuid_t vfsuid, kuid_t kuid)
-{
-	return __vfsuid_val(vfsuid) < __kuid_val(kuid);
-}
-
-static inline bool vfsgid_lt_kgid(vfsgid_t vfsgid, kgid_t kgid)
-{
-	return __vfsgid_val(vfsgid) < __kgid_val(kgid);
-}
-
 struct ima_rule_entry {
 	struct list_head list;
 	int action;
@@ -109,8 +85,8 @@ struct ima_rule_entry {
 	kgid_t fgroup;
 	bool (*uid_op)(kuid_t cred_uid, kuid_t rule_uid);    /* Handlers for operators       */
 	bool (*gid_op)(kgid_t cred_gid, kgid_t rule_gid);
-	bool (*fowner_op)(vfsuid_t vfsuid, kuid_t rule_uid); /* vfsuid_eq_kuid(), vfsuid_gt_kuid(), vfsuid_lt_kuid() */
-	bool (*fgroup_op)(vfsgid_t vfsgid, kgid_t rule_gid); /* vfsgid_eq_kgid(), vfsgid_gt_kgid(), vfsgid_lt_kgid() */
+	bool (*fowner_op)(kuid_t cred_uid, kuid_t rule_uid); /* uid_eq(), uid_gt(), uid_lt() */
+	bool (*fgroup_op)(kgid_t cred_gid, kgid_t rule_gid); /* gid_eq(), gid_gt(), gid_lt() */
 	int pcr;
 	unsigned int allowed_algos; /* bitfield of allowed hash algorithms */
 	struct {
@@ -210,11 +186,11 @@ static struct ima_rule_entry default_appraise_rules[] __ro_after_init = {
 	.flags = IMA_FUNC | IMA_DIGSIG_REQUIRED},
 #endif
 #ifndef CONFIG_IMA_APPRAISE_SIGNED_INIT
-	{.action = APPRAISE, .fowner = GLOBAL_ROOT_UID, .fowner_op = &vfsuid_eq_kuid,
+	{.action = APPRAISE, .fowner = GLOBAL_ROOT_UID, .fowner_op = &uid_eq,
 	 .flags = IMA_FOWNER},
 #else
 	/* force signature */
-	{.action = APPRAISE, .fowner = GLOBAL_ROOT_UID, .fowner_op = &vfsuid_eq_kuid,
+	{.action = APPRAISE, .fowner = GLOBAL_ROOT_UID, .fowner_op = &uid_eq,
 	 .flags = IMA_FOWNER | IMA_DIGSIG_REQUIRED},
 #endif
 };
@@ -401,7 +377,8 @@ static void ima_free_rule(struct ima_rule_entry *entry)
 	kfree(entry);
 }
 
-static struct ima_rule_entry *ima_lsm_copy_rule(struct ima_rule_entry *entry)
+static struct ima_rule_entry *ima_lsm_copy_rule(struct ima_rule_entry *entry,
+						gfp_t gfp)
 {
 	struct ima_rule_entry *nentry;
 	int i;
@@ -410,7 +387,7 @@ static struct ima_rule_entry *ima_lsm_copy_rule(struct ima_rule_entry *entry)
 	 * Immutable elements are copied over as pointers and data; only
 	 * lsm rules can change
 	 */
-	nentry = kmemdup(entry, sizeof(*nentry), GFP_KERNEL);
+	nentry = kmemdup(entry, sizeof(*nentry), gfp);
 	if (!nentry)
 		return NULL;
 
@@ -425,7 +402,8 @@ static struct ima_rule_entry *ima_lsm_copy_rule(struct ima_rule_entry *entry)
 
 		ima_filter_rule_init(nentry->lsm[i].type, Audit_equal,
 				     nentry->lsm[i].args_p,
-				     &nentry->lsm[i].rule);
+				     &nentry->lsm[i].rule,
+				     gfp);
 		if (!nentry->lsm[i].rule)
 			pr_warn("rule for LSM \'%s\' is undefined\n",
 				nentry->lsm[i].args_p);
@@ -438,7 +416,7 @@ static int ima_lsm_update_rule(struct ima_rule_entry *entry)
 	int i;
 	struct ima_rule_entry *nentry;
 
-	nentry = ima_lsm_copy_rule(entry);
+	nentry = ima_lsm_copy_rule(entry, GFP_KERNEL);
 	if (!nentry)
 		return -ENOMEM;
 
@@ -624,12 +602,10 @@ static bool ima_match_rules(struct ima_rule_entry *rule,
 			return false;
 	}
 	if ((rule->flags & IMA_FOWNER) &&
-	    !rule->fowner_op(i_uid_into_vfsuid(mnt_userns, inode),
-			     rule->fowner))
+	    !rule->fowner_op(i_uid_into_mnt(mnt_userns, inode), rule->fowner))
 		return false;
 	if ((rule->flags & IMA_FGROUP) &&
-	    !rule->fgroup_op(i_gid_into_vfsgid(mnt_userns, inode),
-			     rule->fgroup))
+	    !rule->fgroup_op(i_gid_into_mnt(mnt_userns, inode), rule->fgroup))
 		return false;
 	for (i = 0; i < MAX_LSM_RULES; i++) {
 		int rc = 0;
@@ -664,7 +640,7 @@ retry:
 		}
 
 		if (rc == -ESTALE && !rule_reinitialized) {
-			lsm_rule = ima_lsm_copy_rule(rule);
+			lsm_rule = ima_lsm_copy_rule(rule, GFP_ATOMIC);
 			if (lsm_rule) {
 				rule_reinitialized = true;
 				goto retry;
@@ -720,6 +696,7 @@ static int get_subaction(struct ima_rule_entry *rule, enum ima_hooks func)
  * @secid: LSM secid of the task to be validated
  * @func: IMA hook identifier
  * @mask: requested action (MAY_READ | MAY_WRITE | MAY_APPEND | MAY_EXEC)
+ * @flags: IMA actions to consider (e.g. IMA_MEASURE | IMA_APPRAISE)
  * @pcr: set the pcr to extend
  * @template_desc: the template that should be used for this rule
  * @func_data: func specific data, may be NULL
@@ -1138,7 +1115,8 @@ static int ima_lsm_rule_init(struct ima_rule_entry *entry,
 	entry->lsm[lsm_rule].type = audit_type;
 	result = ima_filter_rule_init(entry->lsm[lsm_rule].type, Audit_equal,
 				      entry->lsm[lsm_rule].args_p,
-				      &entry->lsm[lsm_rule].rule);
+				      &entry->lsm[lsm_rule].rule,
+				      GFP_KERNEL);
 	if (!entry->lsm[lsm_rule].rule) {
 		pr_warn("rule for LSM \'%s\' is undefined\n",
 			entry->lsm[lsm_rule].args_p);
@@ -1416,8 +1394,8 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 	entry->fgroup = INVALID_GID;
 	entry->uid_op = &uid_eq;
 	entry->gid_op = &gid_eq;
-	entry->fowner_op = &vfsuid_eq_kuid;
-	entry->fgroup_op = &vfsgid_eq_kgid;
+	entry->fowner_op = &uid_eq;
+	entry->fgroup_op = &gid_eq;
 	entry->action = UNKNOWN;
 	while ((p = strsep(&rule, " \t")) != NULL) {
 		substring_t args[MAX_OPT_ARGS];
@@ -1695,11 +1673,11 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 			}
 			break;
 		case Opt_fowner_gt:
-			entry->fowner_op = &vfsuid_gt_kuid;
+			entry->fowner_op = &uid_gt;
 			fallthrough;
 		case Opt_fowner_lt:
 			if (token == Opt_fowner_lt)
-				entry->fowner_op = &vfsuid_lt_kuid;
+				entry->fowner_op = &uid_lt;
 			fallthrough;
 		case Opt_fowner_eq:
 			ima_log_string_op(ab, "fowner", args[0].from, token);
@@ -1721,11 +1699,11 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 			}
 			break;
 		case Opt_fgroup_gt:
-			entry->fgroup_op = &vfsgid_gt_kgid;
+			entry->fgroup_op = &gid_gt;
 			fallthrough;
 		case Opt_fgroup_lt:
 			if (token == Opt_fgroup_lt)
-				entry->fgroup_op = &vfsgid_lt_kgid;
+				entry->fgroup_op = &gid_lt;
 			fallthrough;
 		case Opt_fgroup_eq:
 			ima_log_string_op(ab, "fgroup", args[0].from, token);
@@ -1911,7 +1889,7 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 
 /**
  * ima_parse_add_rule - add a rule to ima_policy_rules
- * @rule - ima measurement policy rule
+ * @rule: ima measurement policy rule
  *
  * Avoid locking by allowing just one writer at a time in ima_write_policy()
  * Returns the length of the rule parsed, an error code on failure
@@ -2196,9 +2174,9 @@ int ima_policy_show(struct seq_file *m, void *v)
 
 	if (entry->flags & IMA_FOWNER) {
 		snprintf(tbuf, sizeof(tbuf), "%d", __kuid_val(entry->fowner));
-		if (entry->fowner_op == &vfsuid_gt_kuid)
+		if (entry->fowner_op == &uid_gt)
 			seq_printf(m, pt(Opt_fowner_gt), tbuf);
-		else if (entry->fowner_op == &vfsuid_lt_kuid)
+		else if (entry->fowner_op == &uid_lt)
 			seq_printf(m, pt(Opt_fowner_lt), tbuf);
 		else
 			seq_printf(m, pt(Opt_fowner_eq), tbuf);
@@ -2207,9 +2185,9 @@ int ima_policy_show(struct seq_file *m, void *v)
 
 	if (entry->flags & IMA_FGROUP) {
 		snprintf(tbuf, sizeof(tbuf), "%d", __kgid_val(entry->fgroup));
-		if (entry->fgroup_op == &vfsgid_gt_kgid)
+		if (entry->fgroup_op == &gid_gt)
 			seq_printf(m, pt(Opt_fgroup_gt), tbuf);
-		else if (entry->fgroup_op == &vfsgid_lt_kgid)
+		else if (entry->fgroup_op == &gid_lt)
 			seq_printf(m, pt(Opt_fgroup_lt), tbuf);
 		else
 			seq_printf(m, pt(Opt_fgroup_eq), tbuf);

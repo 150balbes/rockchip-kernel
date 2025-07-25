@@ -942,12 +942,12 @@ static const struct cred *get_backchannel_cred(struct nfs4_client *clp, struct r
 	} else {
 		struct cred *kcred;
 
-		kcred = prepare_kernel_cred(&init_task);
+		kcred = prepare_kernel_cred(NULL);
 		if (!kcred)
 			return NULL;
 
-		kcred->uid = ses->se_cb_sec.uid;
-		kcred->gid = ses->se_cb_sec.gid;
+		kcred->fsuid = ses->se_cb_sec.uid;
+		kcred->fsgid = ses->se_cb_sec.gid;
 		return kcred;
 	}
 }

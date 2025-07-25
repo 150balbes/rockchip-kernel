@@ -18,6 +18,7 @@
 
 #include <linux/mali/mali_utgard.h>
 #include <mali_osk.h>
+#include <soc/rockchip/rockchip_opp_select.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,9 +29,12 @@ struct mali_device {
 	struct device *dev;
 #ifdef CONFIG_HAVE_CLK
 	struct clk *clock;
+	struct clk_bulk_data *clks;
+	int num_clks;
 #endif
 #ifdef CONFIG_REGULATOR
 	struct regulator *regulator;
+	struct opp_table *opp_table;
 #endif
 #ifdef CONFIG_PM_DEVFREQ
 	struct devfreq_dev_profile devfreq_profile;
@@ -38,6 +42,7 @@ struct mali_device {
 	unsigned long current_freq;
 	unsigned long current_voltage;
 	struct monitor_dev_info *mdev_info;
+	struct rockchip_opp_info opp_info;
 #ifdef CONFIG_DEVFREQ_THERMAL
 	struct thermal_cooling_device *devfreq_cooling;
 #endif

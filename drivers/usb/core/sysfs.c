@@ -13,7 +13,6 @@
 
 
 #include <linux/kernel.h>
-#include <linux/kstrtox.h>
 #include <linux/string.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
@@ -506,7 +505,7 @@ static ssize_t usb2_hardware_lpm_store(struct device *dev,
 	if (ret < 0)
 		return -EINTR;
 
-	ret = kstrtobool(buf, &value);
+	ret = strtobool(buf, &value);
 
 	if (!ret) {
 		udev->usb2_hw_lpm_allowed = value;
@@ -869,11 +868,7 @@ read_descriptors(struct file *filp, struct kobject *kobj,
 	size_t srclen, n;
 	int cfgno;
 	void *src;
-	int retval;
 
-	retval = usb_lock_device_interruptible(udev);
-	if (retval < 0)
-		return -EINTR;
 	/* The binary attribute begins with the device descriptor.
 	 * Following that are the raw descriptor entries for all the
 	 * configurations (config plus subsidiary descriptors).
@@ -898,7 +893,6 @@ read_descriptors(struct file *filp, struct kobject *kobj,
 			off -= srclen;
 		}
 	}
-	usb_unlock_device(udev);
 	return count - nleft;
 }
 
@@ -976,7 +970,7 @@ static ssize_t interface_authorized_default_store(struct device *dev,
 	int rc = count;
 	bool val;
 
-	if (kstrtobool(buf, &val) != 0)
+	if (strtobool(buf, &val) != 0)
 		return -EINVAL;
 
 	if (val)
@@ -1176,14 +1170,24 @@ static ssize_t interface_authorized_store(struct device *dev,
 {
 	struct usb_interface *intf = to_usb_interface(dev);
 	bool val;
+	struct kernfs_node *kn;
 
-	if (kstrtobool(buf, &val) != 0)
+	if (strtobool(buf, &val) != 0)
 		return -EINVAL;
 
-	if (val)
+	if (val) {
 		usb_authorize_interface(intf);
-	else
-		usb_deauthorize_interface(intf);
+	} else {
+		/*
+		 * Prevent deadlock if another process is concurrently
+		 * trying to unregister intf.
+		 */
+		kn = sysfs_break_active_protection(&dev->kobj, &attr->attr);
+		if (kn) {
+			usb_deauthorize_interface(intf);
+			sysfs_unbreak_active_protection(kn);
+		}
+	}
 
 	return count;
 }

@@ -18,6 +18,5 @@
 
 &mmc0 {	/* On-SoM eMMC */
 	bus-width = <8>;
-	clk-phase-sd-hs = <0>, <135>;
 	status = "okay";
 };

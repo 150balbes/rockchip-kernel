@@ -26,12 +26,12 @@
 		reg = <0x80000000 0x10000000>; /* 256 MB */
 	};
 
-	vmmc_fixed: vmmc {
-		compatible = "regulator-fixed";
-		regulator-name = "vmmc_fixed";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-	};
+        vmmc_fixed: vmmc {
+                compatible = "regulator-fixed";
+                regulator-name = "vmmc_fixed";
+                regulator-min-microvolt = <3300000>;
+                regulator-max-microvolt = <3300000>;
+        };
 
 	gpio-keys {
 		compatible = "gpio-keys-polled";
@@ -176,7 +176,7 @@
 };
 
 &davinci_mdio {
-	status = "okay";
+	     status = "okay";
 };
 
 &dss {
@@ -227,7 +227,7 @@
 };
 
 &mmc3 {
-	status = "disabled";
+      status = "disabled";
 };
 
 &usbhshost {
@@ -268,13 +268,6 @@
 		pinctrl-single,pins = <
 			OMAP3_CORE1_IOPAD(0x21c2, PIN_INPUT_PULLUP | MUX_MODE0)  /* i2c3_scl */
 			OMAP3_CORE1_IOPAD(0x21c4, PIN_INPUT_PULLUP | MUX_MODE0)  /* i2c3_sda */
-		>;
-	};
-
-	leds_pins: pinmux_leds_pins {
-		pinctrl-single,pins = <
-			OMAP3_WKUP_IOPAD(0x2a24, PIN_OUTPUT_PULLUP | MUX_MODE4)	/* jtag_emu0.gpio_11 */
-			OMAP3_WKUP_IOPAD(0x2a26, PIN_OUTPUT_PULLUP | MUX_MODE4)	/* jtag_emu1.gpio_31 */
 		>;
 	};
 
@@ -352,6 +345,15 @@
 			OMAP3430_CORE2_IOPAD(0x25e6, PIN_INPUT | MUX_MODE3)	/* etk_d5.hsusb1_data5 */
 			OMAP3430_CORE2_IOPAD(0x25e8, PIN_INPUT | MUX_MODE3)	/* etk_d6.hsusb1_data6 */
 			OMAP3430_CORE2_IOPAD(0x25e2, PIN_INPUT | MUX_MODE3)	/* etk_d3.hsusb1_data7 */
+		>;
+	};
+};
+
+&omap3_pmx_wkup {
+	leds_pins: pinmux_leds_pins {
+		pinctrl-single,pins = <
+			OMAP3_WKUP_IOPAD(0x2a24, PIN_OUTPUT_PULLUP | MUX_MODE4)	/* jtag_emu0.gpio_11 */
+			OMAP3_WKUP_IOPAD(0x2a26, PIN_OUTPUT_PULLUP | MUX_MODE4)	/* jtag_emu1.gpio_31 */
 		>;
 	};
 };

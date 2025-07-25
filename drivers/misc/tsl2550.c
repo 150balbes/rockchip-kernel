@@ -331,7 +331,8 @@ static int tsl2550_init_client(struct i2c_client *client)
  */
 
 static struct i2c_driver tsl2550_driver;
-static int tsl2550_probe(struct i2c_client *client)
+static int tsl2550_probe(struct i2c_client *client,
+				   const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct tsl2550_data *data;
@@ -437,7 +438,7 @@ static struct i2c_driver tsl2550_driver = {
 		.of_match_table = tsl2550_of_match,
 		.pm	= TSL2550_PM_OPS,
 	},
-	.probe_new = tsl2550_probe,
+	.probe	= tsl2550_probe,
 	.remove	= tsl2550_remove,
 	.id_table = tsl2550_id,
 };

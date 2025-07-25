@@ -24,13 +24,11 @@
 #include "../perf.h"
 #include "asm/bug.h"
 #include "bpf-event.h"
-#include "util/event.h"
 #include "util/string2.h"
 #include "util/perf_api_probe.h"
 #include "util/evsel_fprintf.h"
 #include "util/evlist-hybrid.h"
 #include "util/pmu.h"
-#include "util/sample.h"
 #include <signal.h>
 #include <unistd.h>
 #include <sched.h>
@@ -230,7 +228,7 @@ out:
 	return err;
 }
 
-static void evlist__set_leader(struct evlist *evlist)
+void evlist__set_leader(struct evlist *evlist)
 {
 	perf_evlist__set_leader(&evlist->core);
 }
@@ -254,6 +252,9 @@ static struct evsel *evlist__dummy_event(struct evlist *evlist)
 		.type	= PERF_TYPE_SOFTWARE,
 		.config = PERF_COUNT_SW_DUMMY,
 		.size	= sizeof(attr), /* to capture ABI version */
+		/* Avoid frequency mode for dummy events to avoid associated timers. */
+		.freq = 0,
+		.sample_period = 1,
 	};
 
 	return evsel__new_idx(&attr, evlist->core.nr_entries);
@@ -280,8 +281,6 @@ struct evsel *evlist__add_aux_dummy(struct evlist *evlist, bool system_wide)
 	evsel->core.attr.exclude_kernel = 1;
 	evsel->core.attr.exclude_guest = 1;
 	evsel->core.attr.exclude_hv = 1;
-	evsel->core.attr.freq = 0;
-	evsel->core.attr.sample_period = 1;
 	evsel->core.system_wide = system_wide;
 	evsel->no_aux_samples = true;
 	evsel->name = strdup("dummy:u");
@@ -290,7 +289,6 @@ struct evsel *evlist__add_aux_dummy(struct evlist *evlist, bool system_wide)
 	return evsel;
 }
 
-#ifdef HAVE_LIBTRACEEVENT
 struct evsel *evlist__add_sched_switch(struct evlist *evlist, bool system_wide)
 {
 	struct evsel *evsel = evsel__newtp_idx("sched", "sched_switch", 0);
@@ -306,8 +304,7 @@ struct evsel *evlist__add_sched_switch(struct evlist *evlist, bool system_wide)
 
 	evlist__add(evlist, evsel);
 	return evsel;
-}
-#endif
+};
 
 int evlist__add_attrs(struct evlist *evlist, struct perf_event_attr *attrs, size_t nr_attrs)
 {
@@ -378,7 +375,6 @@ struct evsel *evlist__find_tracepoint_by_name(struct evlist *evlist, const char 
 	return NULL;
 }
 
-#ifdef HAVE_LIBTRACEEVENT
 int evlist__add_newtp(struct evlist *evlist, const char *sys, const char *name, void *handler)
 {
 	struct evsel *evsel = evsel__newtp(sys, name);
@@ -390,7 +386,6 @@ int evlist__add_newtp(struct evlist *evlist, const char *sys, const char *name, 
 	evlist__add(evlist, evsel);
 	return 0;
 }
-#endif
 
 struct evlist_cpu_iterator evlist__cpu_begin(struct evlist *evlist, struct affinity *affinity)
 {

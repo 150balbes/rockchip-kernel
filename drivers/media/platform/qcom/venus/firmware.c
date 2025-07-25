@@ -38,8 +38,8 @@ static void venus_reset_cpu(struct venus_core *core)
 	writel(fw_size, wrapper_base + WRAPPER_FW_END_ADDR);
 	writel(0, wrapper_base + WRAPPER_CPA_START_ADDR);
 	writel(fw_size, wrapper_base + WRAPPER_CPA_END_ADDR);
-	writel(0, wrapper_base + WRAPPER_NONPIX_START_ADDR);
-	writel(0, wrapper_base + WRAPPER_NONPIX_END_ADDR);
+	writel(fw_size, wrapper_base + WRAPPER_NONPIX_START_ADDR);
+	writel(fw_size, wrapper_base + WRAPPER_NONPIX_END_ADDR);
 
 	if (IS_V6(core)) {
 		/* Bring XTSS out of reset */
@@ -68,11 +68,9 @@ int venus_set_hw_state(struct venus_core *core, bool resume)
 		venus_reset_cpu(core);
 	} else {
 		if (IS_V6(core))
-			writel(WRAPPER_XTSS_SW_RESET_BIT,
-			       core->wrapper_tz_base + WRAPPER_TZ_XTSS_SW_RESET);
+			writel(1, core->wrapper_tz_base + WRAPPER_TZ_XTSS_SW_RESET);
 		else
-			writel(WRAPPER_A9SS_SW_RESET_BIT,
-			       core->wrapper_base + WRAPPER_A9SS_SW_RESET);
+			writel(1, core->wrapper_base + WRAPPER_A9SS_SW_RESET);
 	}
 
 	return 0;
@@ -181,15 +179,17 @@ static int venus_shutdown_no_tz(struct venus_core *core)
 
 	if (IS_V6(core)) {
 		/* Assert the reset to XTSS */
-		reg = readl(wrapper_tz_base + WRAPPER_TZ_XTSS_SW_RESET);
+		reg = readl_relaxed(wrapper_tz_base + WRAPPER_TZ_XTSS_SW_RESET);
 		reg |= WRAPPER_XTSS_SW_RESET_BIT;
-		writel(reg, wrapper_tz_base + WRAPPER_TZ_XTSS_SW_RESET);
+		writel_relaxed(reg, wrapper_tz_base + WRAPPER_TZ_XTSS_SW_RESET);
 	} else {
 		/* Assert the reset to ARM9 */
-		reg = readl(wrapper_base + WRAPPER_A9SS_SW_RESET);
+		reg = readl_relaxed(wrapper_base + WRAPPER_A9SS_SW_RESET);
 		reg |= WRAPPER_A9SS_SW_RESET_BIT;
-		writel(reg, wrapper_base + WRAPPER_A9SS_SW_RESET);
+		writel_relaxed(reg, wrapper_base + WRAPPER_A9SS_SW_RESET);
 	}
+	/* Make sure reset is asserted before the mapping is removed */
+	mb();
 
 	iommu = core->fw.iommu_domain;
 

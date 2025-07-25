@@ -22,17 +22,17 @@
 
 	leds {
 		compatible = "gpio-leds";
-		led-hps0 {
+		hps0 {
 			label = "hps_led0";
 			gpios = <&portb 20 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-hps1 {
+		hps1 {
 			label = "hps_led1";
 			gpios = <&portb 19 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-hps2 {
+		hps2 {
 			label = "hps_led2";
 			gpios = <&portb 21 GPIO_ACTIVE_HIGH>;
 		};
@@ -105,7 +105,6 @@
 	cap-mmc-highspeed;
 	broken-cd;
 	bus-width = <4>;
-	clk-phase-sd-hs = <0>, <135>;
 };
 
 &osc1 {
@@ -129,7 +128,7 @@
 	status = "okay";
 	clock-frequency = <100000>;
 	i2c-sda-falling-time-ns = <890>;  /* hcnt */
-	i2c-sdl-falling-time-ns = <890>;  /* lcnt */
+	i2c-scl-falling-time-ns = <890>;  /* lcnt */
 
 	adc@14 {
 		compatible = "lltc,ltc2497";

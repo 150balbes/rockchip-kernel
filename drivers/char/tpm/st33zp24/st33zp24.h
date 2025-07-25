@@ -7,9 +7,6 @@
 #ifndef __LOCAL_ST33ZP24_H__
 #define __LOCAL_ST33ZP24_H__
 
-#define TPM_ST33_I2C		"st33zp24-i2c"
-#define TPM_ST33_SPI		"st33zp24-spi"
-
 #define TPM_WRITE_DIRECTION	0x80
 #define ST33ZP24_BUFSIZE	2048
 
@@ -20,7 +17,7 @@ struct st33zp24_dev {
 	int locality;
 	int irq;
 	u32 intrs;
-	struct gpio_desc *io_lpcpd;
+	int io_lpcpd;
 	wait_queue_head_t read_queue;
 };
 
@@ -36,6 +33,6 @@ int st33zp24_pm_resume(struct device *dev);
 #endif
 
 int st33zp24_probe(void *phy_id, const struct st33zp24_phy_ops *ops,
-		   struct device *dev, int irq);
+		   struct device *dev, int irq, int io_lpcpd);
 void st33zp24_remove(struct tpm_chip *chip);
 #endif /* __LOCAL_ST33ZP24_H__ */

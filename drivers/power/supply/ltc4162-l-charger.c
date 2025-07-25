@@ -819,7 +819,8 @@ static void ltc4162l_clear_interrupts(struct ltc4162l_info *info)
 	regmap_write(info->regmap, LTC4162L_CHARGE_STATUS_ALERTS_REG, 0);
 }
 
-static int ltc4162l_probe(struct i2c_client *client)
+static int ltc4162l_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct device *dev = &client->dev;
@@ -915,7 +916,7 @@ static const struct of_device_id ltc4162l_of_match[] = {
 MODULE_DEVICE_TABLE(of, ltc4162l_of_match);
 
 static struct i2c_driver ltc4162l_driver = {
-	.probe_new	= ltc4162l_probe,
+	.probe		= ltc4162l_probe,
 	.alert		= ltc4162l_alert,
 	.id_table	= ltc4162l_i2c_id_table,
 	.driver = {

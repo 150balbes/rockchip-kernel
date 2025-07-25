@@ -670,7 +670,6 @@ static void intel_fbc_nuke(struct intel_fbc *fbc)
 {
 	struct drm_i915_private *i915 = fbc->i915;
 
-	lockdep_assert_held(&fbc->lock);
 	drm_WARN_ON(&i915->drm, fbc->flip_pending);
 
 	trace_intel_fbc_nuke(fbc->state.plane);
@@ -680,8 +679,6 @@ static void intel_fbc_nuke(struct intel_fbc *fbc)
 
 static void intel_fbc_activate(struct intel_fbc *fbc)
 {
-	lockdep_assert_held(&fbc->lock);
-
 	intel_fbc_hw_activate(fbc);
 	intel_fbc_nuke(fbc);
 
@@ -690,7 +687,9 @@ static void intel_fbc_activate(struct intel_fbc *fbc)
 
 static void intel_fbc_deactivate(struct intel_fbc *fbc, const char *reason)
 {
-	lockdep_assert_held(&fbc->lock);
+	struct drm_i915_private *i915 = fbc->i915;
+
+	drm_WARN_ON(&i915->drm, !mutex_is_locked(&fbc->lock));
 
 	if (fbc->active)
 		intel_fbc_hw_deactivate(fbc);
@@ -1010,8 +1009,7 @@ static bool intel_fbc_is_fence_ok(const struct intel_plane_state *plane_state)
 {
 	struct drm_i915_private *i915 = to_i915(plane_state->uapi.plane->dev);
 
-	/*
-	 * The use of a CPU fence is one of two ways to detect writes by the
+	/* The use of a CPU fence is one of two ways to detect writes by the
 	 * CPU to the scanout and trigger updates to the FBC.
 	 *
 	 * The other method is by software tracking (see
@@ -1021,6 +1019,12 @@ static bool intel_fbc_is_fence_ok(const struct intel_plane_state *plane_state)
 	 * Note that is possible for a tiled surface to be unmappable (and
 	 * so have no fence associated with it) due to aperture constraints
 	 * at the time of pinning.
+	 *
+	 * FIXME with 90/270 degree rotation we should use the fence on
+	 * the normal GTT view (the rotated view doesn't even have a
+	 * fence). Would need changes to the FBC fence Y offset as well.
+	 * For now this will effectively disable FBC with 90/270 degree
+	 * rotation.
 	 */
 	return DISPLAY_VER(i915) >= 9 ||
 		(plane_state->flags & PLANE_HAS_FENCE &&
@@ -1183,7 +1187,7 @@ static bool intel_fbc_can_flip_nuke(struct intel_atomic_state *state,
 	const struct drm_framebuffer *old_fb = old_plane_state->hw.fb;
 	const struct drm_framebuffer *new_fb = new_plane_state->hw.fb;
 
-	if (intel_crtc_needs_modeset(new_crtc_state))
+	if (drm_atomic_crtc_needs_modeset(&new_crtc_state->uapi))
 		return false;
 
 	if (!intel_fbc_is_ok(old_plane_state) ||
@@ -1222,8 +1226,6 @@ static bool __intel_fbc_pre_update(struct intel_atomic_state *state,
 	struct drm_i915_private *i915 = to_i915(state->base.dev);
 	struct intel_fbc *fbc = plane->fbc;
 	bool need_vblank_wait = false;
-
-	lockdep_assert_held(&fbc->lock);
 
 	fbc->flip_pending = true;
 
@@ -1282,7 +1284,7 @@ static void __intel_fbc_disable(struct intel_fbc *fbc)
 	struct drm_i915_private *i915 = fbc->i915;
 	struct intel_plane *plane = fbc->state.plane;
 
-	lockdep_assert_held(&fbc->lock);
+	drm_WARN_ON(&i915->drm, !mutex_is_locked(&fbc->lock));
 	drm_WARN_ON(&i915->drm, fbc->active);
 
 	drm_dbg_kms(&i915->drm, "Disabling FBC on [PLANE:%d:%s]\n",
@@ -1297,9 +1299,9 @@ static void __intel_fbc_disable(struct intel_fbc *fbc)
 
 static void __intel_fbc_post_update(struct intel_fbc *fbc)
 {
-	lockdep_assert_held(&fbc->lock);
+	struct drm_i915_private *i915 = fbc->i915;
 
-	fbc->flip_pending = false;
+	drm_WARN_ON(&i915->drm, !mutex_is_locked(&fbc->lock));
 
 	if (!fbc->busy_bits)
 		intel_fbc_activate(fbc);
@@ -1322,8 +1324,10 @@ void intel_fbc_post_update(struct intel_atomic_state *state,
 
 		mutex_lock(&fbc->lock);
 
-		if (fbc->state.plane == plane)
+		if (fbc->state.plane == plane) {
+			fbc->flip_pending = false;
 			__intel_fbc_post_update(fbc);
+		}
 
 		mutex_unlock(&fbc->lock);
 	}
@@ -1433,8 +1437,6 @@ static void __intel_fbc_enable(struct intel_atomic_state *state,
 		intel_atomic_get_new_plane_state(state, plane);
 	struct intel_fbc *fbc = plane->fbc;
 
-	lockdep_assert_held(&fbc->lock);
-
 	if (fbc->state.plane) {
 		if (fbc->state.plane != plane)
 			return;
@@ -1520,8 +1522,7 @@ void intel_fbc_update(struct intel_atomic_state *state,
 
 		mutex_lock(&fbc->lock);
 
-		if (intel_crtc_needs_fastset(crtc_state) &&
-		    plane_state->no_fbc_reason) {
+		if (crtc_state->update_pipe && plane_state->no_fbc_reason) {
 			if (fbc->state.plane == plane)
 				__intel_fbc_disable(fbc);
 		} else {

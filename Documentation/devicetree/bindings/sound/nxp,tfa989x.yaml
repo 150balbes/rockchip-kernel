@@ -10,7 +10,7 @@ maintainers:
   - Stephan Gerhold <stephan@gerhold.net>
 
 allOf:
-  - $ref: dai-common.yaml#
+  - $ref: name-prefix.yaml#
 
 properties:
   compatible:

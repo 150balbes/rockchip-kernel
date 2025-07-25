@@ -95,7 +95,6 @@ all: run
 sysroot: sysroot/$(ARCH)/include
 
 sysroot/$(ARCH)/include:
-	$(Q)rm -rf sysroot/$(ARCH) sysroot/sysroot
 	$(QUIET_MKDIR)mkdir -p sysroot
 	$(Q)$(MAKE) -C ../../../include/nolibc ARCH=$(ARCH) OUTPUT=$(CURDIR)/sysroot/ headers_standalone
 	$(Q)mv sysroot/sysroot sysroot/$(ARCH)
@@ -134,5 +133,3 @@ clean:
 	$(Q)rm -rf initramfs
 	$(call QUIET_CLEAN, run.out)
 	$(Q)rm -rf run.out
-
-.PHONY: sysroot/$(ARCH)/include

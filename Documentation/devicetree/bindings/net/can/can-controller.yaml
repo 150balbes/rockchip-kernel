@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/net/can/can-controller.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: CAN Controller Common Properties
+title: CAN Controller Generic Binding
 
 maintainers:
   - Marc Kleine-Budde <mkl@pengutronix.de>

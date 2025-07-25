@@ -28,7 +28,7 @@ static ssize_t online_show(struct device *dev, struct device_attribute *attr,
 {
 	struct fieldbus_dev *fb = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%d\n", !!fb->online);
+	return sprintf(buf, "%d\n", !!fb->online);
 }
 static DEVICE_ATTR_RO(online);
 
@@ -39,7 +39,7 @@ static ssize_t enabled_show(struct device *dev, struct device_attribute *attr,
 
 	if (!fb->enable_get)
 		return -EINVAL;
-	return sysfs_emit(buf, "%d\n", !!fb->enable_get(fb));
+	return sprintf(buf, "%d\n", !!fb->enable_get(fb));
 }
 
 static ssize_t enabled_store(struct device *dev, struct device_attribute *attr,
@@ -66,8 +66,11 @@ static ssize_t card_name_show(struct device *dev, struct device_attribute *attr,
 {
 	struct fieldbus_dev *fb = dev_get_drvdata(dev);
 
-	/* card_name was provided by child driver. */
-	return sysfs_emit(buf, "%s\n", fb->card_name);
+	/*
+	 * card_name was provided by child driver, could potentially be long.
+	 * protect against buffer overrun.
+	 */
+	return snprintf(buf, PAGE_SIZE, "%s\n", fb->card_name);
 }
 static DEVICE_ATTR_RO(card_name);
 
@@ -76,7 +79,7 @@ static ssize_t read_area_size_show(struct device *dev,
 {
 	struct fieldbus_dev *fb = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%zu\n", fb->read_area_sz);
+	return sprintf(buf, "%zu\n", fb->read_area_sz);
 }
 static DEVICE_ATTR_RO(read_area_size);
 
@@ -85,7 +88,7 @@ static ssize_t write_area_size_show(struct device *dev,
 {
 	struct fieldbus_dev *fb = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%zu\n", fb->write_area_sz);
+	return sprintf(buf, "%zu\n", fb->write_area_sz);
 }
 static DEVICE_ATTR_RO(write_area_size);
 
@@ -113,7 +116,7 @@ static ssize_t fieldbus_type_show(struct device *dev,
 		break;
 	}
 
-	return sysfs_emit(buf, "%s\n", t);
+	return sprintf(buf, "%s\n", t);
 }
 static DEVICE_ATTR_RO(fieldbus_type);
 

@@ -10,11 +10,7 @@
  */
 #include <linux/dsa/8021q.h>
 #include <linux/dsa/ocelot.h>
-
-#include "tag.h"
-#include "tag_8021q.h"
-
-#define OCELOT_8021Q_NAME "ocelot-8021q"
+#include "dsa_priv.h"
 
 struct ocelot_8021q_tagger_private {
 	struct ocelot_8021q_tagger_data data; /* Must be first */
@@ -123,7 +119,7 @@ static int ocelot_connect(struct dsa_switch *ds)
 }
 
 static const struct dsa_device_ops ocelot_8021q_netdev_ops = {
-	.name			= OCELOT_8021Q_NAME,
+	.name			= "ocelot-8021q",
 	.proto			= DSA_TAG_PROTO_OCELOT_8021Q,
 	.xmit			= ocelot_xmit,
 	.rcv			= ocelot_rcv,
@@ -134,6 +130,6 @@ static const struct dsa_device_ops ocelot_8021q_netdev_ops = {
 };
 
 MODULE_LICENSE("GPL v2");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_OCELOT_8021Q, OCELOT_8021Q_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_OCELOT_8021Q);
 
 module_dsa_tag_driver(ocelot_8021q_netdev_ops);

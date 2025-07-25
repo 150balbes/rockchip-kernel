@@ -58,6 +58,12 @@ int snd_sof_load_firmware_raw(struct snd_sof_dev *sdev)
 			fw_filename, ret);
 	}
 
+	/*
+	 * Until the platform code is switched to use the new container the fw
+	 * and payload offset must be set in plat_data
+	 */
+	plat_data->fw = sdev->basefw.fw;
+	plat_data->fw_offset = sdev->basefw.payload_offset;
 err:
 	kfree(fw_filename);
 
@@ -67,6 +73,7 @@ EXPORT_SYMBOL(snd_sof_load_firmware_raw);
 
 int snd_sof_load_firmware_memcpy(struct snd_sof_dev *sdev)
 {
+	struct snd_sof_pdata *plat_data = sdev->pdata;
 	int ret;
 
 	ret = snd_sof_load_firmware_raw(sdev);
@@ -101,6 +108,7 @@ int snd_sof_load_firmware_memcpy(struct snd_sof_dev *sdev)
 error:
 	release_firmware(sdev->basefw.fw);
 	sdev->basefw.fw = NULL;
+	plat_data->fw = NULL;
 	return ret;
 
 }
@@ -164,9 +172,6 @@ int snd_sof_run_firmware(struct snd_sof_dev *sdev)
 	if (sdev->fw_state == SOF_FW_BOOT_READY_FAILED)
 		return -EIO; /* FW boots but fw_ready op failed */
 
-	dev_dbg(sdev->dev, "firmware boot complete\n");
-	sof_set_fw_state(sdev, SOF_FW_BOOT_COMPLETE);
-
 	/* perform post fw run operations */
 	ret = snd_sof_dsp_post_fw_run(sdev);
 	if (ret < 0) {
@@ -174,8 +179,11 @@ int snd_sof_run_firmware(struct snd_sof_dev *sdev)
 		return ret;
 	}
 
-	if (sdev->ipc->ops->post_fw_boot)
-		return sdev->ipc->ops->post_fw_boot(sdev);
+	dev_dbg(sdev->dev, "firmware boot complete\n");
+	sof_set_fw_state(sdev, SOF_FW_BOOT_COMPLETE);
+
+	if (sdev->first_boot && sdev->ipc->ops->fw_loader->query_fw_configuration)
+		return sdev->ipc->ops->fw_loader->query_fw_configuration(sdev);
 
 	return 0;
 }
@@ -186,5 +194,6 @@ void snd_sof_fw_unload(struct snd_sof_dev *sdev)
 	/* TODO: support module unloading at runtime */
 	release_firmware(sdev->basefw.fw);
 	sdev->basefw.fw = NULL;
+	sdev->pdata->fw = NULL;
 }
 EXPORT_SYMBOL(snd_sof_fw_unload);

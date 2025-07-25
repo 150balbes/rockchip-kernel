@@ -25,15 +25,15 @@
  *
  **************************************************************************/
 
-#include "vmwgfx_kms.h"
-#include "vmw_surface_cache.h"
-
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_rect.h>
 #include <drm/drm_sysfs.h>
+#include <drm/drm_edid.h>
+
+#include "vmwgfx_kms.h"
 
 void vmw_du_cleanup(struct vmw_display_unit *du)
 {
@@ -52,9 +52,9 @@ void vmw_du_cleanup(struct vmw_display_unit *du)
  * Display Unit Cursor functions
  */
 
-static int vmw_du_cursor_plane_unmap_cm(struct vmw_plane_state *vps);
 static void vmw_cursor_update_mob(struct vmw_private *dev_priv,
-				  struct vmw_plane_state *vps,
+				  struct ttm_buffer_object *bo,
+				  struct ttm_bo_kmap_obj *map,
 				  u32 *image, u32 width, u32 height,
 				  u32 hotspotX, u32 hotspotY);
 
@@ -63,22 +63,22 @@ struct vmw_svga_fifo_cmd_define_cursor {
 	SVGAFifoCmdDefineAlphaCursor cursor;
 };
 
-/**
- * vmw_send_define_cursor_cmd - queue a define cursor command
- * @dev_priv: the private driver struct
- * @image: buffer which holds the cursor image
- * @width: width of the mouse cursor image
- * @height: height of the mouse cursor image
- * @hotspotX: the horizontal position of mouse hotspot
- * @hotspotY: the vertical position of mouse hotspot
- */
-static void vmw_send_define_cursor_cmd(struct vmw_private *dev_priv,
-				       u32 *image, u32 width, u32 height,
-				       u32 hotspotX, u32 hotspotY)
+static void vmw_cursor_update_image(struct vmw_private *dev_priv,
+				    struct ttm_buffer_object *cm_bo,
+				    struct ttm_bo_kmap_obj *cm_map,
+				    u32 *image, u32 width, u32 height,
+				    u32 hotspotX, u32 hotspotY)
 {
 	struct vmw_svga_fifo_cmd_define_cursor *cmd;
 	const u32 image_size = width * height * sizeof(*image);
 	const u32 cmd_size = sizeof(*cmd) + image_size;
+
+	if (cm_bo != NULL) {
+		vmw_cursor_update_mob(dev_priv, cm_bo, cm_map, image,
+				      width, height,
+				      hotspotX, hotspotY);
+		return;
+	}
 
 	/* Try to reserve fifocmd space and swallow any failures;
 	   such reservations cannot be left unconsumed for long
@@ -87,7 +87,7 @@ static void vmw_send_define_cursor_cmd(struct vmw_private *dev_priv,
 	   other fallible KMS-atomic resources at prepare_fb */
 	cmd = VMW_CMD_RESERVE(dev_priv, cmd_size);
 
-	if (unlikely(!cmd))
+	if (unlikely(cmd == NULL))
 		return;
 
 	memset(cmd, 0, sizeof(*cmd));
@@ -105,39 +105,11 @@ static void vmw_send_define_cursor_cmd(struct vmw_private *dev_priv,
 }
 
 /**
- * vmw_cursor_update_image - update the cursor image on the provided plane
- * @dev_priv: the private driver struct
- * @vps: the plane state of the cursor plane
- * @image: buffer which holds the cursor image
- * @width: width of the mouse cursor image
- * @height: height of the mouse cursor image
- * @hotspotX: the horizontal position of mouse hotspot
- * @hotspotY: the vertical position of mouse hotspot
- */
-static void vmw_cursor_update_image(struct vmw_private *dev_priv,
-				    struct vmw_plane_state *vps,
-				    u32 *image, u32 width, u32 height,
-				    u32 hotspotX, u32 hotspotY)
-{
-	if (vps->cursor.bo)
-		vmw_cursor_update_mob(dev_priv, vps, image,
-				      vps->base.crtc_w, vps->base.crtc_h,
-				      hotspotX, hotspotY);
-
-	else
-		vmw_send_define_cursor_cmd(dev_priv, image, width, height,
-					   hotspotX, hotspotY);
-}
-
-
-/**
  * vmw_cursor_update_mob - Update cursor vis CursorMob mechanism
  *
- * Called from inside vmw_du_cursor_plane_atomic_update to actually
- * make the cursor-image live.
- *
  * @dev_priv: device to work with
- * @vps: the plane state of the cursor plane
+ * @bo: BO for the MOB
+ * @map: kmap obj for the BO
  * @image: cursor source data to fill the MOB with
  * @width: source data width
  * @height: source data height
@@ -145,7 +117,8 @@ static void vmw_cursor_update_image(struct vmw_private *dev_priv,
  * @hotspotY: cursor hotspot Y
  */
 static void vmw_cursor_update_mob(struct vmw_private *dev_priv,
-				  struct vmw_plane_state *vps,
+				  struct ttm_buffer_object *bo,
+				  struct ttm_bo_kmap_obj *map,
 				  u32 *image, u32 width, u32 height,
 				  u32 hotspotX, u32 hotspotY)
 {
@@ -154,10 +127,10 @@ static void vmw_cursor_update_mob(struct vmw_private *dev_priv,
 	const u32 image_size = width * height * sizeof(*image);
 	bool dummy;
 
-	header = ttm_kmap_obj_virtual(&vps->cursor.map, &dummy);
-	alpha_header = &header->header.alphaHeader;
+	BUG_ON(!image);
 
-	memset(header, 0, sizeof(*header));
+	header = (SVGAGBCursorHeader *)ttm_kmap_obj_virtual(map, &dummy);
+	alpha_header = &header->header.alphaHeader;
 
 	header->type = SVGA_ALPHA_CURSOR;
 	header->sizeInBytes = image_size;
@@ -168,159 +141,100 @@ static void vmw_cursor_update_mob(struct vmw_private *dev_priv,
 	alpha_header->height = height;
 
 	memcpy(header + 1, image, image_size);
-	vmw_write(dev_priv, SVGA_REG_CURSOR_MOBID,
-		  vps->cursor.bo->resource->start);
+
+	vmw_write(dev_priv, SVGA_REG_CURSOR_MOBID, bo->resource->start);
 }
 
-
-static u32 vmw_du_cursor_mob_size(u32 w, u32 h)
+void vmw_du_destroy_cursor_mob_array(struct vmw_cursor_plane *vcp)
 {
-	return w * h * sizeof(u32) + sizeof(SVGAGBCursorHeader);
-}
+	size_t i;
 
-/**
- * vmw_du_cursor_plane_acquire_image -- Acquire the image data
- * @vps: cursor plane state
- */
-static u32 *vmw_du_cursor_plane_acquire_image(struct vmw_plane_state *vps)
-{
-	bool dummy;
-	if (vps->surf) {
-		if (vps->surf_mapped)
-			return vmw_bo_map_and_cache(vps->surf->res.backup);
-		return vps->surf->snooper.image;
-	} else if (vps->bo)
-		return ttm_kmap_obj_virtual(&vps->bo->map, &dummy);
-	return NULL;
-}
-
-static bool vmw_du_cursor_plane_has_changed(struct vmw_plane_state *old_vps,
-					    struct vmw_plane_state *new_vps)
-{
-	void *old_image;
-	void *new_image;
-	u32 size;
-	bool changed;
-
-	if (old_vps->base.crtc_w != new_vps->base.crtc_w ||
-	    old_vps->base.crtc_h != new_vps->base.crtc_h)
-	    return true;
-
-	if (old_vps->cursor.hotspot_x != new_vps->cursor.hotspot_x ||
-	    old_vps->cursor.hotspot_y != new_vps->cursor.hotspot_y)
-	    return true;
-
-	size = new_vps->base.crtc_w * new_vps->base.crtc_h * sizeof(u32);
-
-	old_image = vmw_du_cursor_plane_acquire_image(old_vps);
-	new_image = vmw_du_cursor_plane_acquire_image(new_vps);
-
-	changed = false;
-	if (old_image && new_image)
-		changed = memcmp(old_image, new_image, size) != 0;
-
-	return changed;
-}
-
-static void vmw_du_destroy_cursor_mob(struct ttm_buffer_object **bo)
-{
-	if (!(*bo))
-		return;
-
-	ttm_bo_unpin(*bo);
-	ttm_bo_put(*bo);
-	kfree(*bo);
-	*bo = NULL;
-}
-
-static void vmw_du_put_cursor_mob(struct vmw_cursor_plane *vcp,
-				  struct vmw_plane_state *vps)
-{
-	u32 i;
-
-	if (!vps->cursor.bo)
-		return;
-
-	vmw_du_cursor_plane_unmap_cm(vps);
-
-	/* Look for a free slot to return this mob to the cache. */
-	for (i = 0; i < ARRAY_SIZE(vcp->cursor_mobs); i++) {
-		if (!vcp->cursor_mobs[i]) {
-			vcp->cursor_mobs[i] = vps->cursor.bo;
-			vps->cursor.bo = NULL;
-			return;
+	for (i = 0; i < ARRAY_SIZE(vcp->cursor_mob); i++) {
+		if (vcp->cursor_mob[i] != NULL) {
+			ttm_bo_unpin(vcp->cursor_mob[i]);
+			ttm_bo_put(vcp->cursor_mob[i]);
+			kfree(vcp->cursor_mob[i]);
+			vcp->cursor_mob[i] = NULL;
 		}
 	}
-
-	/* Cache is full: See if this mob is bigger than an existing mob. */
-	for (i = 0; i < ARRAY_SIZE(vcp->cursor_mobs); i++) {
-		if (vcp->cursor_mobs[i]->base.size <
-		    vps->cursor.bo->base.size) {
-			vmw_du_destroy_cursor_mob(&vcp->cursor_mobs[i]);
-			vcp->cursor_mobs[i] = vps->cursor.bo;
-			vps->cursor.bo = NULL;
-			return;
-		}
-	}
-
-	/* Destroy it if it's not worth caching. */
-	vmw_du_destroy_cursor_mob(&vps->cursor.bo);
 }
 
-static int vmw_du_get_cursor_mob(struct vmw_cursor_plane *vcp,
-				 struct vmw_plane_state *vps)
-{
-	struct vmw_private *dev_priv = vcp->base.dev->dev_private;
-	u32 size = vmw_du_cursor_mob_size(vps->base.crtc_w, vps->base.crtc_h);
-	u32 i;
-	u32 cursor_max_dim, mob_max_size;
-	int ret;
+#define CURSOR_MOB_SIZE(dimension) \
+	((dimension) * (dimension) * sizeof(u32) + sizeof(SVGAGBCursorHeader))
 
-	if (!dev_priv->has_mob ||
-	    (dev_priv->capabilities2 & SVGA_CAP2_CURSOR_MOB) == 0)
-		return -EINVAL;
+int vmw_du_create_cursor_mob_array(struct vmw_cursor_plane *cursor)
+{
+	struct vmw_private *dev_priv = cursor->base.dev->dev_private;
+	uint32_t cursor_max_dim, mob_max_size;
+	int ret = 0;
+	size_t i;
+
+	if (!dev_priv->has_mob || (dev_priv->capabilities2 & SVGA_CAP2_CURSOR_MOB) == 0)
+		return -ENOSYS;
 
 	mob_max_size = vmw_read(dev_priv, SVGA_REG_MOB_MAX_SIZE);
 	cursor_max_dim = vmw_read(dev_priv, SVGA_REG_CURSOR_MAX_DIMENSION);
 
-	if (size > mob_max_size || vps->base.crtc_w > cursor_max_dim ||
-	    vps->base.crtc_h > cursor_max_dim)
-		return -EINVAL;
+	if (CURSOR_MOB_SIZE(cursor_max_dim) > mob_max_size)
+		cursor_max_dim = 64; /* Mandatorily-supported cursor dimension */
 
-	if (vps->cursor.bo) {
-		if (vps->cursor.bo->base.size >= size)
-			return 0;
-		vmw_du_put_cursor_mob(vcp, vps);
-	}
+	for (i = 0; i < ARRAY_SIZE(cursor->cursor_mob); i++) {
+		struct ttm_buffer_object **const bo = &cursor->cursor_mob[i];
 
-	/* Look for an unused mob in the cache. */
-	for (i = 0; i < ARRAY_SIZE(vcp->cursor_mobs); i++) {
-		if (vcp->cursor_mobs[i] &&
-		    vcp->cursor_mobs[i]->base.size >= size) {
-			vps->cursor.bo = vcp->cursor_mobs[i];
-			vcp->cursor_mobs[i] = NULL;
-			return 0;
+		ret = vmw_bo_create_kernel(dev_priv,
+			CURSOR_MOB_SIZE(cursor_max_dim),
+			&vmw_mob_placement, bo);
+
+		if (ret != 0)
+			goto teardown;
+
+		if ((*bo)->resource->mem_type != VMW_PL_MOB) {
+			DRM_ERROR("Obtained buffer object is not a MOB.\n");
+			ret = -ENOSYS;
+			goto teardown;
 		}
+
+		/* Fence the mob creation so we are guarateed to have the mob */
+		ret = ttm_bo_reserve(*bo, false, false, NULL);
+
+		if (ret != 0)
+			goto teardown;
+
+		vmw_bo_fence_single(*bo, NULL);
+
+		ttm_bo_unreserve(*bo);
+
+		drm_info(&dev_priv->drm, "Using CursorMob mobid %lu, max dimension %u\n",
+			 (*bo)->resource->start, cursor_max_dim);
 	}
-	/* Create a new mob if we can't find an existing one. */
-	ret = vmw_bo_create_kernel(dev_priv, size, &vmw_mob_placement,
-				   &vps->cursor.bo);
 
-	if (ret != 0)
-		return ret;
-
-	/* Fence the mob creation so we are guarateed to have the mob */
-	ret = ttm_bo_reserve(vps->cursor.bo, false, false, NULL);
-	if (ret != 0)
-		goto teardown;
-
-	vmw_bo_fence_single(vps->cursor.bo, NULL);
-	ttm_bo_unreserve(vps->cursor.bo);
 	return 0;
 
 teardown:
-	vmw_du_destroy_cursor_mob(&vps->cursor.bo);
+	vmw_du_destroy_cursor_mob_array(cursor);
+
 	return ret;
+}
+
+#undef CURSOR_MOB_SIZE
+
+static void vmw_cursor_update_bo(struct vmw_private *dev_priv,
+				 struct ttm_buffer_object *cm_bo,
+				 struct ttm_bo_kmap_obj *cm_map,
+				 struct vmw_buffer_object *bo,
+				 u32 width, u32 height,
+				 u32 hotspotX, u32 hotspotY)
+{
+	void *virtual;
+	bool dummy;
+
+	virtual = ttm_kmap_obj_virtual(&bo->map, &dummy);
+	if (virtual) {
+		vmw_cursor_update_image(dev_priv, cm_bo, cm_map, virtual,
+					width, height,
+					hotspotX, hotspotY);
+		atomic_dec(&bo->base_mapped_count);
+	}
 }
 
 
@@ -352,6 +266,7 @@ static void vmw_cursor_update_position(struct vmw_private *dev_priv,
 	spin_unlock(&dev_priv->cursor_lock);
 }
 
+
 void vmw_kms_cursor_snoop(struct vmw_surface *srf,
 			  struct ttm_object_file *tfile,
 			  struct ttm_buffer_object *bo,
@@ -369,13 +284,10 @@ void vmw_kms_cursor_snoop(struct vmw_surface *srf,
 		SVGA3dCmdSurfaceDMA dma;
 	} *cmd;
 	int i, ret;
-	const struct SVGA3dSurfaceDesc *desc =
-		vmw_surface_get_desc(VMW_CURSOR_SNOOP_FORMAT);
-	const u32 image_pitch = VMW_CURSOR_SNOOP_WIDTH * desc->pitchBytesPerBlock;
 
 	cmd = container_of(header, struct vmw_dma_cmd, header);
 
-	/* No snooper installed, nothing to copy */
+	/* No snooper installed */
 	if (!srf->snooper.image)
 		return;
 
@@ -397,7 +309,7 @@ void vmw_kms_cursor_snoop(struct vmw_surface *srf,
 	    box->x != 0    || box->y != 0    || box->z != 0    ||
 	    box->srcx != 0 || box->srcy != 0 || box->srcz != 0 ||
 	    box->d != 1    || box_count != 1 ||
-	    box->w > VMW_CURSOR_SNOOP_WIDTH || box->h > VMW_CURSOR_SNOOP_HEIGHT) {
+	    box->w > 64 || box->h > 64) {
 		/* TODO handle none page aligned offsets */
 		/* TODO handle more dst & src != 0 */
 		/* TODO handle more then one copy */
@@ -411,7 +323,7 @@ void vmw_kms_cursor_snoop(struct vmw_surface *srf,
 	}
 
 	kmap_offset = cmd->dma.guest.ptr.offset >> PAGE_SHIFT;
-	kmap_num = (VMW_CURSOR_SNOOP_HEIGHT*image_pitch) >> PAGE_SHIFT;
+	kmap_num = (64*64*4) >> PAGE_SHIFT;
 
 	ret = ttm_bo_reserve(bo, true, false, NULL);
 	if (unlikely(ret != 0)) {
@@ -425,15 +337,14 @@ void vmw_kms_cursor_snoop(struct vmw_surface *srf,
 
 	virtual = ttm_kmap_obj_virtual(&map, &dummy);
 
-	if (box->w == VMW_CURSOR_SNOOP_WIDTH && cmd->dma.guest.pitch == image_pitch) {
-		memcpy(srf->snooper.image, virtual,
-		       VMW_CURSOR_SNOOP_HEIGHT*image_pitch);
+	if (box->w == 64 && cmd->dma.guest.pitch == 64*4) {
+		memcpy(srf->snooper.image, virtual, 64*64*4);
 	} else {
 		/* Image is unsigned pointer. */
 		for (i = 0; i < box->h; i++)
-			memcpy(srf->snooper.image + i * image_pitch,
+			memcpy(srf->snooper.image + i * 64,
 			       virtual + i * cmd->dma.guest.pitch,
-			       box->w * desc->pitchBytesPerBlock);
+			       box->w * 4);
 	}
 
 	srf->snooper.age++;
@@ -477,17 +388,15 @@ void vmw_kms_cursor_post_execbuf(struct vmw_private *dev_priv)
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
 		du = vmw_crtc_to_du(crtc);
 		if (!du->cursor_surface ||
-		    du->cursor_age == du->cursor_surface->snooper.age ||
-		    !du->cursor_surface->snooper.image)
+		    du->cursor_age == du->cursor_surface->snooper.age)
 			continue;
 
 		du->cursor_age = du->cursor_surface->snooper.age;
-		vmw_send_define_cursor_cmd(dev_priv,
-					   du->cursor_surface->snooper.image,
-					   VMW_CURSOR_SNOOP_WIDTH,
-					   VMW_CURSOR_SNOOP_HEIGHT,
-					   du->hotspot_x + du->core_hotspot_x,
-					   du->hotspot_y + du->core_hotspot_y);
+		vmw_cursor_update_image(dev_priv, NULL, NULL,
+					du->cursor_surface->snooper.image,
+					64, 64,
+					du->hotspot_x + du->core_hotspot_x,
+					du->hotspot_y + du->core_hotspot_y);
 	}
 
 	mutex_unlock(&dev->mode_config.mutex);
@@ -496,14 +405,8 @@ void vmw_kms_cursor_post_execbuf(struct vmw_private *dev_priv)
 
 void vmw_du_cursor_plane_destroy(struct drm_plane *plane)
 {
-	struct vmw_cursor_plane *vcp = vmw_plane_to_vcp(plane);
-	u32 i;
-
 	vmw_cursor_update_position(plane->dev->dev_private, false, 0, 0);
-
-	for (i = 0; i < ARRAY_SIZE(vcp->cursor_mobs); i++)
-		vmw_du_destroy_cursor_mob(&vcp->cursor_mobs[i]);
-
+	vmw_du_destroy_cursor_mob_array(vmw_plane_to_vcp(plane));
 	drm_plane_cleanup(plane);
 }
 
@@ -561,87 +464,6 @@ vmw_du_plane_cleanup_fb(struct drm_plane *plane,
 
 
 /**
- * vmw_du_cursor_plane_map_cm - Maps the cursor mobs.
- *
- * @vps: plane_state
- *
- * Returns 0 on success
- */
-
-static int
-vmw_du_cursor_plane_map_cm(struct vmw_plane_state *vps)
-{
-	int ret;
-	u32 size = vmw_du_cursor_mob_size(vps->base.crtc_w, vps->base.crtc_h);
-	struct ttm_buffer_object *bo = vps->cursor.bo;
-
-	if (!bo)
-		return -EINVAL;
-
-	if (bo->base.size < size)
-		return -EINVAL;
-
-	if (vps->cursor.mapped)
-		return 0;
-
-	ret = ttm_bo_reserve(bo, false, false, NULL);
-
-	if (unlikely(ret != 0))
-		return -ENOMEM;
-
-	ret = ttm_bo_kmap(bo, 0, PFN_UP(size), &vps->cursor.map);
-
-	/*
-	 * We just want to try to get mob bind to finish
-	 * so that the first write to SVGA_REG_CURSOR_MOBID
-	 * is done with a buffer that the device has already
-	 * seen
-	 */
-	(void) ttm_bo_wait(bo, false, false);
-
-	ttm_bo_unreserve(bo);
-
-	if (unlikely(ret != 0))
-		return -ENOMEM;
-
-	vps->cursor.mapped = true;
-
-	return 0;
-}
-
-
-/**
- * vmw_du_cursor_plane_unmap_cm - Unmaps the cursor mobs.
- *
- * @vps: state of the cursor plane
- *
- * Returns 0 on success
- */
-
-static int
-vmw_du_cursor_plane_unmap_cm(struct vmw_plane_state *vps)
-{
-	int ret = 0;
-	struct ttm_buffer_object *bo = vps->cursor.bo;
-
-	if (!vps->cursor.mapped)
-		return 0;
-
-	if (!bo)
-		return 0;
-
-	ret = ttm_bo_reserve(bo, true, false, NULL);
-	if (likely(ret == 0)) {
-		ttm_bo_kunmap(&vps->cursor.map);
-		ttm_bo_unreserve(bo);
-		vps->cursor.mapped = false;
-	}
-
-	return ret;
-}
-
-
-/**
  * vmw_du_cursor_plane_cleanup_fb - Unpins the plane surface
  *
  * @plane: cursor plane
@@ -655,16 +477,10 @@ void
 vmw_du_cursor_plane_cleanup_fb(struct drm_plane *plane,
 			       struct drm_plane_state *old_state)
 {
-	struct vmw_cursor_plane *vcp = vmw_plane_to_vcp(plane);
 	struct vmw_plane_state *vps = vmw_plane_state_to_vps(old_state);
 	bool dummy;
 
-	if (vps->surf_mapped) {
-		vmw_bo_unmap(vps->surf->res.backup);
-		vps->surf_mapped = false;
-	}
-
-	if (vps->bo && ttm_kmap_obj_virtual(&vps->bo->map, &dummy)) {
+	if (vps->bo != NULL && ttm_kmap_obj_virtual(&vps->bo->map, &dummy) != NULL) {
 		const int ret = ttm_bo_reserve(&vps->bo->base, true, false, NULL);
 
 		if (likely(ret == 0)) {
@@ -674,8 +490,14 @@ vmw_du_cursor_plane_cleanup_fb(struct drm_plane *plane,
 		}
 	}
 
-	vmw_du_cursor_plane_unmap_cm(vps);
-	vmw_du_put_cursor_mob(vcp, vps);
+	if (vps->cm_bo != NULL && ttm_kmap_obj_virtual(&vps->cm_map, &dummy) != NULL) {
+		const int ret = ttm_bo_reserve(vps->cm_bo, true, false, NULL);
+
+		if (likely(ret == 0)) {
+			ttm_bo_kunmap(&vps->cm_map);
+			ttm_bo_unreserve(vps->cm_bo);
+		}
+	}
 
 	vmw_du_plane_unpin_surf(vps, false);
 
@@ -689,7 +511,6 @@ vmw_du_cursor_plane_cleanup_fb(struct drm_plane *plane,
 		vps->bo = NULL;
 	}
 }
-
 
 /**
  * vmw_du_cursor_plane_prepare_fb - Readies the cursor by referencing it
@@ -706,6 +527,8 @@ vmw_du_cursor_plane_prepare_fb(struct drm_plane *plane,
 	struct drm_framebuffer *fb = new_state->fb;
 	struct vmw_cursor_plane *vcp = vmw_plane_to_vcp(plane);
 	struct vmw_plane_state *vps = vmw_plane_state_to_vps(new_state);
+	struct ttm_buffer_object *cm_bo = NULL;
+	bool dummy;
 	int ret = 0;
 
 	if (vps->surf) {
@@ -728,14 +551,13 @@ vmw_du_cursor_plane_prepare_fb(struct drm_plane *plane,
 		}
 	}
 
-	if (!vps->surf && vps->bo) {
+	vps->cm_bo = NULL;
+
+	if (vps->surf == NULL && vps->bo != NULL) {
 		const u32 size = new_state->crtc_w * new_state->crtc_h * sizeof(u32);
 
-		/*
-		 * Not using vmw_bo_map_and_cache() helper here as we need to
-		 * reserve the ttm_buffer_object first which
-		 * vmw_bo_map_and_cache() omits.
-		 */
+		/* Not using vmw_bo_map_and_cache() helper here as we need to reserve
+		   the ttm_buffer_object first which wmw_bo_map_and_cache() omits. */
 		ret = ttm_bo_reserve(&vps->bo->base, true, false, NULL);
 
 		if (unlikely(ret != 0))
@@ -750,24 +572,69 @@ vmw_du_cursor_plane_prepare_fb(struct drm_plane *plane,
 
 		if (unlikely(ret != 0))
 			return -ENOMEM;
-	} else if (vps->surf && !vps->bo && vps->surf->res.backup) {
-
-		WARN_ON(vps->surf->snooper.image);
-		ret = ttm_bo_reserve(&vps->surf->res.backup->base, true, false,
-				     NULL);
-		if (unlikely(ret != 0))
-			return -ENOMEM;
-		vmw_bo_map_and_cache(vps->surf->res.backup);
-		ttm_bo_unreserve(&vps->surf->res.backup->base);
-		vps->surf_mapped = true;
 	}
 
 	if (vps->surf || vps->bo) {
-		vmw_du_get_cursor_mob(vcp, vps);
-		vmw_du_cursor_plane_map_cm(vps);
+		unsigned cursor_mob_idx = vps->cursor_mob_idx;
+
+		/* Lazily set up cursor MOBs just once -- no reattempts. */
+		if (cursor_mob_idx == 0 && vcp->cursor_mob[0] == NULL)
+			if (vmw_du_create_cursor_mob_array(vcp) != 0)
+				vps->cursor_mob_idx = cursor_mob_idx = -1U;
+
+		if (cursor_mob_idx < ARRAY_SIZE(vcp->cursor_mob)) {
+			const u32 size = sizeof(SVGAGBCursorHeader) +
+				new_state->crtc_w * new_state->crtc_h * sizeof(u32);
+
+			cm_bo = vcp->cursor_mob[cursor_mob_idx];
+
+			if (cm_bo->resource->num_pages * PAGE_SIZE < size) {
+				ret = -EINVAL;
+				goto error_bo_unmap;
+			}
+
+			ret = ttm_bo_reserve(cm_bo, false, false, NULL);
+
+			if (unlikely(ret != 0)) {
+				ret = -ENOMEM;
+				goto error_bo_unmap;
+			}
+
+			ret = ttm_bo_kmap(cm_bo, 0, PFN_UP(size), &vps->cm_map);
+
+			/*
+			 * We just want to try to get mob bind to finish
+			 * so that the first write to SVGA_REG_CURSOR_MOBID
+			 * is done with a buffer that the device has already
+			 * seen
+			 */
+			(void) ttm_bo_wait(cm_bo, false, false);
+
+			ttm_bo_unreserve(cm_bo);
+
+			if (unlikely(ret != 0)) {
+				ret = -ENOMEM;
+				goto error_bo_unmap;
+			}
+
+			vps->cursor_mob_idx = cursor_mob_idx ^ 1;
+			vps->cm_bo = cm_bo;
+		}
 	}
 
 	return 0;
+
+error_bo_unmap:
+	if (vps->bo != NULL && ttm_kmap_obj_virtual(&vps->bo->map, &dummy) != NULL) {
+		const int ret = ttm_bo_reserve(&vps->bo->base, true, false, NULL);
+		if (likely(ret == 0)) {
+			atomic_dec(&vps->bo->base_mapped_count);
+			ttm_bo_kunmap(&vps->bo->map);
+			ttm_bo_unreserve(&vps->bo->base);
+		}
+	}
+
+	return ret;
 }
 
 
@@ -783,9 +650,7 @@ vmw_du_cursor_plane_atomic_update(struct drm_plane *plane,
 	struct vmw_private *dev_priv = vmw_priv(crtc->dev);
 	struct vmw_display_unit *du = vmw_crtc_to_du(crtc);
 	struct vmw_plane_state *vps = vmw_plane_state_to_vps(new_state);
-	struct vmw_plane_state *old_vps = vmw_plane_state_to_vps(old_state);
 	s32 hotspot_x, hotspot_y;
-	bool dummy;
 
 	hotspot_x = du->hotspot_x;
 	hotspot_y = du->hotspot_y;
@@ -798,38 +663,23 @@ vmw_du_cursor_plane_atomic_update(struct drm_plane *plane,
 	du->cursor_surface = vps->surf;
 	du->cursor_bo = vps->bo;
 
-	if (!vps->surf && !vps->bo) {
-		vmw_cursor_update_position(dev_priv, false, 0, 0);
-		return;
-	}
-
-	vps->cursor.hotspot_x = hotspot_x;
-	vps->cursor.hotspot_y = hotspot_y;
-
 	if (vps->surf) {
 		du->cursor_age = du->cursor_surface->snooper.age;
-	}
 
-	if (!vmw_du_cursor_plane_has_changed(old_vps, vps)) {
-		/*
-		 * If it hasn't changed, avoid making the device do extra
-		 * work by keeping the old cursor active.
-		 */
-		struct vmw_cursor_plane_state tmp = old_vps->cursor;
-		old_vps->cursor = vps->cursor;
-		vps->cursor = tmp;
+		vmw_cursor_update_image(dev_priv, vps->cm_bo, &vps->cm_map,
+					vps->surf->snooper.image,
+					new_state->crtc_w,
+					new_state->crtc_h,
+					hotspot_x, hotspot_y);
+	} else if (vps->bo) {
+		vmw_cursor_update_bo(dev_priv, vps->cm_bo, &vps->cm_map,
+				     vps->bo,
+				     new_state->crtc_w,
+				     new_state->crtc_h,
+				     hotspot_x, hotspot_y);
 	} else {
-		void *image = vmw_du_cursor_plane_acquire_image(vps);
-		if (image)
-			vmw_cursor_update_image(dev_priv, vps, image,
-						new_state->crtc_w,
-						new_state->crtc_h,
-						hotspot_x, hotspot_y);
-	}
-
-	if (vps->bo) {
-		if (ttm_kmap_obj_virtual(&vps->bo->map, &dummy))
-			atomic_dec(&vps->bo->base_mapped_count);
+		vmw_cursor_update_position(dev_priv, false, 0, 0);
+		return;
 	}
 
 	du->cursor_x = new_state->crtc_x + du->set_gui_x;
@@ -929,16 +779,12 @@ int vmw_du_cursor_plane_atomic_check(struct drm_plane *plane,
 		return -EINVAL;
 	}
 
-	if (!vmw_framebuffer_to_vfb(fb)->bo) {
+	if (!vmw_framebuffer_to_vfb(fb)->bo)
 		surface = vmw_framebuffer_to_vfbs(fb)->surface;
 
-		WARN_ON(!surface);
-
-		if (!surface ||
-		    (!surface->snooper.image && !surface->res.backup)) {
-			DRM_ERROR("surface not suitable for cursor\n");
-			return -EINVAL;
-		}
+	if (surface && !surface->snooper.image) {
+		DRM_ERROR("surface not suitable for cursor\n");
+		return -EINVAL;
 	}
 
 	return 0;
@@ -948,6 +794,7 @@ int vmw_du_cursor_plane_atomic_check(struct drm_plane *plane,
 int vmw_du_crtc_atomic_check(struct drm_crtc *crtc,
 			     struct drm_atomic_state *state)
 {
+	struct vmw_private *vmw = vmw_priv(crtc->dev);
 	struct drm_crtc_state *new_state = drm_atomic_get_new_crtc_state(state,
 									 crtc);
 	struct vmw_display_unit *du = vmw_crtc_to_du(new_state->crtc);
@@ -955,9 +802,13 @@ int vmw_du_crtc_atomic_check(struct drm_crtc *crtc,
 	bool has_primary = new_state->plane_mask &
 			   drm_plane_mask(crtc->primary);
 
-	/* We always want to have an active plane with an active CRTC */
-	if (has_primary != new_state->enable)
-		return -EINVAL;
+	/*
+	 * This is fine in general, but broken userspace might expect
+	 * some actual rendering so give a clue as why it's blank.
+	 */
+	if (new_state->enable && !has_primary)
+		drm_dbg_driver(&vmw->drm,
+			       "CRTC without a primary plane will be blank.\n");
 
 
 	if (new_state->connector_mask != connector_mask &&
@@ -1089,8 +940,6 @@ vmw_du_plane_duplicate_state(struct drm_plane *plane)
 	vps->pinned = 0;
 	vps->cpp = 0;
 
-	memset(&vps->cursor, 0, sizeof(vps->cursor));
-
 	/* Each ref counted resource needs to be acquired again */
 	if (vps->surf)
 		(void) vmw_surface_reference(vps->surf);
@@ -1144,6 +993,7 @@ vmw_du_plane_destroy_state(struct drm_plane *plane,
 			   struct drm_plane_state *state)
 {
 	struct vmw_plane_state *vps = vmw_plane_state_to_vps(state);
+
 
 	/* Should have been freed by cleanup_fb */
 	if (vps->surf)
@@ -1420,70 +1270,10 @@ static void vmw_framebuffer_bo_destroy(struct drm_framebuffer *framebuffer)
 	kfree(vfbd);
 }
 
-static int vmw_framebuffer_bo_dirty(struct drm_framebuffer *framebuffer,
-				    struct drm_file *file_priv,
-				    unsigned int flags, unsigned int color,
-				    struct drm_clip_rect *clips,
-				    unsigned int num_clips)
-{
-	struct vmw_private *dev_priv = vmw_priv(framebuffer->dev);
-	struct vmw_framebuffer_bo *vfbd =
-		vmw_framebuffer_to_vfbd(framebuffer);
-	struct drm_clip_rect norect;
-	int ret, increment = 1;
-
-	drm_modeset_lock_all(&dev_priv->drm);
-
-	if (!num_clips) {
-		num_clips = 1;
-		clips = &norect;
-		norect.x1 = norect.y1 = 0;
-		norect.x2 = framebuffer->width;
-		norect.y2 = framebuffer->height;
-	} else if (flags & DRM_MODE_FB_DIRTY_ANNOTATE_COPY) {
-		num_clips /= 2;
-		increment = 2;
-	}
-
-	switch (dev_priv->active_display_unit) {
-	case vmw_du_legacy:
-		ret = vmw_kms_ldu_do_bo_dirty(dev_priv, &vfbd->base, 0, 0,
-					      clips, num_clips, increment);
-		break;
-	default:
-		ret = -EINVAL;
-		WARN_ONCE(true, "Dirty called with invalid display system.\n");
-		break;
-	}
-
-	vmw_cmd_flush(dev_priv, false);
-
-	drm_modeset_unlock_all(&dev_priv->drm);
-
-	return ret;
-}
-
-static int vmw_framebuffer_bo_dirty_ext(struct drm_framebuffer *framebuffer,
-					struct drm_file *file_priv,
-					unsigned int flags, unsigned int color,
-					struct drm_clip_rect *clips,
-					unsigned int num_clips)
-{
-	struct vmw_private *dev_priv = vmw_priv(framebuffer->dev);
-
-	if (dev_priv->active_display_unit == vmw_du_legacy &&
-	    vmw_cmd_supported(dev_priv))
-		return vmw_framebuffer_bo_dirty(framebuffer, file_priv, flags,
-						color, clips, num_clips);
-
-	return drm_atomic_helper_dirtyfb(framebuffer, file_priv, flags, color,
-					 clips, num_clips);
-}
-
 static const struct drm_framebuffer_funcs vmw_framebuffer_bo_funcs = {
 	.create_handle = vmw_framebuffer_bo_create_handle,
 	.destroy = vmw_framebuffer_bo_destroy,
-	.dirty = vmw_framebuffer_bo_dirty_ext,
+	.dirty = drm_atomic_helper_dirtyfb,
 };
 
 /*
@@ -1618,8 +1408,8 @@ static int vmw_create_bo_proxy(struct drm_device *dev,
 	/* Reserve and switch the backing mob. */
 	mutex_lock(&res->dev_priv->cmdbuf_mutex);
 	(void) vmw_resource_reserve(res, false, true);
-	vmw_bo_unreference(&res->backup);
-	res->backup = vmw_bo_reference(bo_mob);
+	vmw_user_bo_unref(&res->backup);
+	res->backup = vmw_user_bo_ref(bo_mob);
 	res->backup_offset = 0;
 	vmw_resource_unreserve(res, false, false, false, NULL, 0);
 	mutex_unlock(&res->dev_priv->cmdbuf_mutex);
@@ -1811,12 +1601,12 @@ static struct drm_framebuffer *vmw_kms_fb_create(struct drm_device *dev,
 	if (IS_ERR(vfb)) {
 		ret = PTR_ERR(vfb);
 		goto err_out;
-	}
+ 	}
 
 err_out:
 	/* vmw_user_lookup_handle takes one ref so does new_fb */
 	if (bo)
-		vmw_bo_unreference(&bo);
+		vmw_user_bo_unref(&bo);
 	if (surface)
 		vmw_surface_unreference(&surface);
 
@@ -2242,6 +2032,7 @@ int vmw_kms_cursor_bypass_ioctl(struct drm_device *dev, void *data,
 	struct drm_crtc *crtc;
 	int ret = 0;
 
+
 	mutex_lock(&dev->mode_config.mutex);
 	if (arg->flags & DRM_VMW_CURSOR_BYPASS_ALL) {
 
@@ -2294,13 +2085,12 @@ int vmw_kms_write_svga(struct vmw_private *vmw_priv,
 	return 0;
 }
 
+static
 bool vmw_kms_validate_mode_vram(struct vmw_private *dev_priv,
-				uint32_t pitch,
-				uint32_t height)
+				u64 pitch,
+				u64 height)
 {
-	return ((u64) pitch * (u64) height) < (u64)
-		((dev_priv->active_display_unit == vmw_du_screen_target) ?
-		 dev_priv->max_primary_mem : dev_priv->vram_size);
+	return (pitch * height) < (u64)dev_priv->vram_size;
 }
 
 /**
@@ -2331,7 +2121,7 @@ retry:
 			if (ret == -EDEADLK) {
 				drm_modeset_backoff(&ctx);
 				goto retry;
-		}
+      		}
 			goto out_fini;
 		}
 	}
@@ -2423,107 +2213,6 @@ vmw_du_connector_detect(struct drm_connector *connector, bool force)
 		connector_status_connected : connector_status_disconnected);
 }
 
-static struct drm_display_mode vmw_kms_connector_builtin[] = {
-	/* 640x480@60Hz */
-	{ DRM_MODE("640x480", DRM_MODE_TYPE_DRIVER, 25175, 640, 656,
-		   752, 800, 0, 480, 489, 492, 525, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* 800x600@60Hz */
-	{ DRM_MODE("800x600", DRM_MODE_TYPE_DRIVER, 40000, 800, 840,
-		   968, 1056, 0, 600, 601, 605, 628, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1024x768@60Hz */
-	{ DRM_MODE("1024x768", DRM_MODE_TYPE_DRIVER, 65000, 1024, 1048,
-		   1184, 1344, 0, 768, 771, 777, 806, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* 1152x864@75Hz */
-	{ DRM_MODE("1152x864", DRM_MODE_TYPE_DRIVER, 108000, 1152, 1216,
-		   1344, 1600, 0, 864, 865, 868, 900, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1280x720@60Hz */
-	{ DRM_MODE("1280x720", DRM_MODE_TYPE_DRIVER, 74500, 1280, 1344,
-		   1472, 1664, 0, 720, 723, 728, 748, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1280x768@60Hz */
-	{ DRM_MODE("1280x768", DRM_MODE_TYPE_DRIVER, 79500, 1280, 1344,
-		   1472, 1664, 0, 768, 771, 778, 798, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1280x800@60Hz */
-	{ DRM_MODE("1280x800", DRM_MODE_TYPE_DRIVER, 83500, 1280, 1352,
-		   1480, 1680, 0, 800, 803, 809, 831, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* 1280x960@60Hz */
-	{ DRM_MODE("1280x960", DRM_MODE_TYPE_DRIVER, 108000, 1280, 1376,
-		   1488, 1800, 0, 960, 961, 964, 1000, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1280x1024@60Hz */
-	{ DRM_MODE("1280x1024", DRM_MODE_TYPE_DRIVER, 108000, 1280, 1328,
-		   1440, 1688, 0, 1024, 1025, 1028, 1066, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1360x768@60Hz */
-	{ DRM_MODE("1360x768", DRM_MODE_TYPE_DRIVER, 85500, 1360, 1424,
-		   1536, 1792, 0, 768, 771, 777, 795, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1440x1050@60Hz */
-	{ DRM_MODE("1400x1050", DRM_MODE_TYPE_DRIVER, 121750, 1400, 1488,
-		   1632, 1864, 0, 1050, 1053, 1057, 1089, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1440x900@60Hz */
-	{ DRM_MODE("1440x900", DRM_MODE_TYPE_DRIVER, 106500, 1440, 1520,
-		   1672, 1904, 0, 900, 903, 909, 934, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1600x1200@60Hz */
-	{ DRM_MODE("1600x1200", DRM_MODE_TYPE_DRIVER, 162000, 1600, 1664,
-		   1856, 2160, 0, 1200, 1201, 1204, 1250, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1680x1050@60Hz */
-	{ DRM_MODE("1680x1050", DRM_MODE_TYPE_DRIVER, 146250, 1680, 1784,
-		   1960, 2240, 0, 1050, 1053, 1059, 1089, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1792x1344@60Hz */
-	{ DRM_MODE("1792x1344", DRM_MODE_TYPE_DRIVER, 204750, 1792, 1920,
-		   2120, 2448, 0, 1344, 1345, 1348, 1394, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1853x1392@60Hz */
-	{ DRM_MODE("1856x1392", DRM_MODE_TYPE_DRIVER, 218250, 1856, 1952,
-		   2176, 2528, 0, 1392, 1393, 1396, 1439, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1920x1080@60Hz */
-	{ DRM_MODE("1920x1080", DRM_MODE_TYPE_DRIVER, 173000, 1920, 2048,
-		   2248, 2576, 0, 1080, 1083, 1088, 1120, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1920x1200@60Hz */
-	{ DRM_MODE("1920x1200", DRM_MODE_TYPE_DRIVER, 193250, 1920, 2056,
-		   2256, 2592, 0, 1200, 1203, 1209, 1245, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 1920x1440@60Hz */
-	{ DRM_MODE("1920x1440", DRM_MODE_TYPE_DRIVER, 234000, 1920, 2048,
-		   2256, 2600, 0, 1440, 1441, 1444, 1500, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 2560x1440@60Hz */
-	{ DRM_MODE("2560x1440", DRM_MODE_TYPE_DRIVER, 241500, 2560, 2608,
-		   2640, 2720, 0, 1440, 1443, 1448, 1481, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* 2560x1600@60Hz */
-	{ DRM_MODE("2560x1600", DRM_MODE_TYPE_DRIVER, 348500, 2560, 2752,
-		   3032, 3504, 0, 1600, 1603, 1609, 1658, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
-	/* 2880x1800@60Hz */
-	{ DRM_MODE("2880x1800", DRM_MODE_TYPE_DRIVER, 337500, 2880, 2928,
-		   2960, 3040, 0, 1800, 1803, 1809, 1852, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* 3840x2160@60Hz */
-	{ DRM_MODE("3840x2160", DRM_MODE_TYPE_DRIVER, 533000, 3840, 3888,
-		   3920, 4000, 0, 2160, 2163, 2168, 2222, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* 3840x2400@60Hz */
-	{ DRM_MODE("3840x2400", DRM_MODE_TYPE_DRIVER, 592250, 3840, 3888,
-		   3920, 4000, 0, 2400, 2403, 2409, 2469, 0,
-		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
-	/* Terminate */
-	{ DRM_MODE("", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) },
-};
-
 /**
  * vmw_guess_mode_timing - Provide fake timings for a
  * 60Hz vrefresh mode.
@@ -2544,88 +2233,6 @@ void vmw_guess_mode_timing(struct drm_display_mode *mode)
 	mode->clock = (u32)mode->htotal * (u32)mode->vtotal / 100 * 6;
 }
 
-
-int vmw_du_connector_fill_modes(struct drm_connector *connector,
-				uint32_t max_width, uint32_t max_height)
-{
-	struct vmw_display_unit *du = vmw_connector_to_du(connector);
-	struct drm_device *dev = connector->dev;
-	struct vmw_private *dev_priv = vmw_priv(dev);
-	struct drm_display_mode *mode = NULL;
-	struct drm_display_mode *bmode;
-	struct drm_display_mode prefmode = { DRM_MODE("preferred",
-		DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC)
-	};
-	int i;
-	u32 assumed_bpp = 4;
-
-	if (dev_priv->assume_16bpp)
-		assumed_bpp = 2;
-
-	max_width  = min(max_width,  dev_priv->texture_max_width);
-	max_height = min(max_height, dev_priv->texture_max_height);
-
-	/*
-	 * For STDU extra limit for a mode on SVGA_REG_SCREENTARGET_MAX_WIDTH/
-	 * HEIGHT registers.
-	 */
-	if (dev_priv->active_display_unit == vmw_du_screen_target) {
-		max_width  = min(max_width,  dev_priv->stdu_max_width);
-		max_height = min(max_height, dev_priv->stdu_max_height);
-	}
-
-	/* Add preferred mode */
-	mode = drm_mode_duplicate(dev, &prefmode);
-	if (!mode)
-		return 0;
-	mode->hdisplay = du->pref_width;
-	mode->vdisplay = du->pref_height;
-	vmw_guess_mode_timing(mode);
-	drm_mode_set_name(mode);
-
-	if (vmw_kms_validate_mode_vram(dev_priv,
-					mode->hdisplay * assumed_bpp,
-					mode->vdisplay)) {
-		drm_mode_probed_add(connector, mode);
-	} else {
-		drm_mode_destroy(dev, mode);
-		mode = NULL;
-	}
-
-	if (du->pref_mode) {
-		list_del_init(&du->pref_mode->head);
-		drm_mode_destroy(dev, du->pref_mode);
-	}
-
-	/* mode might be null here, this is intended */
-	du->pref_mode = mode;
-
-	for (i = 0; vmw_kms_connector_builtin[i].type != 0; i++) {
-		bmode = &vmw_kms_connector_builtin[i];
-		if (bmode->hdisplay > max_width ||
-		    bmode->vdisplay > max_height)
-			continue;
-
-		if (!vmw_kms_validate_mode_vram(dev_priv,
-						bmode->hdisplay * assumed_bpp,
-						bmode->vdisplay))
-			continue;
-
-		mode = drm_mode_duplicate(dev, bmode);
-		if (!mode)
-			return 0;
-
-		drm_mode_probed_add(connector, mode);
-	}
-
-	drm_connector_list_update(connector);
-	/* Move the prefered mode first, help apps pick the right mode. */
-	drm_mode_sort(&connector->modes);
-
-	return 1;
-}
 
 /**
  * vmw_kms_update_layout_ioctl - Handler for DRM_VMW_UPDATE_LAYOUT ioctl
@@ -3154,4 +2761,85 @@ out_revert:
 out_unref:
 	vmw_validation_unref_lists(&val_ctx);
 	return ret;
+}
+
+/**
+ * vmw_connector_mode_valid - implements drm_connector_helper_funcs.mode_valid callback
+ *
+ * @connector: the drm connector, part of a DU container
+ * @mode: drm mode to check
+ *
+ * Returns MODE_OK on success, or a drm_mode_status error code.
+ */
+enum drm_mode_status vmw_connector_mode_valid(struct drm_connector *connector,
+					      struct drm_display_mode *mode)
+{
+	enum drm_mode_status ret;
+	struct drm_device *dev = connector->dev;
+	struct vmw_private *dev_priv = vmw_priv(dev);
+	u32 assumed_cpp = 4;
+
+	if (dev_priv->assume_16bpp)
+		assumed_cpp = 2;
+
+	ret = drm_mode_validate_size(mode, dev_priv->texture_max_width,
+				     dev_priv->texture_max_height);
+	if (ret != MODE_OK)
+		return ret;
+
+	if (!vmw_kms_validate_mode_vram(dev_priv,
+					mode->hdisplay * assumed_cpp,
+					mode->vdisplay))
+		return MODE_MEM;
+
+	return MODE_OK;
+}
+
+/**
+ * vmw_connector_get_modes - implements drm_connector_helper_funcs.get_modes callback
+ *
+ * @connector: the drm connector, part of a DU container
+ *
+ * Returns the number of added modes.
+ */
+int vmw_connector_get_modes(struct drm_connector *connector)
+{
+	struct vmw_display_unit *du = vmw_connector_to_du(connector);
+	struct drm_device *dev = connector->dev;
+	struct vmw_private *dev_priv = vmw_priv(dev);
+	struct drm_display_mode *mode = NULL;
+	struct drm_display_mode prefmode = { DRM_MODE("preferred",
+		DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC)
+	};
+	u32 max_width;
+	u32 max_height;
+	u32 num_modes;
+
+	/* Add preferred mode */
+	mode = drm_mode_duplicate(dev, &prefmode);
+	if (!mode)
+		return 0;
+
+	mode->hdisplay = du->pref_width;
+	mode->vdisplay = du->pref_height;
+	vmw_guess_mode_timing(mode);
+	drm_mode_set_name(mode);
+
+	drm_mode_probed_add(connector, mode);
+	drm_dbg_kms(dev, "preferred mode " DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
+
+	/* Probe connector for all modes not exceeding our geom limits */
+	max_width  = dev_priv->texture_max_width;
+	max_height = dev_priv->texture_max_height;
+
+	if (dev_priv->active_display_unit == vmw_du_screen_target) {
+		max_width  = min(dev_priv->stdu_max_width,  max_width);
+		max_height = min(dev_priv->stdu_max_height, max_height);
+	}
+
+	num_modes = 1 + drm_add_modes_noedid(connector, max_width, max_height);
+
+	return num_modes;
 }

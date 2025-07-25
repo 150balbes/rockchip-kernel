@@ -90,7 +90,8 @@ void __init setup_arch(char **cmdline_p)
 	config_BSP(&command_line[0], sizeof(command_line));
 
 #if defined(CONFIG_BOOTPARAM)
-	strscpy(&command_line[0], CONFIG_BOOTPARAM_STRING, sizeof(command_line));
+	strncpy(&command_line[0], CONFIG_BOOTPARAM_STRING, sizeof(command_line));
+	command_line[sizeof(command_line) - 1] = 0;
 #endif /* CONFIG_BOOTPARAM */
 
 	process_uboot_commandline(&command_line[0], sizeof(command_line));

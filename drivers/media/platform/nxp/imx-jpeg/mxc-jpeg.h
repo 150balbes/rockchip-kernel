@@ -45,13 +45,11 @@ enum mxc_jpeg_mode {
  * @subsampling: subsampling of jpeg components
  * @nc:		number of color components
  * @depth:	number of bits per pixel
- * @mem_planes:	number of memory planes (1 for packed formats)
- * @comp_planes:number of component planes, which includes the alpha plane (1 to 4).
+ * @colplanes:	number of color planes (1 for packed formats)
  * @h_align:	horizontal alignment order (align to 2^h_align)
  * @v_align:	vertical alignment order (align to 2^v_align)
  * @flags:	flags describing format applicability
  * @precision:  jpeg sample precision
- * @is_rgb:     is an RGB pixel format
  */
 struct mxc_jpeg_fmt {
 	const char				*name;
@@ -59,13 +57,11 @@ struct mxc_jpeg_fmt {
 	enum v4l2_jpeg_chroma_subsampling	subsampling;
 	int					nc;
 	int					depth;
-	int					mem_planes;
-	int					comp_planes;
+	int					colplanes;
 	int					h_align;
 	int					v_align;
 	u32					flags;
 	u8					precision;
-	u8					is_rgb;
 };
 
 struct mxc_jpeg_desc {
@@ -88,7 +84,6 @@ struct mxc_jpeg_q_data {
 	int				h;
 	int				h_adjusted;
 	unsigned int			sequence;
-	struct v4l2_rect		crop;
 };
 
 struct mxc_jpeg_ctx {
@@ -102,7 +97,6 @@ struct mxc_jpeg_ctx {
 	bool				header_parsed;
 	struct v4l2_ctrl_handler	ctrl_handler;
 	u8				jpeg_quality;
-	struct delayed_work		task_timer;
 };
 
 struct mxc_jpeg_slot_data {
@@ -120,8 +114,8 @@ struct mxc_jpeg_dev {
 	spinlock_t			hw_lock; /* hardware access lock */
 	unsigned int			mode;
 	struct mutex			lock; /* v4l2 ioctls serialization */
-	struct clk			*clk_ipg;
-	struct clk			*clk_per;
+	struct clk_bulk_data		*clks;
+	int				num_clks;
 	struct platform_device		*pdev;
 	struct device			*dev;
 	void __iomem			*base_reg;

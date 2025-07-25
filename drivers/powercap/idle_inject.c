@@ -147,7 +147,6 @@ static void idle_inject_fn(unsigned int cpu)
 
 /**
  * idle_inject_set_duration - idle and run duration update helper
- * @ii_dev: idle injection control device structure
  * @run_duration_us: CPU run time to allow in microseconds
  * @idle_duration_us: CPU idle time to inject in microseconds
  */
@@ -163,7 +162,6 @@ void idle_inject_set_duration(struct idle_inject_device *ii_dev,
 
 /**
  * idle_inject_get_duration - idle and run duration retrieval helper
- * @ii_dev: idle injection control device structure
  * @run_duration_us: memory location to store the current CPU run time
  * @idle_duration_us: memory location to store the current CPU idle time
  */
@@ -177,7 +175,6 @@ void idle_inject_get_duration(struct idle_inject_device *ii_dev,
 
 /**
  * idle_inject_set_latency - set the maximum latency allowed
- * @ii_dev: idle injection control device structure
  * @latency_us: set the latency requirement for the idle state
  */
 void idle_inject_set_latency(struct idle_inject_device *ii_dev,

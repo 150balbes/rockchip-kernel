@@ -8,9 +8,7 @@
 #include <net/dsa.h>
 #include <linux/dsa/tag_qca.h>
 
-#include "tag.h"
-
-#define QCA_NAME "qca"
+#include "dsa_priv.h"
 
 static struct sk_buff *qca_tag_xmit(struct sk_buff *skb, struct net_device *dev)
 {
@@ -109,7 +107,7 @@ static void qca_tag_disconnect(struct dsa_switch *ds)
 }
 
 static const struct dsa_device_ops qca_netdev_ops = {
-	.name	= QCA_NAME,
+	.name	= "qca",
 	.proto	= DSA_TAG_PROTO_QCA,
 	.connect = qca_tag_connect,
 	.disconnect = qca_tag_disconnect,
@@ -120,6 +118,6 @@ static const struct dsa_device_ops qca_netdev_ops = {
 };
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_QCA, QCA_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_QCA);
 
 module_dsa_tag_driver(qca_netdev_ops);

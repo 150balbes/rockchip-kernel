@@ -1301,6 +1301,8 @@ static int ppl_validate_rdev(struct md_rdev *rdev)
 
 static void ppl_init_child_log(struct ppl_log *log, struct md_rdev *rdev)
 {
+	struct request_queue *q;
+
 	if ((rdev->ppl.size << 9) >= (PPL_SPACE_SIZE +
 				      PPL_HEADER_SIZE) * 2) {
 		log->use_multippl = true;
@@ -1314,7 +1316,8 @@ static void ppl_init_child_log(struct ppl_log *log, struct md_rdev *rdev)
 	}
 	log->next_io_sector = rdev->ppl.sector;
 
-	if (bdev_write_cache(rdev->bdev))
+	q = bdev_get_queue(rdev->bdev);
+	if (test_bit(QUEUE_FLAG_WC, &q->queue_flags))
 		log->wb_cache_on = true;
 }
 

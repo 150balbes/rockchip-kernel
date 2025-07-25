@@ -14,7 +14,7 @@ description: |
   their input line is connected to the output line.
 
 allOf:
-  - $ref: dai-common.yaml#
+  - $ref: name-prefix.yaml#
 
 properties:
   compatible:

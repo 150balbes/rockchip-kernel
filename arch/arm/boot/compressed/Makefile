@@ -27,7 +27,6 @@ KASAN_SANITIZE		:= n
 
 # Prevents link failures: __sanitizer_cov_trace_pc() is not linked in.
 KCOV_INSTRUMENT		:= n
-UBSAN_SANITIZE		:= n
 
 #
 # Architecture dependencies
@@ -124,7 +123,7 @@ LDFLAGS_vmlinux += --no-undefined
 LDFLAGS_vmlinux += -X
 # Report orphan sections
 ifdef CONFIG_LD_ORPHAN_WARN
-LDFLAGS_vmlinux += --orphan-handling=$(CONFIG_LD_ORPHAN_WARN_LEVEL)
+LDFLAGS_vmlinux += --orphan-handling=warn
 endif
 # Next argument is a linker script
 LDFLAGS_vmlinux += -T
@@ -164,3 +163,4 @@ $(obj)/piggy_data: $(obj)/../Image FORCE
 $(obj)/piggy.o: $(obj)/piggy_data
 
 CFLAGS_font.o := -Dstatic=
+AFLAGS_hyp-stub.o := -Wa,-march=armv7-a

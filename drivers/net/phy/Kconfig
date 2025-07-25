@@ -47,6 +47,7 @@ config LED_TRIGGER_PHY
 
 config FIXED_PHY
 	tristate "MDIO Bus/PHY emulation with fixed speed/link PHYs"
+	depends on PHYLIB
 	select SWPHY
 	help
 	  Adds the platform "fixed" MDIO Bus to cover the boards that use
@@ -111,6 +112,7 @@ config BROADCOM_PHY
 
 config BCM54140_PHY
 	tristate "Broadcom BCM54140 PHY"
+	depends on PHYLIB
 	depends on HWMON || HWMON=n
 	select BCM_NET_PHYLIB
 	help
@@ -135,6 +137,7 @@ config BCM7XXX_PHY
 
 config BCM84881_PHY
 	tristate "Broadcom BCM84881 PHY"
+	depends on PHYLIB
 	help
 	  Support the Broadcom BCM84881 PHY.
 
@@ -257,7 +260,7 @@ config MOTORCOMM_PHY
 	tristate "Motorcomm PHYs"
 	help
 	  Enables support for Motorcomm network PHYs.
-	  Currently supports the YT8511, YT8521, YT8531S Gigabit Ethernet PHYs.
+	  Currently supports the YT8511, YT8521, YT8531, RK631 gigabit PHY.
 
 config NATIONAL_PHY
 	tristate "National Semiconductor PHYs"
@@ -303,6 +306,11 @@ config ROCKCHIP_PHY
 	tristate "Rockchip Ethernet PHYs"
 	help
 	  Currently supports the integrated Ethernet PHY.
+
+config RK630_PHY
+	tristate "Driver for RK630 Ethernet PHYs"
+	help
+	  Currently supports the RK630 Ethernet PHY.
 
 config SMSC_PHY
 	tristate "SMSC PHYs"

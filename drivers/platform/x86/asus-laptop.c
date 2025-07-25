@@ -1901,7 +1901,7 @@ fail_platform:
 	return result;
 }
 
-static void asus_acpi_remove(struct acpi_device *device)
+static int asus_acpi_remove(struct acpi_device *device)
 {
 	struct asus_laptop *asus = acpi_driver_data(device);
 
@@ -1914,6 +1914,7 @@ static void asus_acpi_remove(struct acpi_device *device)
 
 	kfree(asus->name);
 	kfree(asus);
+	return 0;
 }
 
 static const struct acpi_device_id asus_device_ids[] = {

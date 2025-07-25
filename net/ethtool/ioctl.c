@@ -27,6 +27,7 @@
 #include <linux/net.h>
 #include <linux/pm_runtime.h>
 #include <net/devlink.h>
+#include <net/ipv6.h>
 #include <net/xdp_sock_drv.h>
 #include <net/flow_offload.h>
 #include <linux/ethtool_netlink.h>
@@ -44,9 +45,16 @@ struct ethtool_devlink_compat {
 
 static struct devlink *netdev_to_devlink_get(struct net_device *dev)
 {
-	if (!dev->devlink_port)
+	struct devlink_port *devlink_port;
+
+	if (!dev->netdev_ops->ndo_get_devlink_port)
 		return NULL;
-	return devlink_try_get(dev->devlink_port->devlink);
+
+	devlink_port = dev->netdev_ops->ndo_get_devlink_port(dev);
+	if (!devlink_port)
+		return NULL;
+
+	return devlink_try_get(devlink_port->devlink);
 }
 
 /*
@@ -573,8 +581,8 @@ static int ethtool_get_link_ksettings(struct net_device *dev,
 static int ethtool_set_link_ksettings(struct net_device *dev,
 				      void __user *useraddr)
 {
+	struct ethtool_link_ksettings link_ksettings = {};
 	int err;
-	struct ethtool_link_ksettings link_ksettings;
 
 	ASSERT_RTNL();
 
@@ -706,22 +714,15 @@ static int
 ethtool_get_drvinfo(struct net_device *dev, struct ethtool_devlink_compat *rsp)
 {
 	const struct ethtool_ops *ops = dev->ethtool_ops;
-	struct device *parent = dev->dev.parent;
 
 	rsp->info.cmd = ETHTOOL_GDRVINFO;
 	strscpy(rsp->info.version, UTS_RELEASE, sizeof(rsp->info.version));
 	if (ops->get_drvinfo) {
 		ops->get_drvinfo(dev, &rsp->info);
-		if (!rsp->info.bus_info[0] && parent)
-			strscpy(rsp->info.bus_info, dev_name(parent),
-				sizeof(rsp->info.bus_info));
-		if (!rsp->info.driver[0] && parent && parent->driver)
-			strscpy(rsp->info.driver, parent->driver->name,
-				sizeof(rsp->info.driver));
-	} else if (parent && parent->driver) {
-		strscpy(rsp->info.bus_info, dev_name(parent),
+	} else if (dev->dev.parent && dev->dev.parent->driver) {
+		strscpy(rsp->info.bus_info, dev_name(dev->dev.parent),
 			sizeof(rsp->info.bus_info));
-		strscpy(rsp->info.driver, parent->driver->name,
+		strscpy(rsp->info.driver, dev->dev.parent->driver->name,
 			sizeof(rsp->info.driver));
 	} else if (dev->rtnl_link_ops) {
 		strscpy(rsp->info.driver, dev->rtnl_link_ops->kind,
@@ -1796,8 +1797,7 @@ static noinline_for_stack int ethtool_set_channels(struct net_device *dev,
 {
 	struct ethtool_channels channels, curr = { .cmd = ETHTOOL_GCHANNELS };
 	u16 from_channel, to_channel;
-	u64 max_rxnfc_in_use;
-	u32 max_rxfh_in_use;
+	u32 max_rx_in_use = 0;
 	unsigned int i;
 	int ret;
 
@@ -1828,15 +1828,11 @@ static noinline_for_stack int ethtool_set_channels(struct net_device *dev,
 		return -EINVAL;
 
 	/* ensure the new Rx count fits within the configured Rx flow
-	 * indirection table/rxnfc settings */
-	if (ethtool_get_max_rxnfc_channel(dev, &max_rxnfc_in_use))
-		max_rxnfc_in_use = 0;
-	if (!netif_is_rxfh_configured(dev) ||
-	    ethtool_get_max_rxfh_channel(dev, &max_rxfh_in_use))
-		max_rxfh_in_use = 0;
-	if (channels.combined_count + channels.rx_count <=
-	    max_t(u64, max_rxnfc_in_use, max_rxfh_in_use))
-		return -EINVAL;
+	 * indirection table settings */
+	if (netif_is_rxfh_configured(dev) &&
+	    !ethtool_get_max_rxfh_channel(dev, &max_rx_in_use) &&
+	    (channels.combined_count + channels.rx_count) <= max_rx_in_use)
+	    return -EINVAL;
 
 	/* Disabling channels, query zero-copy AF_XDP sockets */
 	from_channel = channels.combined_count +
@@ -2099,7 +2095,8 @@ static int ethtool_get_phy_stats(struct net_device *dev, void __user *useraddr)
 		return n_stats;
 	if (n_stats > S32_MAX / sizeof(u64))
 		return -ENOMEM;
-	WARN_ON_ONCE(!n_stats);
+	if (WARN_ON_ONCE(!n_stats))
+		return -EOPNOTSUPP;
 
 	if (copy_from_user(&stats, useraddr, sizeof(stats)))
 		return -EFAULT;
@@ -3094,7 +3091,6 @@ struct ethtool_rx_flow_rule *
 ethtool_rx_flow_rule_create(const struct ethtool_rx_flow_spec_input *input)
 {
 	const struct ethtool_rx_flow_spec *fs = input->fs;
-	static struct in6_addr zero_addr = {};
 	struct ethtool_rx_flow_match *match;
 	struct ethtool_rx_flow_rule *flow;
 	struct flow_action_entry *act;
@@ -3200,20 +3196,20 @@ ethtool_rx_flow_rule_create(const struct ethtool_rx_flow_spec_input *input)
 
 		v6_spec = &fs->h_u.tcp_ip6_spec;
 		v6_m_spec = &fs->m_u.tcp_ip6_spec;
-		if (memcmp(v6_m_spec->ip6src, &zero_addr, sizeof(zero_addr))) {
+		if (!ipv6_addr_any((struct in6_addr *)v6_m_spec->ip6src)) {
 			memcpy(&match->key.ipv6.src, v6_spec->ip6src,
 			       sizeof(match->key.ipv6.src));
 			memcpy(&match->mask.ipv6.src, v6_m_spec->ip6src,
 			       sizeof(match->mask.ipv6.src));
 		}
-		if (memcmp(v6_m_spec->ip6dst, &zero_addr, sizeof(zero_addr))) {
+		if (!ipv6_addr_any((struct in6_addr *)v6_m_spec->ip6dst)) {
 			memcpy(&match->key.ipv6.dst, v6_spec->ip6dst,
 			       sizeof(match->key.ipv6.dst));
 			memcpy(&match->mask.ipv6.dst, v6_m_spec->ip6dst,
 			       sizeof(match->mask.ipv6.dst));
 		}
-		if (memcmp(v6_m_spec->ip6src, &zero_addr, sizeof(zero_addr)) ||
-		    memcmp(v6_m_spec->ip6dst, &zero_addr, sizeof(zero_addr))) {
+		if (!ipv6_addr_any((struct in6_addr *)v6_m_spec->ip6src) ||
+		    !ipv6_addr_any((struct in6_addr *)v6_m_spec->ip6dst)) {
 			match->dissector.used_keys |=
 				BIT(FLOW_DISSECTOR_KEY_IPV6_ADDRS);
 			match->dissector.offset[FLOW_DISSECTOR_KEY_IPV6_ADDRS] =

@@ -4,16 +4,10 @@
  */
 
 #include "ctree.h"
-#include "fs.h"
-#include "messages.h"
 #include "inode-item.h"
 #include "disk-io.h"
 #include "transaction.h"
 #include "print-tree.h"
-#include "space-info.h"
-#include "accessors.h"
-#include "extent-tree.h"
-#include "file-item.h"
 
 struct btrfs_inode_ref *btrfs_find_name_in_backref(struct extent_buffer *leaf,
 						   int slot,

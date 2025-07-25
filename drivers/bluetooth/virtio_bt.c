@@ -50,11 +50,8 @@ static int virtbt_add_inbuf(struct virtio_bluetooth *vbt)
 
 static int virtbt_open(struct hci_dev *hdev)
 {
-	return 0;
-}
+	struct virtio_bluetooth *vbt = hci_get_drvdata(hdev);
 
-static int virtbt_open_vdev(struct virtio_bluetooth *vbt)
-{
 	if (virtbt_add_inbuf(vbt) < 0)
 		return -EIO;
 
@@ -64,11 +61,7 @@ static int virtbt_open_vdev(struct virtio_bluetooth *vbt)
 
 static int virtbt_close(struct hci_dev *hdev)
 {
-	return 0;
-}
-
-static int virtbt_close_vdev(struct virtio_bluetooth *vbt)
-{
+	struct virtio_bluetooth *vbt = hci_get_drvdata(hdev);
 	int i;
 
 	cancel_work_sync(&vbt->rx);
@@ -313,12 +306,7 @@ static int virtbt_probe(struct virtio_device *vdev)
 	if (virtio_has_feature(vdev, VIRTIO_BT_F_VND_HCI)) {
 		__u16 vendor;
 
-		if (virtio_has_feature(vdev, VIRTIO_BT_F_CONFIG_V2))
-			virtio_cread(vdev, struct virtio_bt_config_v2,
-				     vendor, &vendor);
-		else
-			virtio_cread(vdev, struct virtio_bt_config,
-				     vendor, &vendor);
+		virtio_cread(vdev, struct virtio_bt_config, vendor, &vendor);
 
 		switch (vendor) {
 		case VIRTIO_BT_CONFIG_VENDOR_ZEPHYR:
@@ -351,12 +339,8 @@ static int virtbt_probe(struct virtio_device *vdev)
 	if (virtio_has_feature(vdev, VIRTIO_BT_F_MSFT_EXT)) {
 		__u16 msft_opcode;
 
-		if (virtio_has_feature(vdev, VIRTIO_BT_F_CONFIG_V2))
-			virtio_cread(vdev, struct virtio_bt_config_v2,
-				     msft_opcode, &msft_opcode);
-		else
-			virtio_cread(vdev, struct virtio_bt_config,
-				     msft_opcode, &msft_opcode);
+		virtio_cread(vdev, struct virtio_bt_config,
+			     msft_opcode, &msft_opcode);
 
 		hci_set_msft_opcode(hdev, msft_opcode);
 	}
@@ -370,15 +354,8 @@ static int virtbt_probe(struct virtio_device *vdev)
 		goto failed;
 	}
 
-	virtio_device_ready(vdev);
-	err = virtbt_open_vdev(vbt);
-	if (err)
-		goto open_failed;
-
 	return 0;
 
-open_failed:
-	hci_free_dev(hdev);
 failed:
 	vdev->config->del_vqs(vdev);
 	return err;
@@ -391,7 +368,6 @@ static void virtbt_remove(struct virtio_device *vdev)
 
 	hci_unregister_dev(hdev);
 	virtio_reset_device(vdev);
-	virtbt_close_vdev(vbt);
 
 	hci_free_dev(hdev);
 	vbt->hdev = NULL;
@@ -411,7 +387,6 @@ static const unsigned int virtbt_features[] = {
 	VIRTIO_BT_F_VND_HCI,
 	VIRTIO_BT_F_MSFT_EXT,
 	VIRTIO_BT_F_AOSP_EXT,
-	VIRTIO_BT_F_CONFIG_V2,
 };
 
 static struct virtio_driver virtbt_driver = {

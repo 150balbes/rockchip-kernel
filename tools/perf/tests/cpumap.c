@@ -6,7 +6,7 @@
 #include "util/synthetic-events.h"
 #include <string.h>
 #include <linux/bitops.h>
-#include <internal/cpumap.h>
+#include <perf/cpumap.h>
 #include "debug.h"
 
 struct machine;

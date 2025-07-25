@@ -536,11 +536,19 @@ static const struct iio_info ad7150_info_no_irq = {
 	.read_raw = &ad7150_read_raw,
 };
 
-static int ad7150_probe(struct i2c_client *client)
+static void ad7150_reg_disable(void *data)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
+	struct regulator *reg = data;
+
+	regulator_disable(reg);
+}
+
+static int ad7150_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
+{
 	struct ad7150_chip_info *chip;
 	struct iio_dev *indio_dev;
+	struct regulator *reg;
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*chip));
@@ -555,7 +563,15 @@ static int ad7150_probe(struct i2c_client *client)
 
 	indio_dev->modes = INDIO_DIRECT_MODE;
 
-	ret = devm_regulator_get_enable(&client->dev, "vdd");
+	reg = devm_regulator_get(&client->dev, "vdd");
+	if (IS_ERR(reg))
+		return PTR_ERR(reg);
+
+	ret = regulator_enable(reg);
+	if (ret)
+		return ret;
+
+	ret = devm_add_action_or_reset(&client->dev, ad7150_reg_disable, reg);
 	if (ret)
 		return ret;
 
@@ -647,7 +663,7 @@ static struct i2c_driver ad7150_driver = {
 		.name = "ad7150",
 		.of_match_table = ad7150_of_match,
 	},
-	.probe_new = ad7150_probe,
+	.probe = ad7150_probe,
 	.id_table = ad7150_id,
 };
 module_i2c_driver(ad7150_driver);

@@ -298,25 +298,10 @@ v4l2_fwnode_endpoint_parse_parallel_bus(struct fwnode_handle *fwnode,
 
 	if (!fwnode_property_read_u32(fwnode, "pclk-sample", &v)) {
 		flags &= ~(V4L2_MBUS_PCLK_SAMPLE_RISING |
-			   V4L2_MBUS_PCLK_SAMPLE_FALLING |
-			   V4L2_MBUS_PCLK_SAMPLE_DUALEDGE);
-		switch (v) {
-		case 0:
-			flags |= V4L2_MBUS_PCLK_SAMPLE_FALLING;
-			pr_debug("pclk-sample low\n");
-			break;
-		case 1:
-			flags |= V4L2_MBUS_PCLK_SAMPLE_RISING;
-			pr_debug("pclk-sample high\n");
-			break;
-		case 2:
-			flags |= V4L2_MBUS_PCLK_SAMPLE_DUALEDGE;
-			pr_debug("pclk-sample dual edge\n");
-			break;
-		default:
-			pr_warn("invalid argument for pclk-sample");
-			break;
-		}
+			   V4L2_MBUS_PCLK_SAMPLE_FALLING);
+		flags |= v ? V4L2_MBUS_PCLK_SAMPLE_RISING :
+			V4L2_MBUS_PCLK_SAMPLE_FALLING;
+		pr_debug("pclk-sample %s\n", v ? "high" : "low");
 	}
 
 	if (!fwnode_property_read_u32(fwnode, "data-active", &v)) {
@@ -566,19 +551,29 @@ int v4l2_fwnode_parse_link(struct fwnode_handle *fwnode,
 	link->local_id = fwep.id;
 	link->local_port = fwep.port;
 	link->local_node = fwnode_graph_get_port_parent(fwnode);
+	if (!link->local_node)
+		return -ENOLINK;
 
 	fwnode = fwnode_graph_get_remote_endpoint(fwnode);
-	if (!fwnode) {
-		fwnode_handle_put(fwnode);
-		return -ENOLINK;
-	}
+	if (!fwnode)
+		goto err_put_local_node;
 
 	fwnode_graph_parse_endpoint(fwnode, &fwep);
 	link->remote_id = fwep.id;
 	link->remote_port = fwep.port;
 	link->remote_node = fwnode_graph_get_port_parent(fwnode);
+	if (!link->remote_node)
+		goto err_put_remote_endpoint;
 
 	return 0;
+
+err_put_remote_endpoint:
+	fwnode_handle_put(fwnode);
+
+err_put_local_node:
+	fwnode_handle_put(link->local_node);
+
+	return -ENOLINK;
 }
 EXPORT_SYMBOL_GPL(v4l2_fwnode_parse_link);
 

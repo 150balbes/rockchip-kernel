@@ -41,9 +41,11 @@ static bool hmm_initialized;
 
 /*
  * p: private
- * v: vmalloc
+ * s: shared
+ * u: user
+ * i: ion
  */
-static const char hmm_bo_type_string[] = "pv";
+static const char hmm_bo_type_string[] = "psui";
 
 static ssize_t bo_show(struct device *dev, struct device_attribute *attr,
 		       char *buf, struct list_head *bo_list, bool active)
@@ -166,8 +168,7 @@ void hmm_cleanup(void)
 	hmm_initialized = false;
 }
 
-static ia_css_ptr __hmm_alloc(size_t bytes, enum hmm_bo_type type,
-			      void *vmalloc_addr)
+static ia_css_ptr __hmm_alloc(size_t bytes, enum hmm_bo_type type, const void __user *userptr)
 {
 	unsigned int pgnr;
 	struct hmm_buffer_object *bo;
@@ -191,7 +192,7 @@ static ia_css_ptr __hmm_alloc(size_t bytes, enum hmm_bo_type type,
 	}
 
 	/* Allocate pages for memory */
-	ret = hmm_bo_alloc_pages(bo, type, vmalloc_addr);
+	ret = hmm_bo_alloc_pages(bo, type, userptr);
 	if (ret) {
 		dev_err(atomisp_dev, "hmm_bo_alloc_pages failed.\n");
 		goto alloc_page_err;
@@ -204,8 +205,9 @@ static ia_css_ptr __hmm_alloc(size_t bytes, enum hmm_bo_type type,
 		goto bind_err;
 	}
 
-	dev_dbg(atomisp_dev, "pages: 0x%08x (%zu bytes), type: %d, vmalloc %p\n",
-		bo->start, bytes, type, vmalloc);
+	dev_dbg(atomisp_dev,
+		"%s: pages: 0x%08x (%zu bytes), type: %d, user ptr %p\n",
+		__func__, bo->start, bytes, type, userptr);
 
 	return bo->start;
 
@@ -222,9 +224,9 @@ ia_css_ptr hmm_alloc(size_t bytes)
 	return __hmm_alloc(bytes, HMM_BO_PRIVATE, NULL);
 }
 
-ia_css_ptr hmm_create_from_vmalloc_buf(size_t bytes, void *vmalloc_addr)
+ia_css_ptr hmm_create_from_userdata(size_t bytes, const void __user *userptr)
 {
-	return __hmm_alloc(bytes, HMM_BO_VMALLOC, vmalloc_addr);
+	return __hmm_alloc(bytes, HMM_BO_USER, userptr);
 }
 
 void hmm_free(ia_css_ptr virt)

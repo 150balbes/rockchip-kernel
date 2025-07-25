@@ -28,7 +28,7 @@ struct vpbe_output {
 	 */
 	char *subdev_name;
 	/*
-	 * default_mode identifies the default timings set at the venc or
+	 * defualt_mode identifies the default timings set at the venc or
 	 * external encoder.
 	 */
 	char *default_mode;

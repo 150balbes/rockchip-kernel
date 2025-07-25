@@ -7,9 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Freescale Fast Ethernet Controller (FEC)
 
 maintainers:
-  - Shawn Guo <shawnguo@kernel.org>
-  - Wei Fang <wei.fang@nxp.com>
-  - NXP Linux Team <linux-imx@nxp.com>
+  - Joakim Zhang <qiangqing.zhang@nxp.com>
 
 allOf:
   - $ref: ethernet-controller.yaml#

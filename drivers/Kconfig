@@ -99,8 +99,6 @@ source "drivers/media/Kconfig"
 
 source "drivers/video/Kconfig"
 
-source "drivers/accel/Kconfig"
-
 source "sound/Kconfig"
 
 source "drivers/hid/Kconfig"
@@ -240,5 +238,13 @@ source "drivers/most/Kconfig"
 source "drivers/peci/Kconfig"
 
 source "drivers/hte/Kconfig"
+
+source "drivers/rkflash/Kconfig"
+
+source "drivers/rk_nand/Kconfig"
+
+source "drivers/headset_observe/Kconfig"
+
+source "drivers/rknpu/Kconfig"
 
 endmenu

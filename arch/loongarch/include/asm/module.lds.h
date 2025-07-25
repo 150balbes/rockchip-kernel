@@ -5,5 +5,4 @@ SECTIONS {
 	.got : { BYTE(0) }
 	.plt : { BYTE(0) }
 	.plt.idx : { BYTE(0) }
-	.ftrace_trampoline : { BYTE(0) }
 }

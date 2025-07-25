@@ -160,7 +160,8 @@ static int tsl4531_check_id(struct i2c_client *client)
 	}
 }
 
-static int tsl4531_probe(struct i2c_client *client)
+static int tsl4531_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct tsl4531_data *data;
 	struct iio_dev *indio_dev;
@@ -237,7 +238,7 @@ static struct i2c_driver tsl4531_driver = {
 		.name   = TSL4531_DRV_NAME,
 		.pm	= pm_sleep_ptr(&tsl4531_pm_ops),
 	},
-	.probe_new = tsl4531_probe,
+	.probe  = tsl4531_probe,
 	.remove = tsl4531_remove,
 	.id_table = tsl4531_id,
 };

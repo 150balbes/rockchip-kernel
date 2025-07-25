@@ -382,22 +382,32 @@ static void dc_perf_trace_destroy(struct dc_perf_trace **perf_trace)
 }
 
 /**
- *  dc_stream_adjust_vmin_vmax:
+ *  dc_stream_adjust_vmin_vmax - look up pipe context & update parts of DRR
+ *  @dc:     dc reference
+ *  @stream: Initial dc stream state
+ *  @adjust: Updated parameters for vertical_total_min and vertical_total_max
  *
  *  Looks up the pipe context of dc_stream_state and updates the
  *  vertical_total_min and vertical_total_max of the DRR, Dynamic Refresh
  *  Rate, which is a power-saving feature that targets reducing panel
  *  refresh rate while the screen is static
  *
- *  @dc:     dc reference
- *  @stream: Initial dc stream state
- *  @adjust: Updated parameters for vertical_total_min and vertical_total_max
+ *  Return: %true if the pipe context is found and adjusted;
+ *          %false if the pipe context is not found.
  */
 bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 		struct dc_stream_state *stream,
 		struct dc_crtc_timing_adjust *adjust)
 {
 	int i;
+
+	/*
+	 * Don't adjust DRR while there's bandwidth optimizations pending to
+	 * avoid conflicting with firmware updates.
+	 */
+	if (dc->ctx->dce_version > DCE_VERSION_MAX)
+		if (dc->optimized_required || dc->wm_optimized_required)
+			return false;
 
 	stream->adjust.v_total_max = adjust->v_total_max;
 	stream->adjust.v_total_mid = adjust->v_total_mid;
@@ -419,14 +429,17 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 }
 
 /**
- * dc_stream_get_last_used_drr_vtotal - dc_stream_get_last_vrr_vtotal
+ * dc_stream_get_last_used_drr_vtotal - Looks up the pipe context of
+ * dc_stream_state and gets the last VTOTAL used by DRR (Dynamic Refresh Rate)
  *
  * @dc: [in] dc reference
  * @stream: [in] Initial dc stream state
- * @adjust: [in] Updated parameters for vertical_total_min and
+ * @refresh_rate: [in] new refresh_rate
  *
- * Looks up the pipe context of dc_stream_state and gets the last VTOTAL used
- * by DRR (Dynamic Refresh Rate)
+ * Return: %true if the pipe context is found and there is an associated
+ *         timing_generator for the DC;
+ *         %false if the pipe context is not found or there is no
+ *         timing_generator for the DC.
  */
 bool dc_stream_get_last_used_drr_vtotal(struct dc *dc,
 		struct dc_stream_state *stream,
@@ -482,79 +495,86 @@ bool dc_stream_get_crtc_position(struct dc *dc,
 }
 
 #if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
-static inline void
-dc_stream_forward_dmub_crc_window(struct dc_dmub_srv *dmub_srv,
-		struct rect *rect, struct otg_phy_mux *mux_mapping, bool is_stop)
+bool dc_stream_forward_dmcu_crc_window(struct dc *dc, struct dc_stream_state *stream,
+			     struct crc_params *crc_window)
 {
-	union dmub_rb_cmd cmd = {0};
-
-	cmd.secure_display.roi_info.phy_id = mux_mapping->phy_output_num;
-	cmd.secure_display.roi_info.otg_id = mux_mapping->otg_output_num;
-
-	if (is_stop) {
-		cmd.secure_display.header.type = DMUB_CMD__SECURE_DISPLAY;
-		cmd.secure_display.header.sub_type = DMUB_CMD__SECURE_DISPLAY_CRC_STOP_UPDATE;
-	} else {
-		cmd.secure_display.header.type = DMUB_CMD__SECURE_DISPLAY;
-		cmd.secure_display.header.sub_type = DMUB_CMD__SECURE_DISPLAY_CRC_WIN_NOTIFY;
-		cmd.secure_display.roi_info.x_start = rect->x;
-		cmd.secure_display.roi_info.y_start = rect->y;
-		cmd.secure_display.roi_info.x_end = rect->x + rect->width;
-		cmd.secure_display.roi_info.y_end = rect->y + rect->height;
-	}
-
-	dc_dmub_srv_cmd_queue(dmub_srv, &cmd);
-	dc_dmub_srv_cmd_execute(dmub_srv);
-}
-
-static inline void
-dc_stream_forward_dmcu_crc_window(struct dmcu *dmcu,
-		struct rect *rect, struct otg_phy_mux *mux_mapping, bool is_stop)
-{
-	if (is_stop)
-		dmcu->funcs->stop_crc_win_update(dmcu, mux_mapping);
-	else
-		dmcu->funcs->forward_crc_window(dmcu, rect, mux_mapping);
-}
-
-bool
-dc_stream_forward_crc_window(struct dc *dc,
-		struct rect *rect, struct dc_stream_state *stream, bool is_stop)
-{
-	struct dmcu *dmcu;
-	struct dc_dmub_srv *dmub_srv;
-	struct otg_phy_mux mux_mapping;
-	struct pipe_ctx *pipe;
 	int i;
+	struct dmcu *dmcu = dc->res_pool->dmcu;
+	struct pipe_ctx *pipe;
+	struct crc_region tmp_win, *crc_win;
+	struct otg_phy_mux mapping_tmp, *mux_mapping;
 
-	for (i = 0; i < MAX_PIPES; i++) {
-		pipe = &dc->current_state->res_ctx.pipe_ctx[i];
-		if (pipe->stream == stream && !pipe->top_pipe && !pipe->prev_odm_pipe)
-			break;
+	/*crc window can't be null*/
+	if (!crc_window)
+		return false;
+
+	if ((dmcu != NULL && dmcu->funcs->is_dmcu_initialized(dmcu))) {
+		crc_win = &tmp_win;
+		mux_mapping = &mapping_tmp;
+		/*set crc window*/
+		tmp_win.x_start = crc_window->windowa_x_start;
+		tmp_win.y_start = crc_window->windowa_y_start;
+		tmp_win.x_end = crc_window->windowa_x_end;
+		tmp_win.y_end = crc_window->windowa_y_end;
+
+		for (i = 0; i < MAX_PIPES; i++) {
+			pipe = &dc->current_state->res_ctx.pipe_ctx[i];
+			if (pipe->stream == stream && !pipe->top_pipe && !pipe->prev_odm_pipe)
+				break;
+		}
+
+		/* Stream not found */
+		if (i == MAX_PIPES)
+			return false;
+
+
+		/*set mux routing info*/
+		mapping_tmp.phy_output_num = stream->link->link_enc_hw_inst;
+		mapping_tmp.otg_output_num = pipe->stream_res.tg->inst;
+
+		dmcu->funcs->forward_crc_window(dmcu, crc_win, mux_mapping);
+	} else {
+		DC_LOG_DC("dmcu is not initialized");
+		return false;
 	}
-
-	/* Stream not found */
-	if (i == MAX_PIPES)
-		return false;
-
-	mux_mapping.phy_output_num = stream->link->link_enc_hw_inst;
-	mux_mapping.otg_output_num = pipe->stream_res.tg->inst;
-
-	dmcu = dc->res_pool->dmcu;
-	dmub_srv = dc->ctx->dmub_srv;
-
-	/* forward to dmub */
-	if (dmub_srv)
-		dc_stream_forward_dmub_crc_window(dmub_srv, rect, &mux_mapping, is_stop);
-	/* forward to dmcu */
-	else if (dmcu && dmcu->funcs->is_dmcu_initialized(dmcu))
-		dc_stream_forward_dmcu_crc_window(dmcu, rect, &mux_mapping, is_stop);
-	else
-		return false;
 
 	return true;
 }
-#endif /* CONFIG_DRM_AMD_SECURE_DISPLAY */
+
+bool dc_stream_stop_dmcu_crc_win_update(struct dc *dc, struct dc_stream_state *stream)
+{
+	int i;
+	struct dmcu *dmcu = dc->res_pool->dmcu;
+	struct pipe_ctx *pipe;
+	struct otg_phy_mux mapping_tmp, *mux_mapping;
+
+	if ((dmcu != NULL && dmcu->funcs->is_dmcu_initialized(dmcu))) {
+		mux_mapping = &mapping_tmp;
+
+		for (i = 0; i < MAX_PIPES; i++) {
+			pipe = &dc->current_state->res_ctx.pipe_ctx[i];
+			if (pipe->stream == stream && !pipe->top_pipe && !pipe->prev_odm_pipe)
+				break;
+		}
+
+		/* Stream not found */
+		if (i == MAX_PIPES)
+			return false;
+
+
+		/*set mux routing info*/
+		mapping_tmp.phy_output_num = stream->link->link_enc_hw_inst;
+		mapping_tmp.otg_output_num = pipe->stream_res.tg->inst;
+
+		dmcu->funcs->stop_crc_win_update(dmcu, mux_mapping);
+	} else {
+		DC_LOG_DC("dmcu is not initialized");
+		return false;
+	}
+
+	return true;
+}
+#endif
 
 /**
  * dc_stream_configure_crc() - Configure CRC capture for the given stream.
@@ -566,7 +586,10 @@ dc_stream_forward_crc_window(struct dc *dc,
  *              once.
  *
  * By default, only CRC0 is configured, and the entire frame is used to
- * calculate the crc.
+ * calculate the CRC.
+ *
+ * Return: %false if the stream is not found or CRC capture is not supported;
+ *         %true if the stream has been configured.
  */
 bool dc_stream_configure_crc(struct dc *dc, struct dc_stream_state *stream,
 			     struct crc_params *crc_window, bool enable, bool continuous)
@@ -635,7 +658,7 @@ bool dc_stream_configure_crc(struct dc *dc, struct dc_stream_state *stream,
  * dc_stream_configure_crc needs to be called beforehand to enable CRCs.
  *
  * Return:
- * false if stream is not found, or if CRCs are not enabled.
+ * %false if stream is not found, or if CRCs are not enabled.
  */
 bool dc_stream_get_crc(struct dc *dc, struct dc_stream_state *stream,
 		       uint32_t *r_cr, uint32_t *g_y, uint32_t *b_cb)
@@ -862,6 +885,7 @@ static bool dc_construct_ctx(struct dc *dc,
 
 	dc_ctx->perf_trace = dc_perf_trace_create();
 	if (!dc_ctx->perf_trace) {
+		kfree(dc_ctx);
 		ASSERT_CRITICAL(false);
 		return false;
 	}
@@ -972,7 +996,8 @@ static bool dc_construct(struct dc *dc,
 	/* set i2c speed if not done by the respective dcnxxx__resource.c */
 	if (dc->caps.i2c_speed_in_khz_hdcp == 0)
 		dc->caps.i2c_speed_in_khz_hdcp = dc->caps.i2c_speed_in_khz;
-
+	if (dc->caps.max_optimizable_video_width == 0)
+		dc->caps.max_optimizable_video_width = 5120;
 	dc->clk_mgr = dc_clk_mgr_create(dc->ctx, dc->res_pool->pp_smu, dc->res_pool->dccg);
 	if (!dc->clk_mgr)
 		goto fail;
@@ -1157,6 +1182,9 @@ static void disable_vbios_mode_if_required(
 		pipe = &context->res_ctx.pipe_ctx[i];
 		stream = pipe->stream;
 		if (stream == NULL)
+			continue;
+
+		if (stream->apply_seamless_boot_optimization)
 			continue;
 
 		// only looking for first odm pipe
@@ -1529,6 +1557,9 @@ bool dc_validate_boot_timing(const struct dc *dc,
 		return false;
 	}
 
+	if (dc->debug.force_odm_combine)
+		return false;
+
 	/* Check for enabled DIG to identify enabled display */
 	if (!link->link_enc->funcs->is_dig_enabled(link->link_enc))
 		return false;
@@ -1554,9 +1585,6 @@ bool dc_validate_boot_timing(const struct dc *dc,
 		return false;
 
 	if (tg_inst >= dc->res_pool->timing_generator_count)
-		return false;
-
-	if (tg_inst != link->link_enc->preferred_engine)
 		return false;
 
 	tg = dc->res_pool->timing_generators[tg_inst];
@@ -1732,14 +1760,11 @@ void dc_z10_save_init(struct dc *dc)
 		dc->hwss.z10_save_init(dc);
 }
 
-/**
- * dc_commit_state_no_check - Apply context to the hardware
- *
- * @dc: DC object with the current status to be updated
- * @context: New state that will become the current status at the end of this function
- *
- * Applies given context to the hardware and copy it into current context.
+/*
+ * Applies given context to HW and copy it into current context.
  * It's up to the user to release the src context afterwards.
+ *
+ * Return: an enum dc_status result code for the operation
  */
 static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
 {
@@ -1781,7 +1806,7 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 	if (dc->hwss.subvp_pipe_control_lock)
 		dc->hwss.subvp_pipe_control_lock(dc, context, true, true, NULL, subvp_prev_use);
 
-	if (dc->debug.enable_double_buffered_dsc_pg_support)
+	if (dc->hwss.update_dsc_pg)
 		dc->hwss.update_dsc_pg(dc, context, false);
 
 	disable_dangling_plane(dc, context);
@@ -1878,9 +1903,13 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 		wait_for_no_pipes_pending(dc, context);
 		/* pplib is notified if disp_num changed */
 		dc->hwss.optimize_bandwidth(dc, context);
+		/* Need to do otg sync again as otg could be out of sync due to otg
+		 * workaround applied during clock update
+		 */
+		dc_trigger_sync(dc, context);
 	}
 
-	if (dc->debug.enable_double_buffered_dsc_pg_support)
+	if (dc->hwss.update_dsc_pg)
 		dc->hwss.update_dsc_pg(dc, context, true);
 
 	if (dc->ctx->dce_version >= DCE_VERSION_MAX)
@@ -1906,6 +1935,9 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 	return result;
 }
 
+static bool commit_minimal_transition_state(struct dc *dc,
+		struct dc_state *transition_base_context);
+
 /**
  * dc_commit_streams - Commit current stream state
  *
@@ -1927,6 +1959,8 @@ enum dc_status dc_commit_streams(struct dc *dc,
 	struct dc_state *context;
 	enum dc_status res = DC_OK;
 	struct dc_validation_set set[MAX_STREAMS] = {0};
+	struct pipe_ctx *pipe;
+	bool handle_exit_odm2to1 = false;
 
 	if (dc->ctx->dce_environment == DCE_ENV_VIRTUAL_HW)
 		return res;
@@ -1950,6 +1984,22 @@ enum dc_status dc_commit_streams(struct dc *dc,
 				set[i].plane_states[j] = status->plane_states[j];
 		}
 	}
+
+	/* ODM Combine 2:1 power optimization is only applied for single stream
+	 * scenario, it uses extra pipes than needed to reduce power consumption
+	 * We need to switch off this feature to make room for new streams.
+	 */
+	if (stream_count > dc->current_state->stream_count &&
+			dc->current_state->stream_count == 1) {
+		for (i = 0; i < dc->res_pool->pipe_count; i++) {
+			pipe = &dc->current_state->res_ctx.pipe_ctx[i];
+			if (pipe->next_odm_pipe)
+				handle_exit_odm2to1 = true;
+		}
+	}
+
+	if (handle_exit_odm2to1)
+		res = commit_minimal_transition_state(dc, dc->current_state);
 
 	context = dc_create_state(dc);
 	if (!context)
@@ -1988,7 +2038,7 @@ context_alloc_fail:
 
 	DC_LOG_DC("%s Finished.\n", __func__);
 
-	return res;
+	return (res == DC_OK);
 }
 
 /* TODO: When the transition to the new commit sequence is done, remove this
@@ -2123,27 +2173,33 @@ void dc_post_update_surfaces_to_stream(struct dc *dc)
 
 	post_surface_trace(dc);
 
-	if (dc->ctx->dce_version >= DCE_VERSION_MAX)
-		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
-	else
+	/*
+	 * Only relevant for DCN behavior where we can guarantee the optimization
+	 * is safe to apply - retain the legacy behavior for DCE.
+	 */
+
+	if (dc->ctx->dce_version < DCE_VERSION_MAX)
 		TRACE_DCE_CLOCK_STATE(&context->bw_ctx.bw.dce);
+	else {
+		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
 
-	if (is_flip_pending_in_pipes(dc, context))
-		return;
+		if (is_flip_pending_in_pipes(dc, context))
+			return;
 
-	for (i = 0; i < dc->res_pool->pipe_count; i++)
-		if (context->res_ctx.pipe_ctx[i].stream == NULL ||
-		    context->res_ctx.pipe_ctx[i].plane_state == NULL) {
-			context->res_ctx.pipe_ctx[i].pipe_idx = i;
-			dc->hwss.disable_plane(dc, &context->res_ctx.pipe_ctx[i]);
-		}
+		for (i = 0; i < dc->res_pool->pipe_count; i++)
+			if (context->res_ctx.pipe_ctx[i].stream == NULL ||
+					context->res_ctx.pipe_ctx[i].plane_state == NULL) {
+				context->res_ctx.pipe_ctx[i].pipe_idx = i;
+				dc->hwss.disable_plane(dc, &context->res_ctx.pipe_ctx[i]);
+			}
 
-	process_deferred_updates(dc);
+		process_deferred_updates(dc);
 
-	dc->hwss.optimize_bandwidth(dc, context);
+		dc->hwss.optimize_bandwidth(dc, context);
 
-	if (dc->debug.enable_double_buffered_dsc_pg_support)
-		dc->hwss.update_dsc_pg(dc, context, true);
+		if (dc->hwss.update_dsc_pg)
+			dc->hwss.update_dsc_pg(dc, context, true);
+	}
 
 	dc->optimized_required = false;
 	dc->wm_optimized_required = false;
@@ -2387,6 +2443,7 @@ static enum surface_update_type get_plane_info_update_type(const struct dc_surfa
 }
 
 static enum surface_update_type get_scaling_info_update_type(
+		const struct dc *dc,
 		const struct dc_surface_update *u)
 {
 	union surface_update_flags *update_flags = &u->surface->update_flags;
@@ -2421,6 +2478,12 @@ static enum surface_update_type get_scaling_info_update_type(
 			update_flags->bits.clock_change = 1;
 	}
 
+	if (u->scaling_info->src_rect.width > dc->caps.max_optimizable_video_width &&
+		(u->scaling_info->clip_rect.width > u->surface->clip_rect.width ||
+		 u->scaling_info->clip_rect.height > u->surface->clip_rect.height))
+		 /* Changing clip size of a large surface may result in MPC slice count change */
+		update_flags->bits.bandwidth_change = 1;
+
 	if (u->scaling_info->src_rect.x != u->surface->src_rect.x
 			|| u->scaling_info->src_rect.y != u->surface->src_rect.y
 			|| u->scaling_info->clip_rect.x != u->surface->clip_rect.x
@@ -2448,9 +2511,6 @@ static enum surface_update_type det_surface_update(const struct dc *dc,
 	enum surface_update_type overall_type = UPDATE_TYPE_FAST;
 	union surface_update_flags *update_flags = &u->surface->update_flags;
 
-	if (u->flip_addr)
-		update_flags->bits.addr_update = 1;
-
 	if (!is_surface_in_context(context, u->surface) || u->surface->force_full_update) {
 		update_flags->raw = 0xFFFFFFFF;
 		return UPDATE_TYPE_FULL;
@@ -2461,7 +2521,7 @@ static enum surface_update_type det_surface_update(const struct dc *dc,
 	type = get_plane_info_update_type(u);
 	elevate_update_type(&overall_type, type);
 
-	type = get_scaling_info_update_type(u);
+	type = get_scaling_info_update_type(dc, u);
 	elevate_update_type(&overall_type, type);
 
 	if (u->flip_addr) {
@@ -2570,8 +2630,11 @@ static enum surface_update_type check_update_surfaces_for_stream(
 
 		if (stream_update->mst_bw_update)
 			su_flags->bits.mst_bw = 1;
-		if (stream_update->crtc_timing_adjust && dc_extended_blank_supported(dc))
-			su_flags->bits.crtc_timing_adjust = 1;
+
+		if (stream_update->stream && stream_update->stream->freesync_on_desktop &&
+			(stream_update->vrr_infopacket || stream_update->allow_freesync ||
+				stream_update->vrr_active_variable))
+			su_flags->bits.fams_changed = 1;
 
 		if (su_flags->raw != 0)
 			overall_type = UPDATE_TYPE_FULL;
@@ -3064,7 +3127,7 @@ static bool update_planes_and_stream_state(struct dc *dc,
 		 * Ensures that we have enough pipes for newly added MPO planes
 		 */
 		if (dc->res_pool->funcs->remove_phantom_pipes)
-			dc->res_pool->funcs->remove_phantom_pipes(dc, context, false);
+			dc->res_pool->funcs->remove_phantom_pipes(dc, context);
 
 		/*remove old surfaces from context */
 		if (!dc_rem_all_planes_for_stream(dc, stream, context)) {
@@ -3313,6 +3376,45 @@ void dc_dmub_update_dirty_rect(struct dc *dc,
 	}
 }
 
+static void wait_for_outstanding_hw_updates(struct dc *dc, const struct dc_state *dc_context)
+{
+/*
+ * This function calls HWSS to wait for any potentially double buffered
+ * operations to complete. It should be invoked as a pre-amble prior
+ * to full update programming before asserting any HW locks.
+ */
+	int pipe_idx;
+	int opp_inst;
+	int opp_count = dc->res_pool->pipe_count;
+	struct hubp *hubp;
+	int mpcc_inst;
+	const struct pipe_ctx *pipe_ctx;
+
+	for (pipe_idx = 0; pipe_idx < dc->res_pool->pipe_count; pipe_idx++) {
+		pipe_ctx = &dc_context->res_ctx.pipe_ctx[pipe_idx];
+
+		if (!pipe_ctx->stream)
+			continue;
+
+		if (pipe_ctx->stream_res.tg->funcs->wait_drr_doublebuffer_pending_clear)
+			pipe_ctx->stream_res.tg->funcs->wait_drr_doublebuffer_pending_clear(pipe_ctx->stream_res.tg);
+
+		hubp = pipe_ctx->plane_res.hubp;
+		if (!hubp)
+			continue;
+
+		mpcc_inst = hubp->inst;
+		// MPCC inst is equal to pipe index in practice
+		for (opp_inst = 0; opp_inst < opp_count; opp_inst++) {
+			if (dc->res_pool->opps[opp_inst]->mpcc_disconnect_pending[mpcc_inst]) {
+				dc->res_pool->mpc->funcs->wait_for_idle(dc->res_pool->mpc, mpcc_inst);
+				dc->res_pool->opps[opp_inst]->mpcc_disconnect_pending[mpcc_inst] = false;
+				break;
+			}
+		}
+	}
+}
+
 static void commit_planes_for_stream(struct dc *dc,
 		struct dc_surface_update *srf_updates,
 		int surface_count,
@@ -3330,9 +3432,9 @@ static void commit_planes_for_stream(struct dc *dc,
 	// dc->current_state anymore, so we have to cache it before we apply
 	// the new SubVP context
 	subvp_prev_use = false;
-
-
 	dc_z10_restore(dc);
+	if (update_type == UPDATE_TYPE_FULL)
+		wait_for_outstanding_hw_updates(dc, context);
 
 	if (get_seamless_boot_stream_count(context) > 0 && surface_count > 0) {
 		/* Optimize seamless boot flag keeps clocks and watermarks high until
@@ -3355,7 +3457,7 @@ static void commit_planes_for_stream(struct dc *dc,
 		if (get_seamless_boot_stream_count(context) == 0)
 			dc->hwss.prepare_bandwidth(dc, context);
 
-		if (dc->debug.enable_double_buffered_dsc_pg_support)
+		if (dc->hwss.update_dsc_pg)
 			dc->hwss.update_dsc_pg(dc, context, false);
 
 		context_clock_trace(dc, context);
@@ -3424,6 +3526,22 @@ static void commit_planes_for_stream(struct dc *dc,
 		dc->hwss.pipe_control_lock(dc, top_pipe_to_program, true);
 	}
 
+	if (update_type != UPDATE_TYPE_FAST) {
+		for (i = 0; i < dc->res_pool->pipe_count; i++) {
+			struct pipe_ctx *new_pipe = &context->res_ctx.pipe_ctx[i];
+
+			if ((new_pipe->stream && new_pipe->stream->mall_stream_config.type == SUBVP_PHANTOM) ||
+					subvp_prev_use) {
+				// If old context or new context has phantom pipes, apply
+				// the phantom timings now. We can't change the phantom
+				// pipe configuration safely without driver acquiring
+				// the DMCUB lock first.
+				dc->hwss.apply_ctx_to_hw(dc, context);
+				break;
+			}
+		}
+	}
+
 	dc_dmub_update_dirty_rect(dc, surface_count, stream, srf_updates, context);
 
 	if (update_type != UPDATE_TYPE_FAST) {
@@ -3479,24 +3597,6 @@ static void commit_planes_for_stream(struct dc *dc,
 		}
 
 		return;
-	}
-
-	if (update_type != UPDATE_TYPE_FAST) {
-		for (j = 0; j < dc->res_pool->pipe_count; j++) {
-			struct pipe_ctx *pipe_ctx = &context->res_ctx.pipe_ctx[j];
-
-			if (dc->debug.visual_confirm == VISUAL_CONFIRM_SUBVP &&
-				pipe_ctx->stream && pipe_ctx->plane_state) {
-				/* Only update visual confirm for SUBVP here.
-				 * The bar appears on all pipes, so we need to update the bar on all displays,
-				 * so the information doesn't get stale.
-				 */
-				struct mpcc_blnd_cfg blnd_cfg = { 0 };
-
-				dc->hwss.update_visual_confirm_color(dc, pipe_ctx, &blnd_cfg.black_color,
-						pipe_ctx->plane_res.hubp->inst);
-			}
-		}
 	}
 
 	if (!IS_DIAG_DC(dc->ctx->dce_environment)) {
@@ -3616,6 +3716,7 @@ static void commit_planes_for_stream(struct dc *dc,
 					dc->hwss.update_plane_addr(dc, pipe_ctx);
 			}
 		}
+
 	}
 
 	if (should_lock_all_pipes && dc->hwss.interdependent_update_lock) {
@@ -3651,44 +3752,6 @@ static void commit_planes_for_stream(struct dc *dc,
 				top_pipe_to_program->stream_res.tg->funcs->lock_doublebuffer_disable(
 					top_pipe_to_program->stream_res.tg);
 		}
-
-	/* For phantom pipe OTG enable, it has to be done after any previous pipe
-	 * that was in use has already been programmed at gotten its double buffer
-	 * update for "disable".
-	 */
-	if (update_type != UPDATE_TYPE_FAST) {
-		for (i = 0; i < dc->res_pool->pipe_count; i++) {
-			struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
-			struct pipe_ctx *old_pipe = &dc->current_state->res_ctx.pipe_ctx[i];
-
-			/* If an active, non-phantom pipe is being transitioned into a phantom
-			 * pipe, wait for the double buffer update to complete first before we do
-			 * ANY phantom pipe programming.
-			 */
-			if (pipe->stream && pipe->stream->mall_stream_config.type == SUBVP_PHANTOM &&
-					old_pipe->stream && old_pipe->stream->mall_stream_config.type != SUBVP_PHANTOM) {
-				old_pipe->stream_res.tg->funcs->wait_for_state(
-						old_pipe->stream_res.tg,
-						CRTC_STATE_VBLANK);
-				old_pipe->stream_res.tg->funcs->wait_for_state(
-						old_pipe->stream_res.tg,
-						CRTC_STATE_VACTIVE);
-			}
-		}
-		for (i = 0; i < dc->res_pool->pipe_count; i++) {
-			struct pipe_ctx *new_pipe = &context->res_ctx.pipe_ctx[i];
-
-			if ((new_pipe->stream && new_pipe->stream->mall_stream_config.type == SUBVP_PHANTOM) ||
-					subvp_prev_use) {
-				// If old context or new context has phantom pipes, apply
-				// the phantom timings now. We can't change the phantom
-				// pipe configuration safely without driver acquiring
-				// the DMCUB lock first.
-				dc->hwss.apply_ctx_to_hw(dc, context);
-				break;
-			}
-		}
-	}
 
 	if (update_type != UPDATE_TYPE_FAST)
 		dc->hwss.post_unlock_program_front_end(dc, context);
@@ -3729,24 +3792,10 @@ static void commit_planes_for_stream(struct dc *dc,
 	}
 }
 
-/**
- * could_mpcc_tree_change_for_active_pipes - Check if an OPP associated with MPCC might change
- *
- * @dc: Used to get the current state status
- * @stream: Target stream, which we want to remove the attached planes
- * @surface_count: Number of surface update
- * @is_plane_addition: [in] Fill out with true if it is a plane addition case
- *
- * DCN32x and newer support a feature named Dynamic ODM which can conflict with
- * the MPO if used simultaneously in some specific configurations (e.g.,
- * 4k@144). This function checks if the incoming context requires applying a
- * transition state with unnecessary pipe splitting and ODM disabled to
- * circumvent our hardware limitations to prevent this edge case. If the OPP
- * associated with an MPCC might change due to plane additions, this function
+/* Determines if the incoming context requires a applying transition state with unnecessary
+ * pipe splitting and ODM disabled, due to hardware limitations. In a case where
+ * the OPP associated with an MPCC might change due to plane additions, this function
  * returns true.
- *
- * Return:
- * Return true if OPP and MPCC might change, otherwise, return false.
  */
 static bool could_mpcc_tree_change_for_active_pipes(struct dc *dc,
 		struct dc_stream_state *stream,
@@ -3756,8 +3805,6 @@ static bool could_mpcc_tree_change_for_active_pipes(struct dc *dc,
 
 	struct dc_stream_status *cur_stream_status = stream_get_status(dc->current_state, stream);
 	bool force_minimal_pipe_splitting = false;
-	bool subvp_active = false;
-	uint32_t i;
 
 	*is_plane_addition = false;
 
@@ -3789,25 +3836,11 @@ static bool could_mpcc_tree_change_for_active_pipes(struct dc *dc,
 		}
 	}
 
-	for (i = 0; i < dc->res_pool->pipe_count; i++) {
-		struct pipe_ctx *pipe = &dc->current_state->res_ctx.pipe_ctx[i];
-
-		if (pipe->stream && pipe->stream->mall_stream_config.type != SUBVP_NONE) {
-			subvp_active = true;
-			break;
-		}
-	}
-
 	/* For SubVP when adding or removing planes we need to add a minimal transition
 	 * (even when disabling all planes). Whenever disabling a phantom pipe, we
 	 * must use the minimal transition path to disable the pipe correctly.
-	 *
-	 * We want to use the minimal transition whenever subvp is active, not only if
-	 * a plane is being added / removed from a subvp stream (MPO plane can be added
-	 * to a DRR pipe of SubVP + DRR config, in which case we still want to run through
-	 * a min transition to disable subvp.
 	 */
-	if (cur_stream_status && subvp_active) {
+	if (cur_stream_status && stream->mall_stream_config.type == SUBVP_MAIN) {
 		/* determine if minimal transition is required due to SubVP*/
 		if (cur_stream_status->plane_count > surface_count) {
 			force_minimal_pipe_splitting = true;
@@ -3820,24 +3853,6 @@ static bool could_mpcc_tree_change_for_active_pipes(struct dc *dc,
 	return force_minimal_pipe_splitting;
 }
 
-/**
- * commit_minimal_transition_state - Create a transition pipe split state
- *
- * @dc: Used to get the current state status
- * @transition_base_context: New transition state
- *
- * In some specific configurations, such as pipe split on multi-display with
- * MPO and/or Dynamic ODM, removing a plane may cause unsupported pipe
- * programming when moving to new planes. To mitigate those types of problems,
- * this function adds a transition state that minimizes pipe usage before
- * programming the new configuration. When adding a new plane, the current
- * state requires the least pipes, so it is applied without splitting. When
- * removing a plane, the new state requires the least pipes, so it is applied
- * without splitting.
- *
- * Return:
- * Return false if something is wrong in the transition state.
- */
 static bool commit_minimal_transition_state(struct dc *dc,
 		struct dc_state *transition_base_context)
 {
@@ -3849,13 +3864,10 @@ static bool commit_minimal_transition_state(struct dc *dc,
 	unsigned int i, j;
 	unsigned int pipe_in_use = 0;
 	bool subvp_in_use = false;
+	bool odm_in_use = false;
 
 	if (!transition_context)
 		return false;
-	/* Setup:
-	 * Store the current ODM and MPC config in some temp variables to be
-	 * restored after we commit the transition state.
-	 */
 
 	/* check current pipes in use*/
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
@@ -3877,6 +3889,18 @@ static bool commit_minimal_transition_state(struct dc *dc,
 		}
 	}
 
+	/* If ODM is enabled and we are adding or removing planes from any ODM
+	 * pipe, we must use the minimal transition.
+	 */
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		struct pipe_ctx *pipe = &dc->current_state->res_ctx.pipe_ctx[i];
+
+		if (pipe->stream && pipe->next_odm_pipe) {
+			odm_in_use = true;
+			break;
+		}
+	}
+
 	/* When the OS add a new surface if we have been used all of pipes with odm combine
 	 * and mpc split feature, it need use commit_minimal_transition_state to transition safely.
 	 * After OS exit MPO, it will back to use odm and mpc split with all of pipes, we need
@@ -3885,7 +3909,7 @@ static bool commit_minimal_transition_state(struct dc *dc,
 	 * Reduce the scenarios to use dc_commit_state_no_check in the stage of flip. Especially
 	 * enter/exit MPO when DCN still have enough resources.
 	 */
-	if (pipe_in_use != dc->res_pool->pipe_count && !subvp_in_use) {
+	if (pipe_in_use != dc->res_pool->pipe_count && !subvp_in_use && !odm_in_use) {
 		dc_release_state(transition_context);
 		return true;
 	}
@@ -3903,7 +3927,7 @@ static bool commit_minimal_transition_state(struct dc *dc,
 
 	dc_resource_state_copy_construct(transition_base_context, transition_context);
 
-	/* commit minimal state */
+	//commit minimal state
 	if (dc->res_pool->funcs->validate_bandwidth(dc, transition_context, false)) {
 		for (i = 0; i < transition_context->stream_count; i++) {
 			struct dc_stream_status *stream_status = &transition_context->stream_status[i];
@@ -3921,12 +3945,10 @@ static bool commit_minimal_transition_state(struct dc *dc,
 		ret = dc_commit_state_no_check(dc, transition_context);
 	}
 
-	/* always release as dc_commit_state_no_check retains in good case */
+	/*always release as dc_commit_state_no_check retains in good case*/
 	dc_release_state(transition_context);
 
-	/* TearDown:
-	 * Restore original configuration for ODM and MPO.
-	 */
+	/*restore previous pipe split and odm policy*/
 	if (!dc->config.is_vmin_only_asic)
 		dc->debug.pipe_split_policy = tmp_mpc_policy;
 
@@ -3934,12 +3956,12 @@ static bool commit_minimal_transition_state(struct dc *dc,
 	dc->debug.force_disable_subvp = temp_subvp_policy;
 
 	if (ret != DC_OK) {
-		/* this should never happen */
+		/*this should never happen*/
 		BREAK_TO_DEBUGGER();
 		return false;
 	}
 
-	/* force full surface update */
+	/*force full surface update*/
 	for (i = 0; i < dc->current_state->stream_count; i++) {
 		for (j = 0; j < dc->current_state->stream_status[i].plane_count; j++) {
 			dc->current_state->stream_status[i].plane_states[j]->update_flags.raw = 0xFFFFFFFF;
@@ -3957,7 +3979,6 @@ bool dc_update_planes_and_stream(struct dc *dc,
 	struct dc_state *context;
 	enum surface_update_type update_type;
 	int i;
-	struct mall_temp_config mall_temp_config;
 
 	/* In cases where MPO and split or ODM are used transitions can
 	 * cause underflow. Apply stream configuration with minimal pipe
@@ -3989,29 +4010,11 @@ bool dc_update_planes_and_stream(struct dc *dc,
 
 	/* on plane removal, minimal state is the new one */
 	if (force_minimal_pipe_splitting && !is_plane_addition) {
-		/* Since all phantom pipes are removed in full validation,
-		 * we have to save and restore the subvp/mall config when
-		 * we do a minimal transition since the flags marking the
-		 * pipe as subvp/phantom will be cleared (dc copy constructor
-		 * creates a shallow copy).
-		 */
-		if (dc->res_pool->funcs->save_mall_state)
-			dc->res_pool->funcs->save_mall_state(dc, context, &mall_temp_config);
 		if (!commit_minimal_transition_state(dc, context)) {
 			dc_release_state(context);
 			return false;
 		}
-		if (dc->res_pool->funcs->restore_mall_state)
-			dc->res_pool->funcs->restore_mall_state(dc, context, &mall_temp_config);
 
-		/* If we do a minimal transition with plane removal and the context
-		 * has subvp we also have to retain back the phantom stream / planes
-		 * since the refcount is decremented as part of the min transition
-		 * (we commit a state with no subvp, so the phantom streams / planes
-		 * had to be removed).
-		 */
-		if (dc->res_pool->funcs->retain_phantom_pipes)
-			dc->res_pool->funcs->retain_phantom_pipes(dc, context);
 		update_type = UPDATE_TYPE_FULL;
 	}
 
@@ -4103,12 +4106,9 @@ void dc_commit_updates_for_stream(struct dc *dc,
 			if (new_pipe->plane_state && new_pipe->plane_state != old_pipe->plane_state)
 				new_pipe->plane_state->force_full_update = true;
 		}
-	} else if (update_type == UPDATE_TYPE_FAST && dc_ctx->dce_version >= DCE_VERSION_MAX) {
+	} else if (update_type == UPDATE_TYPE_FAST) {
 		/*
 		 * Previous frame finished and HW is ready for optimization.
-		 *
-		 * Only relevant for DCN behavior where we can guarantee the optimization
-		 * is safe to apply - retain the legacy behavior for DCE.
 		 */
 		dc_post_update_surfaces_to_stream(dc);
 	}
@@ -4704,7 +4704,7 @@ bool dc_enable_dmub_notifications(struct dc *dc)
 /**
  * dc_enable_dmub_outbox - Enables DMUB unsolicited notification
  *
- * dc: [in] dc structure
+ * @dc: [in] dc structure
  *
  * Enables DMUB unsolicited notifications to x86 via outbox.
  */
@@ -4905,8 +4905,8 @@ enum dc_status dc_process_dmub_set_mst_slots(const struct dc *dc,
 /**
  * dc_process_dmub_dpia_hpd_int_enable - Submits DPIA DPD interruption
  *
- * @dc [in]: dc structure
- * @hpd_int_enable [in]: 1 for hpd int enable, 0 to disable
+ * @dc: [in] dc structure
+ * @hpd_int_enable: [in] 1 for hpd int enable, 0 to disable
  *
  * Submits dpia hpd int enable command to dmub via inbox message
  */
@@ -4984,22 +4984,4 @@ void dc_notify_vsync_int_state(struct dc *dc, struct dc_stream_state *stream, bo
 
 	if (pipe->stream_res.abm && pipe->stream_res.abm->funcs->set_abm_pause)
 		pipe->stream_res.abm->funcs->set_abm_pause(pipe->stream_res.abm, !enable, i, pipe->stream_res.tg->inst);
-}
-
-/**
- * dc_extended_blank_supported 0 Decide whether extended blank is supported
- *
- * @dc: [in] Current DC state
- *
- * Extended blank is a freesync optimization feature to be enabled in the
- * future.  During the extra vblank period gained from freesync, we have the
- * ability to enter z9/z10.
- *
- * Return:
- * Indicate whether extended blank is supported (true or false)
- */
-bool dc_extended_blank_supported(struct dc *dc)
-{
-	return dc->debug.extended_blank_optimization && !dc->debug.disable_z10
-		&& dc->caps.zstate_support && dc->caps.is_apu;
 }

@@ -258,12 +258,14 @@
 			};
 
 			power-leds {
-				compatible = "warp-power-leds";
+				compatible = "gpio-leds";
 				green {
 					gpios = <&GPIO1 0 0>;
+					default-state = "keep";
 				};
 				red {
 					gpios = <&GPIO1 1 0>;
+					default-state = "keep";
 				};
 			};
 

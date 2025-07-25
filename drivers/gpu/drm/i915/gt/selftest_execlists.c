@@ -85,6 +85,8 @@ static int wait_for_reset(struct intel_engine_cs *engine,
 			break;
 	} while (time_before(jiffies, timeout));
 
+	flush_scheduled_work();
+
 	if (rq->fence.error != -EIO) {
 		pr_err("%s: hanging request %llx:%lld not reset\n",
 		       engine->name,
@@ -1530,8 +1532,8 @@ static int live_busywait_preempt(void *arg)
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma;
 	enum intel_engine_id id;
-	int err = -ENOMEM;
 	u32 *map;
+	int err;
 
 	/*
 	 * Verify that even without HAS_LOGICAL_RING_PREEMPTION, we can
@@ -1539,13 +1541,17 @@ static int live_busywait_preempt(void *arg)
 	 */
 
 	ctx_hi = kernel_context(gt->i915, NULL);
-	if (!ctx_hi)
-		return -ENOMEM;
+	if (IS_ERR(ctx_hi))
+		return PTR_ERR(ctx_hi);
+
 	ctx_hi->sched.priority = I915_CONTEXT_MAX_USER_PRIORITY;
 
 	ctx_lo = kernel_context(gt->i915, NULL);
-	if (!ctx_lo)
+	if (IS_ERR(ctx_lo)) {
+		err = PTR_ERR(ctx_lo);
 		goto err_ctx_hi;
+	}
+
 	ctx_lo->sched.priority = I915_CONTEXT_MIN_USER_PRIORITY;
 
 	obj = i915_gem_object_create_internal(gt->i915, PAGE_SIZE);
@@ -2764,7 +2770,9 @@ static int create_gang(struct intel_engine_cs *engine,
 	i915_request_get(rq);
 
 	i915_vma_lock(vma);
-	err = i915_vma_move_to_active(vma, rq, 0);
+	err = i915_request_await_object(rq, vma->obj, false);
+	if (!err)
+		err = i915_vma_move_to_active(vma, rq, 0);
 	if (!err)
 		err = rq->engine->emit_bb_start(rq,
 						vma->node.start,
@@ -3178,10 +3186,14 @@ create_gpr_client(struct intel_engine_cs *engine,
 	}
 
 	i915_vma_lock(vma);
-	err = i915_vma_move_to_active(vma, rq, 0);
+	err = i915_request_await_object(rq, vma->obj, false);
+	if (!err)
+		err = i915_vma_move_to_active(vma, rq, 0);
 	i915_vma_unlock(vma);
 
 	i915_vma_lock(batch);
+	if (!err)
+		err = i915_request_await_object(rq, batch->obj, false);
 	if (!err)
 		err = i915_vma_move_to_active(batch, rq, 0);
 	if (!err)
@@ -3515,7 +3527,9 @@ static int smoke_submit(struct preempt_smoke *smoke,
 
 	if (vma) {
 		i915_vma_lock(vma);
-		err = i915_vma_move_to_active(vma, rq, 0);
+		err = i915_request_await_object(rq, vma->obj, false);
+		if (!err)
+			err = i915_vma_move_to_active(vma, rq, 0);
 		if (!err)
 			err = rq->engine->emit_bb_start(rq,
 							vma->node.start,

@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (C) 2021 Stephan Gerhold
- */
+// Copyright (C) 2021 Stephan Gerhold
 
 /dts-v1/;
 
@@ -416,7 +414,7 @@
 };
 
 &msmgpio {
-	accel_irq_default: accel-irq-default-state {
+	accel_irq_default: accel-irq-default {
 		pins = "gpio115";
 		function = "gpio";
 
@@ -424,7 +422,7 @@
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default-state {
+	gpio_keys_default: gpio-keys-default {
 		pins = "gpio107";
 		function = "gpio";
 
@@ -432,7 +430,7 @@
 		bias-pull-up;
 	};
 
-	gpio_leds_default: gpio-leds-default-state {
+	gpio_leds_default: gpio-leds-default {
 		pins = "gpio8", "gpio9", "gpio10";
 		function = "gpio";
 
@@ -440,7 +438,7 @@
 		bias-disable;
 	};
 
-	nfc_default: nfc-default-state {
+	nfc_default: nfc-default {
 		pins = "gpio2", "gpio20", "gpio21";
 		function = "gpio";
 
@@ -448,7 +446,7 @@
 		bias-disable;
 	};
 
-	mag_reset_default: mag-reset-default-state {
+	mag_reset_default: mag-reset-default {
 		pins = "gpio36";
 		function = "gpio";
 
@@ -456,7 +454,7 @@
 		bias-disable;
 	};
 
-	prox_irq_default: prox-irq-default-state {
+	prox_irq_default: prox-irq-default {
 		pins = "gpio113";
 		function = "gpio";
 
@@ -464,7 +462,7 @@
 		bias-disable;
 	};
 
-	reg_lcd_en_default: reg-lcd-en-default-state {
+	reg_lcd_en_default: reg-lcd-en-default {
 		pins = "gpio32", "gpio97";
 		function = "gpio";
 
@@ -472,7 +470,7 @@
 		bias-disable;
 	};
 
-	sdhc2_cd_default: sdhc2-cd-default-state {
+	sdhc2_cd_default: sdhc2-cd-default {
 		pins = "gpio56";
 		function = "gpio";
 
@@ -480,7 +478,7 @@
 		bias-disable;
 	};
 
-	ts_irq_default: ts-irq-default-state {
+	ts_irq_default: ts-irq-default {
 		pins = "gpio13";
 		function = "gpio";
 
@@ -488,7 +486,7 @@
 		bias-disable;
 	};
 
-	usb_id_default: usb-id-default-state {
+	usb_id_default: usb-id-default {
 		pins = "gpio117";
 		function = "gpio";
 

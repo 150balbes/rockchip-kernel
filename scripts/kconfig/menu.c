@@ -724,8 +724,10 @@ static void get_prompt_str(struct gstr *r, struct property *prop,
 
 	menu = prop->menu;
 	for (i = 0; menu != &rootmenu && i < 8; menu = menu->parent) {
+		bool accessible = menu_is_visible(menu);
+
 		submenu[i++] = menu;
-		if (location == NULL && menu_is_visible(menu))
+		if (location == NULL && accessible)
 			location = menu;
 	}
 	if (head && location) {

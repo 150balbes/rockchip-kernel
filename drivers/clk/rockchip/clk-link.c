@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2021 Rockchip Electronics Co., Ltd
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
  */
 
 #include <linux/clk-provider.h>
@@ -68,14 +68,25 @@ static int register_clocks(struct rockchip_link_clk *priv, struct device *dev)
 	gate->hw.init = &init;
 
 	clk = devm_clk_register(dev, &gate->hw);
-	if (IS_ERR(clk)) {
-		dev_err(dev, "devm_clk_register failed: %ld\n", PTR_ERR(clk));
-		devm_kfree(dev, gate);
+	if (IS_ERR(clk))
 		return -EINVAL;
-	}
 
 	return of_clk_add_provider(dev->of_node, of_clk_src_simple_get, clk);
 }
+
+static const struct rockchip_link_info rk3562_clk_gate_link_info[] = {
+	GATE_LINK("aclk_rga_jdec", "aclk_rga_pre", 3),
+	GATE_LINK("aclk_vdpu", "aclk_vdpu_pre", 5),
+	GATE_LINK("aclk_vepu", "aclk_vepu_pre", 3),
+	GATE_LINK("aclk_vi_isp", "aclk_vi", 3),
+	GATE_LINK("aclk_vo", "aclk_vo_pre", 3),
+	GATE_LINK("hclk_vepu", "hclk_vepu_pre", 4),
+};
+
+static const struct rockchip_link rk3562_clk_gate_link = {
+	.num = ARRAY_SIZE(rk3562_clk_gate_link_info),
+	.info = rk3562_clk_gate_link_info,
+};
 
 static const struct rockchip_link_info rk3588_clk_gate_link_info[] = {
 	GATE_LINK("aclk_isp1_pre", "aclk_isp1_root", 6),
@@ -108,6 +119,10 @@ static const struct rockchip_link rk3588_clk_gate_link = {
 };
 
 static const struct of_device_id rockchip_clk_link_of_match[] = {
+	{
+		.compatible = "rockchip,rk3562-clock-gate-link",
+		.data = (void *)&rk3562_clk_gate_link,
+	},
 	{
 		.compatible = "rockchip,rk3588-clock-gate-link",
 		.data = (void *)&rk3588_clk_gate_link,

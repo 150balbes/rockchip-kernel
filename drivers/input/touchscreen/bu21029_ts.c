@@ -331,7 +331,8 @@ static void bu21029_stop_chip(struct input_dev *dev)
 	regulator_disable(bu21029->vdd);
 }
 
-static int bu21029_probe(struct i2c_client *client)
+static int bu21029_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct bu21029_ts_data *bu21029;
 	struct input_dev *in_dev;
@@ -474,7 +475,7 @@ static struct i2c_driver bu21029_driver = {
 		.pm		= &bu21029_pm_ops,
 	},
 	.id_table	= bu21029_ids,
-	.probe_new	= bu21029_probe,
+	.probe		= bu21029_probe,
 };
 module_i2c_driver(bu21029_driver);
 

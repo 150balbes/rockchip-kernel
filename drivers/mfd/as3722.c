@@ -333,7 +333,8 @@ static int as3722_i2c_of_probe(struct i2c_client *i2c,
 	return 0;
 }
 
-static int as3722_i2c_probe(struct i2c_client *i2c)
+static int as3722_i2c_probe(struct i2c_client *i2c,
+			const struct i2c_device_id *id)
 {
 	struct as3722 *as3722;
 	unsigned long irq_flags;
@@ -445,7 +446,7 @@ static struct i2c_driver as3722_i2c_driver = {
 		.of_match_table = as3722_of_match,
 		.pm = &as3722_pm_ops,
 	},
-	.probe_new = as3722_i2c_probe,
+	.probe = as3722_i2c_probe,
 	.id_table = as3722_i2c_id,
 };
 

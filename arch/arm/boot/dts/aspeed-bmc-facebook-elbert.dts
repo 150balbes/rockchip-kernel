@@ -44,7 +44,7 @@
 		stdout-path = &uart5;
 	};
 
-	spi_gpio: spi {
+	spi_gpio: spi-gpio {
 		num-chipselects = <1>;
 		cs-gpios = <&gpio0 ASPEED_GPIO(X, 0) GPIO_ACTIVE_LOW>;
 	};

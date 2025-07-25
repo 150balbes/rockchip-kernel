@@ -34,7 +34,8 @@ static int tsc2004_cmd(struct device *dev, u8 cmd)
 	return 0;
 }
 
-static int tsc2004_probe(struct i2c_client *i2c)
+static int tsc2004_probe(struct i2c_client *i2c,
+			 const struct i2c_device_id *id)
 
 {
 	return tsc200x_probe(&i2c->dev, i2c->irq, &tsc2004_input_id,
@@ -68,7 +69,7 @@ static struct i2c_driver tsc2004_driver = {
 		.pm     = &tsc200x_pm_ops,
 	},
 	.id_table       = tsc2004_idtable,
-	.probe_new      = tsc2004_probe,
+	.probe          = tsc2004_probe,
 	.remove         = tsc2004_remove,
 };
 module_i2c_driver(tsc2004_driver);

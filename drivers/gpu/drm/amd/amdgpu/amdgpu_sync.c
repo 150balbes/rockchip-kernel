@@ -191,7 +191,8 @@ static bool amdgpu_sync_test_fence(struct amdgpu_device *adev,
 
 	/* Never sync to VM updates either. */
 	if (fence_owner == AMDGPU_FENCE_OWNER_VM &&
-	    owner != AMDGPU_FENCE_OWNER_UNDEFINED)
+	    owner != AMDGPU_FENCE_OWNER_UNDEFINED &&
+	    owner != AMDGPU_FENCE_OWNER_KFD)
 		return false;
 
 	/* Ignore fences depending on the sync mode */
@@ -259,14 +260,6 @@ int amdgpu_sync_resv(struct amdgpu_device *adev, struct amdgpu_sync *sync,
 	return 0;
 }
 
-/* Free the entry back to the slab */
-static void amdgpu_sync_entry_free(struct amdgpu_sync_entry *e)
-{
-	hash_del(&e->node);
-	dma_fence_put(e->fence);
-	kmem_cache_free(amdgpu_sync_slab, e);
-}
-
 /**
  * amdgpu_sync_peek_fence - get the next fence not signaled yet
  *
@@ -288,7 +281,9 @@ struct dma_fence *amdgpu_sync_peek_fence(struct amdgpu_sync *sync,
 		struct drm_sched_fence *s_fence = to_drm_sched_fence(f);
 
 		if (dma_fence_is_signaled(f)) {
-			amdgpu_sync_entry_free(e);
+			hash_del(&e->node);
+			dma_fence_put(f);
+			kmem_cache_free(amdgpu_sync_slab, e);
 			continue;
 		}
 		if (ring && s_fence) {
@@ -361,39 +356,12 @@ int amdgpu_sync_clone(struct amdgpu_sync *source, struct amdgpu_sync *clone)
 			if (r)
 				return r;
 		} else {
-			amdgpu_sync_entry_free(e);
+			hash_del(&e->node);
+			dma_fence_put(f);
+			kmem_cache_free(amdgpu_sync_slab, e);
 		}
 	}
 
-	return 0;
-}
-
-/**
- * amdgpu_sync_push_to_job - push fences into job
- * @sync: sync object to get the fences from
- * @job: job to push the fences into
- *
- * Add all unsignaled fences from sync to job.
- */
-int amdgpu_sync_push_to_job(struct amdgpu_sync *sync, struct amdgpu_job *job)
-{
-	struct amdgpu_sync_entry *e;
-	struct hlist_node *tmp;
-	struct dma_fence *f;
-	int i, r;
-
-	hash_for_each_safe(sync->fences, i, tmp, e, node) {
-		f = e->fence;
-		if (dma_fence_is_signaled(f)) {
-			amdgpu_sync_entry_free(e);
-			continue;
-		}
-
-		dma_fence_get(f);
-		r = drm_sched_job_add_dependency(&job->base, f);
-		if (r)
-			return r;
-	}
 	return 0;
 }
 
@@ -408,7 +376,9 @@ int amdgpu_sync_wait(struct amdgpu_sync *sync, bool intr)
 		if (r)
 			return r;
 
-		amdgpu_sync_entry_free(e);
+		hash_del(&e->node);
+		dma_fence_put(e->fence);
+		kmem_cache_free(amdgpu_sync_slab, e);
 	}
 
 	return 0;
@@ -427,8 +397,11 @@ void amdgpu_sync_free(struct amdgpu_sync *sync)
 	struct hlist_node *tmp;
 	unsigned int i;
 
-	hash_for_each_safe(sync->fences, i, tmp, e, node)
-		amdgpu_sync_entry_free(e);
+	hash_for_each_safe(sync->fences, i, tmp, e, node) {
+		hash_del(&e->node);
+		dma_fence_put(e->fence);
+		kmem_cache_free(amdgpu_sync_slab, e);
+	}
 }
 
 /**

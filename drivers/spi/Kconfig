@@ -241,7 +241,7 @@ config SPI_CADENCE_QUADSPI
 
 config SPI_CADENCE_XSPI
 	tristate "Cadence XSPI controller"
-	depends on OF && HAS_IOMEM
+	depends on (OF || COMPILE_TEST) && HAS_IOMEM
 	depends on SPI_MEM
 	help
 	  Enable support for the Cadence XSPI Flash controller.
@@ -295,7 +295,6 @@ config SPI_DW_BT1
 	tristate "Baikal-T1 SPI driver for DW SPI core"
 	depends on MIPS_BAIKAL_T1 || COMPILE_TEST
 	select MULTIPLEXER
-	select MUX_MMIO
 	help
 	  Baikal-T1 SoC is equipped with three DW APB SSI-based MMIO SPI
 	  controllers. Two of them are pretty much normal: with IRQ, DMA,
@@ -635,17 +634,6 @@ config SPI_MTK_SNFI
 	  is implemented as a SPI-MEM controller with pipelined ECC
 	  capcability.
 
-config SPI_WPCM_FIU
-	tristate "Nuvoton WPCM450 Flash Interface Unit"
-	depends on ARCH_NPCM || COMPILE_TEST
-	select REGMAP
-	help
-	  This enables support got the Flash Interface Unit SPI controller
-	  present in the Nuvoton WPCM450 SoC.
-
-	  This driver does not support generic SPI. The implementation only
-	  supports the spi-mem interface.
-
 config SPI_NPCM_FIU
 	tristate "Nuvoton NPCM FLASH Interface Unit"
 	depends on ARCH_NPCM || COMPILE_TEST
@@ -721,15 +709,6 @@ config SPI_ORION
 	  This enables using the SPI master controller on the Orion
 	  and MVEBU chips.
 
-config SPI_PCI1XXXX
-	tristate "PCI1XXXX SPI Bus support"
-	depends on PCI
-	help
-	  Say "yes" to Enable the SPI Bus support for the PCI1xxxx card
-	  This is a PCI to SPI Bus driver
-	  This driver can be built as module. If so, the module will be
-	  called as spi-pci1xxxx.
-
 config SPI_PIC32
 	tristate "Microchip PIC32 series SPI"
 	depends on MACH_PIC32 || COMPILE_TEST
@@ -783,8 +762,39 @@ config SPI_ROCKCHIP
 	  The main usecase of this controller is to use spi flash as boot
 	  device.
 
+config SPI_ROCKCHIP_MISCDEV
+	bool "Rockchip SPI controller misc devices"
+	depends on SPI_ROCKCHIP
+	help
+	  This selects a misc driver for Rockchip SPI controller.
+
+	  If you say yes to this option, It will register rkspi-devN misc device
+	  for each spi controller and support to get the controller register
+	  resource by calling mmap.
+
+config SPI_ROCKCHIP_FLEXBUS_FSPI
+	tristate "Rockchip Flexbus controller under SPI_MEM transmission protocol"
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	depends on HAS_IOMEM && HAS_DMA
+	select MFD_ROCKCHIP_FLEXBUS
+	help
+	  This enables support for Rockchip Flexbus controller under SPI_MEM
+	  transmission protocol. This is a specialized controller used to access
+	  SPI flash on some Rockchip SOCs.
+
+config SPI_ROCKCHIP_FLEXBUS_SPI
+	tristate "Rockchip Flexbus controller under SPI transmission protocol"
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	depends on HAS_IOMEM && HAS_DMA
+	select MFD_ROCKCHIP_FLEXBUS
+	help
+	  This enables support for Rockchip Flexbus controller under SPI
+	  transmission protocol. This is a specialized controller used to transfer
+	  data on some Rockchip SOCs.
+
 config SPI_ROCKCHIP_SFC
 	tristate "Rockchip Serial Flash Controller (SFC)"
+	imply ROCKCHIP_MTD_VENDOR_STORAGE
 	depends on ARCH_ROCKCHIP || COMPILE_TEST
 	depends on HAS_IOMEM && HAS_DMA
 	help
@@ -794,6 +804,17 @@ config SPI_ROCKCHIP_SFC
 
 	  ROCKCHIP SFC supports DMA and PIO modes. When DMA is not available,
 	  the driver automatically falls back to PIO mode.
+
+config SPI_ROCKCHIP_SLAVE
+	tristate "Rockchip SPI Slave controller driver"
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	default SPI_ROCKCHIP if !ROCKCHIP_MINI_KERNEL
+	help
+	  This selects a driver for Rockchip SPI Slave controller.
+
+	  If you say yes to this option, support will be included for Rockchip
+	  SPI Slave controller.
+	  Rockchip SPI Slave controller support DMA transport and IRQ mode.
 
 config SPI_RB4XX
 	tristate "Mikrotik RB4XX SPI master"
@@ -916,15 +937,6 @@ config SPI_SLAVE_MT27XX
 	  If you want to use MediaTek(R) SPI slave interface,
 	  say Y or M here.If you are not sure, say N.
 	  SPI slave drivers for Mediatek MT27XX series ARM SoCs.
-
-config SPI_SN_F_OSPI
-	tristate "Socionext F_OSPI SPI flash controller"
-	depends on OF && HAS_IOMEM
-	depends on SPI_MEM
-	help
-	  This enables support for the Socionext F_OSPI controller
-	  for connecting an SPI Flash memory over up to 8-bit wide bus.
-	  It supports indirect access mode only.
 
 config SPI_SPRD
 	tristate "Spreadtrum SPI controller"
@@ -1123,6 +1135,7 @@ config SPI_XTENSA_XTFPGA
 config SPI_ZYNQ_QSPI
 	tristate "Xilinx Zynq QSPI controller"
 	depends on ARCH_ZYNQ || COMPILE_TEST
+	depends on SPI_MEM
 	help
 	  This enables support for the Zynq Quad SPI controller
 	  in master mode.
@@ -1130,9 +1143,10 @@ config SPI_ZYNQ_QSPI
 
 config SPI_ZYNQMP_GQSPI
 	tristate "Xilinx ZynqMP GQSPI controller"
-	depends on (SPI_MASTER && HAS_DMA) || COMPILE_TEST
+	depends on (SPI_MEM && HAS_DMA) || COMPILE_TEST
 	help
 	  Enables Xilinx GQSPI controller driver for Zynq UltraScale+ MPSoC.
+	  This controller only supports SPI memory interface.
 
 config SPI_AMD
 	tristate "AMD SPI controller"
@@ -1216,6 +1230,12 @@ config SPI_SLAVE_SYSTEM_CONTROL
 	help
 	  SPI slave handler to allow remote control of system reboot, power
 	  off, halt, and suspend.
+
+config SPI_SLAVE_ROCKCHIP_OBJ
+	tristate "Rockchip SPI slave inter transmission protocol demo"
+	help
+	  SPI slave with a rockchip protocol specification for SPI slave
+	  transmission, work with the corresponding master driver spidev_rkmst.
 
 endif # SPI_SLAVE
 

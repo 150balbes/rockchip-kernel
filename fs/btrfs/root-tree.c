@@ -6,16 +6,11 @@
 #include <linux/err.h>
 #include <linux/uuid.h>
 #include "ctree.h"
-#include "fs.h"
-#include "messages.h"
 #include "transaction.h"
 #include "disk-io.h"
 #include "print-tree.h"
 #include "qgroup.h"
 #include "space-info.h"
-#include "accessors.h"
-#include "root-tree.h"
-#include "orphan.h"
 
 /*
  * Read a root item from the tree. In case we detect a root item smaller then

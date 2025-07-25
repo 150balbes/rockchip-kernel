@@ -127,8 +127,8 @@ xchk_refcountbt_rmap_check(
 		 * is healthy each rmap_irec we see will be in agbno order
 		 * so we don't need insertion sort here.
 		 */
-		frag = kmalloc(sizeof(struct xchk_refcnt_frag),
-				XCHK_GFP_FLAGS);
+		frag = kmem_alloc(sizeof(struct xchk_refcnt_frag),
+				KM_MAYFAIL);
 		if (!frag)
 			return -ENOMEM;
 		memcpy(&frag->rm, rec, sizeof(frag->rm));
@@ -215,7 +215,7 @@ xchk_refcountbt_process_rmap_fragments(
 				continue;
 			}
 			list_del(&frag->list);
-			kfree(frag);
+			kmem_free(frag);
 			nr++;
 		}
 
@@ -257,11 +257,11 @@ done:
 	/* Delete fragments and work list. */
 	list_for_each_entry_safe(frag, n, &worklist, list) {
 		list_del(&frag->list);
-		kfree(frag);
+		kmem_free(frag);
 	}
 	list_for_each_entry_safe(frag, n, &refchk->fragments, list) {
 		list_del(&frag->list);
-		kfree(frag);
+		kmem_free(frag);
 	}
 }
 
@@ -306,7 +306,7 @@ xchk_refcountbt_xref_rmap(
 out_free:
 	list_for_each_entry_safe(frag, n, &refchk.fragments, list) {
 		list_del(&frag->list);
-		kfree(frag);
+		kmem_free(frag);
 	}
 }
 

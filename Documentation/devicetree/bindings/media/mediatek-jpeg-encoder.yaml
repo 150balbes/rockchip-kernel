@@ -19,7 +19,6 @@ properties:
           - mediatek,mt2701-jpgenc
           - mediatek,mt8183-jpgenc
           - mediatek,mt8186-jpgenc
-          - mediatek,mt8188-jpgenc
       - const: mediatek,mtk-jpgenc
   reg:
     maxItems: 1

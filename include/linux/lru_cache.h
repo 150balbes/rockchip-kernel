@@ -199,6 +199,7 @@ struct lru_cache {
 	unsigned long flags;
 
 
+	void  *lc_private;
 	const char *name;
 
 	/* nr_elements there */
@@ -240,6 +241,7 @@ extern struct lru_cache *lc_create(const char *name, struct kmem_cache *cache,
 		unsigned e_count, size_t e_size, size_t e_off);
 extern void lc_reset(struct lru_cache *lc);
 extern void lc_destroy(struct lru_cache *lc);
+extern void lc_set(struct lru_cache *lc, unsigned int enr, int index);
 extern void lc_del(struct lru_cache *lc, struct lc_element *element);
 
 extern struct lc_element *lc_get_cumulative(struct lru_cache *lc, unsigned int enr);
@@ -295,5 +297,6 @@ extern bool lc_is_used(struct lru_cache *lc, unsigned int enr);
 	container_of(ptr, type, member)
 
 extern struct lc_element *lc_element_by_index(struct lru_cache *lc, unsigned i);
+extern unsigned int lc_index_of(struct lru_cache *lc, struct lc_element *e);
 
 #endif

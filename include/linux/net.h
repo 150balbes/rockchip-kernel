@@ -42,7 +42,6 @@ struct net;
 #define SOCK_PASSCRED		3
 #define SOCK_PASSSEC		4
 #define SOCK_SUPPORT_ZC		5
-#define SOCK_CUSTOM_SOCKOPT	6
 
 #ifndef ARCH_HAS_SOCKET_TYPES
 /**
@@ -210,6 +209,7 @@ struct proto_ops {
 				      int offset, size_t size, int flags);
 	ssize_t 	(*splice_read)(struct socket *sock,  loff_t *ppos,
 				       struct pipe_inode_info *pipe, size_t len, unsigned int flags);
+	void		(*splice_eof)(struct socket *sock);
 	int		(*set_peek_off)(struct sock *sk, int val);
 	int		(*peek_len)(struct socket *sock);
 

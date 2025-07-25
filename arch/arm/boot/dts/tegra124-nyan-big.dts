@@ -18,7 +18,6 @@
 			aux-bus {
 				panel: panel {
 					compatible = "auo,b133xtn01";
-					power-supply = <&vdd_3v3_panel>;
 					backlight = <&backlight>;
 				};
 			};
@@ -40,7 +39,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinmux_default>;
 
-		pinmux_default: pinmux {
+		pinmux_default: common {
 			clk_32k_out_pa0 {
 				nvidia,pins = "clk_32k_out_pa0";
 				nvidia,pull = <TEGRA_PIN_PULL_NONE>;

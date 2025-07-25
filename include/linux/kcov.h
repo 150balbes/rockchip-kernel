@@ -21,6 +21,8 @@ enum kcov_mode {
 	KCOV_MODE_TRACE_PC = 2,
 	/* Collecting comparison operands mode. */
 	KCOV_MODE_TRACE_CMP = 3,
+	/* The process owns a KCOV remote reference. */
+	KCOV_MODE_REMOTE = 4,
 };
 
 #define KCOV_IN_CTXSW	(1 << 30)
@@ -56,7 +58,7 @@ static inline void kcov_remote_start_usb(u64 id)
 /*
  * The softirq flavor of kcov_remote_*() functions is introduced as a temporary
  * work around for kcov's lack of nested remote coverage sections support in
- * task context. Adding support for nested sections is tracked in:
+ * task context. Adding suport for nested sections is tracked in:
  * https://bugzilla.kernel.org/show_bug.cgi?id=210337
  */
 

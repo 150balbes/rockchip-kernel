@@ -60,9 +60,10 @@ static int jz4740_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 	snprintf(name, sizeof(name), "timer%u", pwm->hwpwm);
 
 	clk = clk_get(chip->dev, name);
-	if (IS_ERR(clk))
-		return dev_err_probe(chip->dev, PTR_ERR(clk),
-				     "Failed to get clock\n");
+	if (IS_ERR(clk)) {
+		dev_err(chip->dev, "error %pe: Failed to get clock\n", clk);
+		return PTR_ERR(clk);
+	}
 
 	err = clk_prepare_enable(clk);
 	if (err < 0) {
@@ -88,7 +89,8 @@ static int jz4740_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 	struct jz4740_pwm_chip *jz = to_jz4740(chip);
 
 	/* Enable PWM output */
-	regmap_set_bits(jz->map, TCU_REG_TCSRc(pwm->hwpwm), TCU_TCSR_PWM_EN);
+	regmap_update_bits(jz->map, TCU_REG_TCSRc(pwm->hwpwm),
+			   TCU_TCSR_PWM_EN, TCU_TCSR_PWM_EN);
 
 	/* Start counter */
 	regmap_write(jz->map, TCU_REG_TESR, BIT(pwm->hwpwm));
@@ -112,7 +114,8 @@ static void jz4740_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 	 * In TCU2 mode (channel 1/2 on JZ4750+), this must be done before the
 	 * counter is stopped, while in TCU1 mode the order does not matter.
 	 */
-	regmap_clear_bits(jz->map, TCU_REG_TCSRc(pwm->hwpwm), TCU_TCSR_PWM_EN);
+	regmap_update_bits(jz->map, TCU_REG_TCSRc(pwm->hwpwm),
+			   TCU_TCSR_PWM_EN, 0);
 
 	/* Stop counter */
 	regmap_write(jz->map, TCU_REG_TECR, BIT(pwm->hwpwm));
@@ -182,8 +185,8 @@ static int jz4740_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	regmap_write(jz4740->map, TCU_REG_TDFRc(pwm->hwpwm), period);
 
 	/* Set abrupt shutdown */
-	regmap_set_bits(jz4740->map, TCU_REG_TCSRc(pwm->hwpwm),
-			TCU_TCSR_PWM_SD);
+	regmap_update_bits(jz4740->map, TCU_REG_TCSRc(pwm->hwpwm),
+			   TCU_TCSR_PWM_SD, TCU_TCSR_PWM_SD);
 
 	/*
 	 * Set polarity.
@@ -246,18 +249,19 @@ static int jz4740_pwm_probe(struct platform_device *pdev)
 	return devm_pwmchip_add(dev, &jz4740->chip);
 }
 
-static const struct soc_info jz4740_soc_info = {
+static const struct soc_info __maybe_unused jz4740_soc_info = {
 	.num_pwms = 8,
 };
 
-static const struct soc_info jz4725b_soc_info = {
+static const struct soc_info __maybe_unused jz4725b_soc_info = {
 	.num_pwms = 6,
 };
 
-static const struct soc_info x1000_soc_info = {
+static const struct soc_info __maybe_unused x1000_soc_info = {
 	.num_pwms = 5,
 };
 
+#ifdef CONFIG_OF
 static const struct of_device_id jz4740_pwm_dt_ids[] = {
 	{ .compatible = "ingenic,jz4740-pwm", .data = &jz4740_soc_info },
 	{ .compatible = "ingenic,jz4725b-pwm", .data = &jz4725b_soc_info },
@@ -265,11 +269,12 @@ static const struct of_device_id jz4740_pwm_dt_ids[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, jz4740_pwm_dt_ids);
+#endif
 
 static struct platform_driver jz4740_pwm_driver = {
 	.driver = {
 		.name = "jz4740-pwm",
-		.of_match_table = jz4740_pwm_dt_ids,
+		.of_match_table = of_match_ptr(jz4740_pwm_dt_ids),
 	},
 	.probe = jz4740_pwm_probe,
 };

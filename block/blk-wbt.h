@@ -28,15 +28,13 @@ enum {
 };
 
 /*
- * If current state is WBT_STATE_ON/OFF_DEFAULT, it can be covered to any other
- * state, if current state is WBT_STATE_ON/OFF_MANUAL, it can only be covered
- * to WBT_STATE_OFF/ON_MANUAL.
+ * Enable states. Either off, or on by default (done at init time),
+ * or on through manual setup in sysfs.
  */
 enum {
-	WBT_STATE_ON_DEFAULT	= 1,	/* on by default */
-	WBT_STATE_ON_MANUAL	= 2,	/* on manually by sysfs */
-	WBT_STATE_OFF_DEFAULT	= 3,	/* off by default */
-	WBT_STATE_OFF_MANUAL	= 4,	/* off manually by sysfs */
+	WBT_STATE_ON_DEFAULT	= 1,
+	WBT_STATE_ON_MANUAL	= 2,
+	WBT_STATE_OFF_DEFAULT
 };
 
 struct rq_wb {
@@ -96,7 +94,6 @@ void wbt_enable_default(struct request_queue *);
 
 u64 wbt_get_min_lat(struct request_queue *q);
 void wbt_set_min_lat(struct request_queue *q, u64 val);
-bool wbt_disabled(struct request_queue *);
 
 void wbt_set_write_cache(struct request_queue *, bool);
 
@@ -127,10 +124,6 @@ static inline void wbt_set_min_lat(struct request_queue *q, u64 val)
 static inline u64 wbt_default_latency_nsec(struct request_queue *q)
 {
 	return 0;
-}
-static inline bool wbt_disabled(struct request_queue *q)
-{
-	return true;
 }
 
 #endif /* CONFIG_BLK_WBT */

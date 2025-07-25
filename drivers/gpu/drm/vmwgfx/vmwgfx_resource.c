@@ -140,7 +140,7 @@ static void vmw_resource_release(struct kref *kref)
 		if (res->coherent)
 			vmw_bo_dirty_release(res->backup);
 		ttm_bo_unreserve(bo);
-		vmw_bo_unreference(&res->backup);
+		vmw_user_bo_unref(&res->backup);
 	}
 
 	if (likely(res->hw_destroy != NULL)) {
@@ -281,39 +281,6 @@ out_bad_resource:
 	return ret;
 }
 
-/**
- * vmw_user_resource_noref_lookup_handle - lookup a struct resource from a
- * TTM user-space handle and perform basic type checks
- *
- * @dev_priv:     Pointer to a device private struct
- * @tfile:        Pointer to a struct ttm_object_file identifying the caller
- * @handle:       The TTM user-space handle
- * @converter:    Pointer to an object describing the resource type
- *
- * If the handle can't be found or is associated with an incorrect resource
- * type, -EINVAL will be returned.
- */
-struct vmw_resource *
-vmw_user_resource_noref_lookup_handle(struct vmw_private *dev_priv,
-				      struct ttm_object_file *tfile,
-				      uint32_t handle,
-				      const struct vmw_user_resource_conv
-				      *converter)
-{
-	struct ttm_base_object *base;
-
-	base = ttm_base_object_noref_lookup(tfile, handle);
-	if (!base)
-		return ERR_PTR(-ESRCH);
-
-	if (unlikely(ttm_base_object_type(base) != converter->object_type)) {
-		ttm_base_object_noref_release();
-		return ERR_PTR(-EINVAL);
-	}
-
-	return converter->base_obj_to_res(base);
-}
-
 /*
  * Helper function that looks either a surface or bo.
  *
@@ -363,10 +330,10 @@ static int vmw_resource_buf_alloc(struct vmw_resource *res,
 		return 0;
 	}
 
-	ret = vmw_bo_create(res->dev_priv, res->backup_size,
-			    res->func->backup_placement,
-			    interruptible, false,
-			    &vmw_bo_bo_free, &backup);
+	ret = vmw_gem_object_create(res->dev_priv, res->backup_size,
+				    res->func->backup_placement,
+				    interruptible, false,
+				    &vmw_bo_bo_free, &backup);
 	if (unlikely(ret != 0))
 		goto out_no_bo;
 
@@ -485,11 +452,11 @@ void vmw_resource_unreserve(struct vmw_resource *res,
 			vmw_resource_mob_detach(res);
 			if (res->coherent)
 				vmw_bo_dirty_release(res->backup);
-			vmw_bo_unreference(&res->backup);
+			vmw_user_bo_unref(&res->backup);
 		}
 
 		if (new_backup) {
-			res->backup = vmw_bo_reference(new_backup);
+			res->backup = vmw_user_bo_ref(new_backup);
 
 			/*
 			 * The validation code should already have added a
@@ -577,7 +544,7 @@ out_no_reserve:
 	ttm_bo_put(val_buf->bo);
 	val_buf->bo = NULL;
 	if (backup_dirty)
-		vmw_bo_unreference(&res->backup);
+		vmw_user_bo_unref(&res->backup);
 
 	return ret;
 }
@@ -752,7 +719,7 @@ int vmw_resource_validate(struct vmw_resource *res, bool intr,
 		goto out_no_validate;
 	else if (!res->func->needs_backup && res->backup) {
 		WARN_ON_ONCE(vmw_resource_mob_attached(res));
-		vmw_bo_unreference(&res->backup);
+		vmw_user_bo_unref(&res->backup);
 	}
 
 	return 0;

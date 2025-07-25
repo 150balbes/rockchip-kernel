@@ -66,15 +66,13 @@ properties:
     enum: [0, 1, 2, 3]
     default: 0
 
-allOf:
-  - $ref: dai-common.yaml#
-  - if:
-      properties:
-        compatible:
-          const: microchip,sam9x60-i2smcc
-    then:
-      properties:
-        microchip,tdm-data-pair: false
+if:
+  properties:
+    compatible:
+      const: microchip,sam9x60-i2smcc
+then:
+  properties:
+    microchip,tdm-data-pair: false
 
 required:
   - "#sound-dai-cells"
@@ -86,7 +84,7 @@ required:
   - dmas
   - dma-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

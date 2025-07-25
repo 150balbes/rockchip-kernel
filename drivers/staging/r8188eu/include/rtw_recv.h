@@ -92,7 +92,7 @@ struct rx_pkt_attrib {
 	u8	privacy; /* in frame_ctrl field */
 	u8	bdecrypted;
 	u8	encrypt; /* when 0 indicate no encrypt. when non-zero,
-			  * indicate the encrypt algorithm */
+			  * indicate the encrypt algorith */
 	u8	iv_len;
 	u8	icv_len;
 	u8	crc_err;
@@ -175,7 +175,7 @@ struct recv_priv {
 	u8 *precv_buf;    /*  4 alignment */
 	struct __queue free_recv_buf_queue;
 	u32	free_recv_buf_queue_cnt;
-	/* For display the phy information */
+	/* For display the phy informatiom */
 	u8 is_signal_dbg;	/*  for debug */
 	u8 signal_strength_dbg;	/*  for debug */
 	s8 rssi;

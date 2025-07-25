@@ -1891,9 +1891,12 @@ static int tc358743_probe_of(struct tc358743_state *state)
 	int ret;
 
 	refclk = devm_clk_get(dev, "refclk");
-	if (IS_ERR(refclk))
-		return dev_err_probe(dev, PTR_ERR(refclk),
-				     "failed to get refclk\n");
+	if (IS_ERR(refclk)) {
+		if (PTR_ERR(refclk) != -EPROBE_DEFER)
+			dev_err(dev, "failed to get refclk: %ld\n",
+				PTR_ERR(refclk));
+		return PTR_ERR(refclk);
+	}
 
 	ep = of_graph_get_next_endpoint(dev->of_node, NULL);
 	if (!ep) {
@@ -2091,9 +2094,6 @@ static int tc358743_probe(struct i2c_client *client)
 	state->mbus_fmt_code = MEDIA_BUS_FMT_RGB888_1X24;
 
 	sd->dev = &client->dev;
-	err = v4l2_async_register_subdev(sd);
-	if (err < 0)
-		goto err_hdl;
 
 	mutex_init(&state->confctl_mutex);
 
@@ -2149,6 +2149,10 @@ static int tc358743_probe(struct i2c_client *client)
 
 	err = v4l2_ctrl_handler_setup(sd->ctrl_handler);
 	if (err)
+		goto err_work_queues;
+
+	err = v4l2_async_register_subdev(sd);
+	if (err < 0)
 		goto err_work_queues;
 
 	v4l2_info(sd, "%s found @ 0x%x (%s)\n", client->name,

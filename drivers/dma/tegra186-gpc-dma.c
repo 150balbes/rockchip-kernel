@@ -161,10 +161,7 @@
 #define TEGRA_GPCDMA_BURST_COMPLETION_TIMEOUT	5000 /* 5 msec */
 
 /* Channel base address offset from GPCDMA base address */
-#define TEGRA_GPCDMA_CHANNEL_BASE_ADDR_OFFSET	0x10000
-
-/* Default channel mask reserving channel0 */
-#define TEGRA_GPCDMA_DEFAULT_CHANNEL_MASK	0xfffffffe
+#define TEGRA_GPCDMA_CHANNEL_BASE_ADD_OFFSET	0x20000
 
 struct tegra_dma;
 struct tegra_dma_channel;
@@ -249,7 +246,6 @@ struct tegra_dma {
 	const struct tegra_dma_chip_data *chip_data;
 	unsigned long sid_m2d_reserved;
 	unsigned long sid_d2m_reserved;
-	u32 chan_mask;
 	void __iomem *base_addr;
 	struct device *dev;
 	struct dma_device dma_dev;
@@ -711,6 +707,7 @@ static int tegra_dma_terminate_all(struct dma_chan *dc)
 			return err;
 		}
 
+		vchan_terminate_vdesc(&tdc->dma_desc->vd);
 		tegra_dma_disable(tdc);
 		tdc->dma_desc = NULL;
 	}
@@ -744,6 +741,9 @@ static int tegra_dma_get_residual(struct tegra_dma_channel *tdc)
 
 	bytes_xfer = dma_desc->bytes_xfer +
 		     sg_req[dma_desc->sg_idx].len - (wcount * 4);
+
+	if (dma_desc->bytes_req == bytes_xfer)
+		return 0;
 
 	residual = dma_desc->bytes_req - (bytes_xfer % dma_desc->bytes_req);
 
@@ -1292,7 +1292,7 @@ static struct dma_chan *tegra_dma_of_xlate(struct of_phandle_args *dma_spec,
 }
 
 static const struct tegra_dma_chip_data tegra186_dma_chip_data = {
-	.nr_channels = 32,
+	.nr_channels = 31,
 	.channel_reg_size = SZ_64K,
 	.max_dma_count = SZ_1G,
 	.hw_support_pause = false,
@@ -1300,7 +1300,7 @@ static const struct tegra_dma_chip_data tegra186_dma_chip_data = {
 };
 
 static const struct tegra_dma_chip_data tegra194_dma_chip_data = {
-	.nr_channels = 32,
+	.nr_channels = 31,
 	.channel_reg_size = SZ_64K,
 	.max_dma_count = SZ_1G,
 	.hw_support_pause = true,
@@ -1308,7 +1308,7 @@ static const struct tegra_dma_chip_data tegra194_dma_chip_data = {
 };
 
 static const struct tegra_dma_chip_data tegra234_dma_chip_data = {
-	.nr_channels = 32,
+	.nr_channels = 31,
 	.channel_reg_size = SZ_64K,
 	.max_dma_count = SZ_1G,
 	.hw_support_pause = true,
@@ -1384,28 +1384,15 @@ static int tegra_dma_probe(struct platform_device *pdev)
 	}
 	stream_id = iommu_spec->ids[0] & 0xffff;
 
-	ret = device_property_read_u32(&pdev->dev, "dma-channel-mask",
-				       &tdma->chan_mask);
-	if (ret) {
-		dev_warn(&pdev->dev,
-			 "Missing dma-channel-mask property, using default channel mask %#x\n",
-			 TEGRA_GPCDMA_DEFAULT_CHANNEL_MASK);
-		tdma->chan_mask = TEGRA_GPCDMA_DEFAULT_CHANNEL_MASK;
-	}
-
 	INIT_LIST_HEAD(&tdma->dma_dev.channels);
 	for (i = 0; i < cdata->nr_channels; i++) {
 		struct tegra_dma_channel *tdc = &tdma->channels[i];
-
-		/* Check for channel mask */
-		if (!(tdma->chan_mask & BIT(i)))
-			continue;
 
 		tdc->irq = platform_get_irq(pdev, i);
 		if (tdc->irq < 0)
 			return tdc->irq;
 
-		tdc->chan_base_offset = TEGRA_GPCDMA_CHANNEL_BASE_ADDR_OFFSET +
+		tdc->chan_base_offset = TEGRA_GPCDMA_CHANNEL_BASE_ADD_OFFSET +
 					i * cdata->channel_reg_size;
 		snprintf(tdc->name, sizeof(tdc->name), "gpcdma.%d", i);
 		tdc->tdma = tdma;
@@ -1466,8 +1453,8 @@ static int tegra_dma_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	dev_info(&pdev->dev, "GPC DMA driver register %lu channels\n",
-		 hweight_long(tdma->chan_mask));
+	dev_info(&pdev->dev, "GPC DMA driver register %d channels\n",
+		 cdata->nr_channels);
 
 	return 0;
 }
@@ -1490,9 +1477,6 @@ static int __maybe_unused tegra_dma_pm_suspend(struct device *dev)
 	for (i = 0; i < tdma->chip_data->nr_channels; i++) {
 		struct tegra_dma_channel *tdc = &tdma->channels[i];
 
-		if (!(tdma->chan_mask & BIT(i)))
-			continue;
-
 		if (tdc->dma_desc) {
 			dev_err(tdma->dev, "channel %u busy\n", i);
 			return -EBUSY;
@@ -1511,9 +1495,6 @@ static int __maybe_unused tegra_dma_pm_resume(struct device *dev)
 
 	for (i = 0; i < tdma->chip_data->nr_channels; i++) {
 		struct tegra_dma_channel *tdc = &tdma->channels[i];
-
-		if (!(tdma->chan_mask & BIT(i)))
-			continue;
 
 		tegra_dma_program_sid(tdc, tdc->stream_id);
 	}

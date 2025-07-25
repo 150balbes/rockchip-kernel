@@ -488,7 +488,7 @@ static enum m5mols_restype __find_restype(u32 code)
 	do {
 		if (code == m5mols_default_ffmt[type].code)
 			return type;
-	} while (type++ != SIZE_DEFAULT_FFMT);
+	} while (++type != SIZE_DEFAULT_FFMT);
 
 	return 0;
 }
@@ -939,7 +939,8 @@ static irqreturn_t m5mols_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int m5mols_probe(struct i2c_client *client)
+static int m5mols_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	const struct m5mols_platform_data *pdata = client->dev.platform_data;
 	struct m5mols_info *info;
@@ -1038,7 +1039,7 @@ static struct i2c_driver m5mols_i2c_driver = {
 	.driver = {
 		.name	= MODULE_NAME,
 	},
-	.probe_new	= m5mols_probe,
+	.probe		= m5mols_probe,
 	.remove		= m5mols_remove,
 	.id_table	= m5mols_id,
 };

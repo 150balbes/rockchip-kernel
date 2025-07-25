@@ -2,7 +2,6 @@
 #include <linux/types.h>
 #include <math.h>
 #include <string.h>
-#include <stdlib.h>
 
 #include "../../../util/debug.h"
 #include "../../../util/tsc.h"

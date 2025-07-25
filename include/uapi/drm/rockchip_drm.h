@@ -1,6 +1,6 @@
 /*
  *
- * Copyright (c) Fuzhou Rockchip Electronics Co.Ltd
+ * Copyright (c) Rockchip Electronics Co., Ltd.
  * Authors:
  *       Mark Yao <yzq@rock-chips.com>
  *
@@ -15,8 +15,13 @@
 #ifndef _UAPI_ROCKCHIP_DRM_H
 #define _UAPI_ROCKCHIP_DRM_H
 
+#ifdef __KERNEL__
+#include <linux/types.h>
+#else
+#include <stdint.h>
+#endif
+
 #include <drm/drm.h>
-#include <drm/drm_file.h>
 
 /*
  * Send vcnt event instead of blocking,
@@ -36,8 +41,11 @@ enum drm_rockchip_gem_mem_type {
 	ROCKCHIP_BO_SECURE	= 1 << 3,
 	/* keep kmap for cma buffer or alloc kmap for other type memory */
 	ROCKCHIP_BO_ALLOC_KMAP	= 1 << 4,
+	/* alloc page with gfp_dma32 */
+	ROCKCHIP_BO_DMA32	= 1 << 5,
 	ROCKCHIP_BO_MASK	= ROCKCHIP_BO_CONTIG | ROCKCHIP_BO_CACHABLE |
-				ROCKCHIP_BO_WC | ROCKCHIP_BO_SECURE | ROCKCHIP_BO_ALLOC_KMAP,
+				ROCKCHIP_BO_WC | ROCKCHIP_BO_SECURE | ROCKCHIP_BO_ALLOC_KMAP |
+				ROCKCHIP_BO_DMA32,
 };
 
 /**
@@ -83,6 +91,7 @@ enum rockchip_crtc_feture {
 	ROCKCHIP_DRM_CRTC_FEATURE_ALPHA_SCALE,
 	ROCKCHIP_DRM_CRTC_FEATURE_HDR10,
 	ROCKCHIP_DRM_CRTC_FEATURE_NEXT_HDR,
+	ROCKCHIP_DRM_CRTC_FEATURE_VIVID_HDR,
 };
 
 enum rockchip_plane_feture {
@@ -102,8 +111,10 @@ enum rockchip_cabc_mode {
 	ROCKCHIP_DRM_CABC_MODE_USERSPACE,
 };
 
-struct drm_rockchip_vcnt_event {
-	struct drm_pending_event	base;
+enum rockchip_drm_error_event_type {
+	ROCKCHIP_DRM_ERROR_EVENT_IOMMU_FAULT	= (1 << 0),
+	ROCKCHIP_DRM_ERROR_EVENT_POST_BUF_EMPTY	= (1 << 1),
+	ROCKCHIP_DRM_ERROR_EVENT_REQUEST_RESET	= (1 << 2),
 };
 
 #define DRM_ROCKCHIP_GEM_CREATE		0x00

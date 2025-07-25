@@ -32,7 +32,6 @@
 #include <drm/drm_crtc.h>
 
 #include "i915_drv.h"
-#include "i915_reg.h"
 #include "intel_connector.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
@@ -226,10 +225,16 @@ intel_dvo_mode_valid(struct drm_connector *connector,
 {
 	struct intel_connector *intel_connector = to_intel_connector(connector);
 	struct intel_dvo *intel_dvo = intel_attached_dvo(intel_connector);
+	struct drm_i915_private *i915 = to_i915(intel_connector->base.dev);
 	const struct drm_display_mode *fixed_mode =
 		intel_panel_fixed_mode(intel_connector, mode);
 	int max_dotclk = to_i915(connector->dev)->max_dotclk_freq;
 	int target_clock = mode->clock;
+	enum drm_mode_status status;
+
+	status = intel_cpu_transcoder_mode_valid(i915, mode);
+	if (status != MODE_OK)
+		return status;
 
 	if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
 		return MODE_NO_DBLESCAN;
@@ -492,8 +497,8 @@ void intel_dvo_init(struct drm_i915_private *dev_priv)
 		intel_encoder->pipe_mask = ~0;
 
 		if (dvo->type != INTEL_DVO_CHIP_LVDS)
-			intel_encoder->cloneable = BIT(INTEL_OUTPUT_ANALOG) |
-				BIT(INTEL_OUTPUT_DVO);
+			intel_encoder->cloneable = (1 << INTEL_OUTPUT_ANALOG) |
+				(1 << INTEL_OUTPUT_DVO);
 
 		switch (dvo->type) {
 		case INTEL_DVO_CHIP_TMDS:
@@ -516,6 +521,8 @@ void intel_dvo_init(struct drm_i915_private *dev_priv)
 		drm_connector_helper_add(connector,
 					 &intel_dvo_connector_helper_funcs);
 		connector->display_info.subpixel_order = SubPixelHorizontalRGB;
+		connector->interlace_allowed = false;
+		connector->doublescan_allowed = false;
 
 		intel_connector_attach_encoder(intel_connector, intel_encoder);
 		if (dvo->type == INTEL_DVO_CHIP_LVDS) {

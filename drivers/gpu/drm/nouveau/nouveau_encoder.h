@@ -48,6 +48,7 @@ struct nouveau_encoder {
 	struct dcb_output *dcb;
 	struct nvif_outp outp;
 	int or;
+	int link;
 
 	struct i2c_adapter *i2c;
 	struct nvkm_i2c_aux *aux;
@@ -141,8 +142,8 @@ enum nouveau_dp_status {
 };
 
 int nouveau_dp_detect(struct nouveau_connector *, struct nouveau_encoder *);
-bool nouveau_dp_link_check(struct nouveau_connector *);
-void nouveau_dp_irq(struct work_struct *);
+void nouveau_dp_irq(struct nouveau_drm *drm,
+		    struct nouveau_connector *nv_connector);
 enum drm_mode_status nv50_dp_mode_valid(struct drm_connector *,
 					struct nouveau_encoder *,
 					const struct drm_display_mode *,

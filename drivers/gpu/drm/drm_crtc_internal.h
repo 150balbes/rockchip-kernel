@@ -56,10 +56,9 @@ struct drm_plane;
 struct drm_plane_state;
 struct drm_property;
 struct edid;
-struct fwnode_handle;
 struct kref;
-struct seq_file;
 struct work_struct;
+struct fwnode_handle;
 
 /* drm_crtc.c */
 int drm_mode_crtc_set_obj_prop(struct drm_mode_object *obj,
@@ -286,18 +285,22 @@ int drm_mode_page_flip_ioctl(struct drm_device *dev,
 			     void *data, struct drm_file *file_priv);
 
 /* drm_edid.c */
+#ifdef CONFIG_DRM_EDID
 void drm_mode_fixup_1366x768(struct drm_display_mode *mode);
-int drm_edid_override_show(struct drm_connector *connector, struct seq_file *m);
 int drm_edid_override_set(struct drm_connector *connector, const void *edid, size_t size);
 int drm_edid_override_reset(struct drm_connector *connector);
-
-/* drm_edid_load.c */
-#ifdef CONFIG_DRM_LOAD_EDID_FIRMWARE
-const struct drm_edid *drm_edid_load_firmware(struct drm_connector *connector);
 #else
-static inline const struct drm_edid *
-drm_edid_load_firmware(struct drm_connector *connector)
+static inline void drm_mode_fixup_1366x768(struct drm_display_mode *mode)
 {
-	return ERR_PTR(-ENOENT);
+}
+
+static inline int drm_edid_override_set(struct drm_connector *connector, const void *edid, size_t size)
+{
+	return 0;
+}
+
+static inline int drm_edid_override_reset(struct drm_connector *connector)
+{
+	return 0;
 }
 #endif

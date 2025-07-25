@@ -53,10 +53,9 @@ struct posix_acl *fuse_get_acl(struct inode *inode, int type, bool rcu)
 	return acl;
 }
 
-int fuse_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
+int fuse_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
 		 struct posix_acl *acl, int type)
 {
-	struct inode *inode = d_inode(dentry);
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	const char *name;
 	int ret;
@@ -99,7 +98,7 @@ int fuse_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
 			return ret;
 		}
 
-		if (!vfsgid_in_group_p(i_gid_into_vfsgid(&init_user_ns, inode)) &&
+		if (!in_group_p(i_gid_into_mnt(&init_user_ns, inode)) &&
 		    !capable_wrt_inode_uidgid(&init_user_ns, inode, CAP_FSETID))
 			extra_flags |= FUSE_SETXATTR_ACL_KILL_SGID;
 

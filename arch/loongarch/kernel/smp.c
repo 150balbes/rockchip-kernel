@@ -16,7 +16,6 @@
 #include <linux/smp.h>
 #include <linux/threads.h>
 #include <linux/export.h>
-#include <linux/syscore_ops.h>
 #include <linux/time.h>
 #include <linux/tracepoint.h>
 #include <linux/sched/hotplug.h>
@@ -181,42 +180,8 @@ irqreturn_t loongson_ipi_interrupt(int irq, void *dev)
 	return IRQ_HANDLED;
 }
 
-static void __init fdt_smp_setup(void)
-{
-#ifdef CONFIG_OF
-	unsigned int cpu, cpuid;
-	struct device_node *node = NULL;
-
-	for_each_of_cpu_node(node) {
-		if (!of_device_is_available(node))
-			continue;
-
-		cpuid = of_get_cpu_hwid(node, 0);
-		if (cpuid >= nr_cpu_ids)
-			continue;
-
-		if (cpuid == loongson_sysconf.boot_cpu_id) {
-			cpu = 0;
-			numa_add_cpu(cpu);
-		} else {
-			cpu = cpumask_next_zero(-1, cpu_present_mask);
-		}
-
-		num_processors++;
-		set_cpu_possible(cpu, true);
-		set_cpu_present(cpu, true);
-		__cpu_number_map[cpuid] = cpu;
-		__cpu_logical_map[cpu] = cpuid;
-	}
-
-	loongson_sysconf.nr_cpus = num_processors;
-#endif
-}
-
 void __init loongson_smp_setup(void)
 {
-	fdt_smp_setup();
-
 	cpu_data[0].core = cpu_logical_map(0) % loongson_sysconf.cores_per_package;
 	cpu_data[0].package = cpu_logical_map(0) / loongson_sysconf.cores_per_package;
 
@@ -332,6 +297,7 @@ void play_dead(void)
 		addr = iocsr_read64(LOONGARCH_IOCSR_MBUF0);
 	} while (addr == 0);
 
+	local_irq_disable();
 	init_fn = (void *)TO_CACHE(addr);
 	iocsr_write32(0xffffffff, LOONGARCH_IOCSR_IPI_CLEAR);
 
@@ -506,7 +472,7 @@ asmlinkage void start_secondary(void)
 	unsigned int cpu;
 
 	sync_counter();
-	cpu = smp_processor_id();
+	cpu = raw_smp_processor_id();
 	set_my_cpu_offset(per_cpu_offset(cpu));
 
 	cpu_probe();

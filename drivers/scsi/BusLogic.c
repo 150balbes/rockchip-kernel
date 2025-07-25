@@ -2198,7 +2198,7 @@ static int blogic_slaveconfig(struct scsi_device *dev)
 
 static int __init blogic_init(void)
 {
-	int drvr_optindex = 0, probeindex;
+	int adapter_count = 0, drvr_optindex = 0, probeindex;
 	struct blogic_adapter *adapter;
 	int ret = 0;
 
@@ -2368,8 +2368,10 @@ static int __init blogic_init(void)
 					list_del(&myadapter->host_list);
 					scsi_host_put(host);
 					ret = -ENODEV;
-				} else
+				} else {
 					scsi_scan_host(host);
+					adapter_count++;
+				}
 			}
 		} else {
 			/*

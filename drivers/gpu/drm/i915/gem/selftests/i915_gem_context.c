@@ -346,8 +346,10 @@ static int live_parallel_switch(void *arg)
 				continue;
 
 			ce = intel_context_create(data[m].ce[0]->engine);
-			if (IS_ERR(ce))
+			if (IS_ERR(ce)) {
+				err = PTR_ERR(ce);
 				goto out;
+			}
 
 			err = intel_context_pin(ce);
 			if (err) {
@@ -367,8 +369,10 @@ static int live_parallel_switch(void *arg)
 
 		worker = kthread_create_worker(0, "igt/parallel:%s",
 					       data[n].ce[0]->engine->name);
-		if (IS_ERR(worker))
+		if (IS_ERR(worker)) {
+			err = PTR_ERR(worker);
 			goto out;
+		}
 
 		data[n].worker = worker;
 	}
@@ -397,8 +401,10 @@ static int live_parallel_switch(void *arg)
 			}
 		}
 
-		if (igt_live_test_end(&t))
-			err = -EIO;
+		if (igt_live_test_end(&t)) {
+			err = err ?: -EIO;
+			break;
+		}
 	}
 
 out:
@@ -984,11 +990,15 @@ retry:
 		goto err_batch;
 	}
 
-	err = i915_vma_move_to_active(batch, rq, 0);
+	err = i915_request_await_object(rq, batch->obj, false);
+	if (err == 0)
+		err = i915_vma_move_to_active(batch, rq, 0);
 	if (err)
 		goto skip_request;
 
-	err = i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
+	err = i915_request_await_object(rq, vma->obj, true);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
 	if (err)
 		goto skip_request;
 
@@ -1549,7 +1559,9 @@ static int write_to_scratch(struct i915_gem_context *ctx,
 	}
 
 	i915_vma_lock(vma);
-	err = i915_vma_move_to_active(vma, rq, 0);
+	err = i915_request_await_object(rq, vma->obj, false);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, 0);
 	i915_vma_unlock(vma);
 	if (err)
 		goto skip_request;
@@ -1683,7 +1695,9 @@ static int read_from_scratch(struct i915_gem_context *ctx,
 	}
 
 	i915_vma_lock(vma);
-	err = i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
+	err = i915_request_await_object(rq, vma->obj, true);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
 	i915_vma_unlock(vma);
 	if (err)
 		goto skip_request;

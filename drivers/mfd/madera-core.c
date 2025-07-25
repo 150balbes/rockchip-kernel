@@ -8,12 +8,13 @@
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/err.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>

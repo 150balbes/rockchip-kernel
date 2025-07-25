@@ -19,7 +19,6 @@
 #include "diag/fw_tracer.h"
 #include "mlx5_irq.h"
 #include "devlink.h"
-#include "en_accel/ipsec.h"
 
 enum {
 	MLX5_EQE_OWNER_INIT_VAL	= 0x1,
@@ -579,10 +578,6 @@ static void gather_async_events_mask(struct mlx5_core_dev *dev, u64 mask[4])
 	if (MLX5_CAP_MACSEC(dev, log_max_macsec_offload))
 		async_event_mask |= (1ull << MLX5_EVENT_TYPE_OBJECT_CHANGE);
 
-	if (mlx5_ipsec_device_caps(dev) & MLX5_IPSEC_CAP_PACKET_OFFLOAD)
-		async_event_mask |=
-			(1ull << MLX5_EVENT_TYPE_OBJECT_CHANGE);
-
 	mask[0] = async_event_mask;
 
 	if (MLX5_CAP_GEN(dev, event_cap))
@@ -1066,7 +1061,7 @@ void mlx5_core_eq_free_irqs(struct mlx5_core_dev *dev)
 	mutex_lock(&table->lock); /* sync with create/destroy_async_eq */
 	if (!mlx5_core_is_sf(dev))
 		clear_rmap(dev);
-	mlx5_irq_table_destroy(dev);
+	mlx5_irq_table_free_irqs(dev);
 	mutex_unlock(&table->lock);
 }
 

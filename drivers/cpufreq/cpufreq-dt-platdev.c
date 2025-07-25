@@ -66,21 +66,6 @@ static const struct of_device_id allowlist[] __initconst = {
 	{ .compatible = "renesas,r8a7794", },
 	{ .compatible = "renesas,sh73a0", },
 
-	{ .compatible = "rockchip,rk2928", },
-	{ .compatible = "rockchip,rk3036", },
-	{ .compatible = "rockchip,rk3066a", },
-	{ .compatible = "rockchip,rk3066b", },
-	{ .compatible = "rockchip,rk3188", },
-	{ .compatible = "rockchip,rk3228", },
-	{ .compatible = "rockchip,rk3288", },
-	{ .compatible = "rockchip,rk3328", },
-	{ .compatible = "rockchip,rk3366", },
-	{ .compatible = "rockchip,rk3368", },
-	{ .compatible = "rockchip,rk3399",
-	  .data = &(struct cpufreq_dt_platform_data)
-		{ .have_governor_per_policy = true, },
-	},
-
 	{ .compatible = "st-ericsson,u8500", },
 	{ .compatible = "st-ericsson,u8540", },
 	{ .compatible = "st-ericsson,u9500", },
@@ -102,8 +87,6 @@ static const struct of_device_id allowlist[] __initconst = {
  */
 static const struct of_device_id blocklist[] __initconst = {
 	{ .compatible = "allwinner,sun50i-h6", },
-
-	{ .compatible = "apple,arm-platform", },
 
 	{ .compatible = "arm,vexpress", },
 
@@ -137,6 +120,7 @@ static const struct of_device_id blocklist[] __initconst = {
 	{ .compatible = "nvidia,tegra30", },
 	{ .compatible = "nvidia,tegra124", },
 	{ .compatible = "nvidia,tegra210", },
+	{ .compatible = "nvidia,tegra234", },
 
 	{ .compatible = "qcom,apq8096", },
 	{ .compatible = "qcom,msm8996", },
@@ -150,11 +134,41 @@ static const struct of_device_id blocklist[] __initconst = {
 	{ .compatible = "qcom,sdm845", },
 	{ .compatible = "qcom,sm6115", },
 	{ .compatible = "qcom,sm6350", },
+	{ .compatible = "qcom,sm6375", },
 	{ .compatible = "qcom,sm8150", },
 	{ .compatible = "qcom,sm8250", },
 	{ .compatible = "qcom,sm8350", },
 
+	{ .compatible = "rockchip,px30", },
+	{ .compatible = "rockchip,rk2928", },
+	{ .compatible = "rockchip,rk3036", },
+	{ .compatible = "rockchip,rk3066a", },
+	{ .compatible = "rockchip,rk3066b", },
+	{ .compatible = "rockchip,rk3126", },
+	{ .compatible = "rockchip,rk3128", },
+	{ .compatible = "rockchip,rk3188", },
+	{ .compatible = "rockchip,rk3228", },
+	{ .compatible = "rockchip,rk3229", },
+	{ .compatible = "rockchip,rk3288", },
+	{ .compatible = "rockchip,rk3288w", },
+	{ .compatible = "rockchip,rk3308", },
+	{ .compatible = "rockchip,rk3326", },
+	{ .compatible = "rockchip,rk3328", },
+	{ .compatible = "rockchip,rk3366", },
+	{ .compatible = "rockchip,rk3368", },
+	{ .compatible = "rockchip,rk3399", },
+	{ .compatible = "rockchip,rk3399pro", },
+	{ .compatible = "rockchip,rk3528", },
+	{ .compatible = "rockchip,rk3562", },
+	{ .compatible = "rockchip,rk3566", },
+	{ .compatible = "rockchip,rk3567", },
+	{ .compatible = "rockchip,rk3568", },
+	{ .compatible = "rockchip,rk3576", },
 	{ .compatible = "rockchip,rk3588", },
+	{ .compatible = "rockchip,rv1103", },
+	{ .compatible = "rockchip,rv1106", },
+	{ .compatible = "rockchip,rv1109", },
+	{ .compatible = "rockchip,rv1126", },
 
 	{ .compatible = "st,stih407", },
 	{ .compatible = "st,stih410", },
@@ -164,7 +178,6 @@ static const struct of_device_id blocklist[] __initconst = {
 	{ .compatible = "ti,am43", },
 	{ .compatible = "ti,dra7", },
 	{ .compatible = "ti,omap3", },
-	{ .compatible = "ti,am625", },
 
 	{ .compatible = "qcom,ipq8064", },
 	{ .compatible = "qcom,apq8064", },
@@ -179,7 +192,7 @@ static bool __init cpu0_node_has_opp_v2_prop(void)
 	struct device_node *np = of_cpu_device_node_get(0);
 	bool ret = false;
 
-	if (of_get_property(np, "operating-points-v2", NULL))
+	if (of_property_present(np, "operating-points-v2"))
 		ret = true;
 
 	of_node_put(np);

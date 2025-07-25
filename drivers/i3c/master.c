@@ -1508,9 +1508,11 @@ i3c_master_register_new_i3c_devs(struct i3c_master_controller *master)
 			desc->dev->dev.of_node = desc->boardinfo->of_node;
 
 		ret = device_register(&desc->dev->dev);
-		if (ret)
+		if (ret) {
 			dev_err(&master->dev,
 				"Failed to add I3C device (err = %d)\n", ret);
+			put_device(&desc->dev->dev);
+		}
 	}
 }
 
@@ -2707,25 +2709,6 @@ int i3c_master_unregister(struct i3c_master_controller *master)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(i3c_master_unregister);
-
-int i3c_dev_setdasa_locked(struct i3c_dev_desc *dev)
-{
-	struct i3c_master_controller *master;
-
-	if (!dev)
-		return -ENOENT;
-
-	master = i3c_dev_get_master(dev);
-	if (!master)
-		return -EINVAL;
-
-	if (!dev->boardinfo || !dev->boardinfo->init_dyn_addr ||
-		!dev->boardinfo->static_addr)
-		return -EINVAL;
-
-	return i3c_master_setdasa_locked(master, dev->info.static_addr,
-						dev->boardinfo->init_dyn_addr);
-}
 
 int i3c_dev_do_priv_xfers_locked(struct i3c_dev_desc *dev,
 				 struct i3c_priv_xfer *xfers,

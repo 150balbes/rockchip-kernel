@@ -16,7 +16,8 @@
 #include "i915_gem_mman.h"
 
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
-				 struct sg_table *pages)
+				 struct sg_table *pages,
+				 unsigned int sg_page_sizes)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	unsigned long supported = RUNTIME_INFO(i915)->page_sizes;
@@ -44,8 +45,8 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 
 	obj->mm.pages = pages;
 
-	obj->mm.page_sizes.phys = i915_sg_dma_sizes(pages->sgl);
-	GEM_BUG_ON(!obj->mm.page_sizes.phys);
+	GEM_BUG_ON(!sg_page_sizes);
+	obj->mm.page_sizes.phys = sg_page_sizes;
 
 	/*
 	 * Calculate the supported page-sizes which fit into the given
@@ -463,18 +464,6 @@ void *i915_gem_object_pin_map_unlocked(struct drm_i915_gem_object *obj,
 	i915_gem_object_unlock(obj);
 
 	return ret;
-}
-
-enum i915_map_type i915_coherent_map_type(struct drm_i915_private *i915,
-					  struct drm_i915_gem_object *obj,
-					  bool always_coherent)
-{
-	if (i915_gem_object_is_lmem(obj))
-		return I915_MAP_WC;
-	if (HAS_LLC(i915) || always_coherent)
-		return I915_MAP_WB;
-	else
-		return I915_MAP_WC;
 }
 
 void __i915_gem_object_flush_map(struct drm_i915_gem_object *obj,

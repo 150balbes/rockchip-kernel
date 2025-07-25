@@ -212,6 +212,7 @@ static int keyscan_probe(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int keyscan_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -246,9 +247,9 @@ static int keyscan_resume(struct device *dev)
 	mutex_unlock(&input->mutex);
 	return retval;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(keyscan_dev_pm_ops,
-				keyscan_suspend, keyscan_resume);
+static SIMPLE_DEV_PM_OPS(keyscan_dev_pm_ops, keyscan_suspend, keyscan_resume);
 
 static const struct of_device_id keyscan_of_match[] = {
 	{ .compatible = "st,sti-keyscan" },
@@ -260,7 +261,7 @@ static struct platform_driver keyscan_device_driver = {
 	.probe		= keyscan_probe,
 	.driver		= {
 		.name	= "st-keyscan",
-		.pm	= pm_sleep_ptr(&keyscan_dev_pm_ops),
+		.pm	= &keyscan_dev_pm_ops,
 		.of_match_table = of_match_ptr(keyscan_of_match),
 	}
 };

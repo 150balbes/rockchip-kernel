@@ -10,7 +10,6 @@
 #include "../free-space-tree.h"
 #include "../transaction.h"
 #include "../block-group.h"
-#include "../accessors.h"
 
 struct free_space_extent {
 	u64 start;

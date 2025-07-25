@@ -33,6 +33,8 @@ properties:
 
   spi-cpha: true
 
+additionalProperties: false
+
 required:
   - compatible
   - reg
@@ -40,11 +42,6 @@ required:
 dependencies:
   spi-cpol: [ spi-cpha ]
   spi-cpha: [ spi-cpol ]
-
-allOf:
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
-
-unevaluatedProperties: false
 
 examples:
   - |

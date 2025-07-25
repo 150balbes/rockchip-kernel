@@ -28,7 +28,7 @@
 	},
 	.fixup_map_ringbuf = { 1 },
 	.result = REJECT,
-	.errstr = "R1 must have zero offset when passed to release func",
+	.errstr = "dereference of modified alloc_mem ptr R1",
 },
 {
 	"ringbuf: invalid reservation offset 2",

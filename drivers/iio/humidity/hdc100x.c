@@ -351,7 +351,8 @@ static const struct iio_info hdc100x_info = {
 	.attrs = &hdc100x_attribute_group,
 };
 
-static int hdc100x_probe(struct i2c_client *client)
+static int hdc100x_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct iio_dev *indio_dev;
 	struct hdc100x_data *data;
@@ -428,7 +429,7 @@ static struct i2c_driver hdc100x_driver = {
 		.of_match_table = hdc100x_dt_ids,
 		.acpi_match_table = hdc100x_acpi_match,
 	},
-	.probe_new = hdc100x_probe,
+	.probe = hdc100x_probe,
 	.id_table = hdc100x_id,
 };
 module_i2c_driver(hdc100x_driver);

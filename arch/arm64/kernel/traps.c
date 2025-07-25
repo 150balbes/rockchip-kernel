@@ -46,6 +46,10 @@
 #include <asm/system_misc.h>
 #include <asm/sysreg.h>
 
+#if IS_ENABLED(CONFIG_ROCKCHIP_MINIDUMP)
+#include <soc/rockchip/rk_minidump.h>
+#endif
+
 static bool __kprobes __check_eq(unsigned long pstate)
 {
 	return (pstate & PSR_Z_BIT) != 0;
@@ -212,6 +216,9 @@ void die(const char *str, struct pt_regs *regs, long err)
 	int ret;
 	unsigned long flags;
 
+#if IS_ENABLED(CONFIG_ROCKCHIP_MINIDUMP)
+	rk_minidump_update_cpu_regs(regs);
+#endif
 	raw_spin_lock_irqsave(&die_lock, flags);
 
 	oops_enter();
@@ -373,22 +380,51 @@ void arm64_skip_faulting_instruction(struct pt_regs *regs, unsigned long size)
 		regs->pstate &= ~PSR_BTYPE_MASK;
 }
 
-static int user_insn_read(struct pt_regs *regs, u32 *insnp)
+static LIST_HEAD(undef_hook);
+static DEFINE_RAW_SPINLOCK(undef_lock);
+
+void register_undef_hook(struct undef_hook *hook)
 {
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&undef_lock, flags);
+	list_add(&hook->node, &undef_hook);
+	raw_spin_unlock_irqrestore(&undef_lock, flags);
+}
+
+void unregister_undef_hook(struct undef_hook *hook)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&undef_lock, flags);
+	list_del(&hook->node);
+	raw_spin_unlock_irqrestore(&undef_lock, flags);
+}
+
+static int call_undef_hook(struct pt_regs *regs)
+{
+	struct undef_hook *hook;
+	unsigned long flags;
 	u32 instr;
+	int (*fn)(struct pt_regs *regs, u32 instr) = NULL;
 	unsigned long pc = instruction_pointer(regs);
 
-	if (compat_thumb_mode(regs)) {
+	if (!user_mode(regs)) {
+		__le32 instr_le;
+		if (get_kernel_nofault(instr_le, (__le32 *)pc))
+			goto exit;
+		instr = le32_to_cpu(instr_le);
+	} else if (compat_thumb_mode(regs)) {
 		/* 16-bit Thumb instruction */
 		__le16 instr_le;
 		if (get_user(instr_le, (__le16 __user *)pc))
-			return -EFAULT;
+			goto exit;
 		instr = le16_to_cpu(instr_le);
 		if (aarch32_insn_is_wide(instr)) {
 			u32 instr2;
 
 			if (get_user(instr_le, (__le16 __user *)(pc + 2)))
-				return -EFAULT;
+				goto exit;
 			instr2 = le16_to_cpu(instr_le);
 			instr = (instr << 16) | instr2;
 		}
@@ -396,12 +432,19 @@ static int user_insn_read(struct pt_regs *regs, u32 *insnp)
 		/* 32-bit ARM instruction */
 		__le32 instr_le;
 		if (get_user(instr_le, (__le32 __user *)pc))
-			return -EFAULT;
+			goto exit;
 		instr = le32_to_cpu(instr_le);
 	}
 
-	*insnp = instr;
-	return 0;
+	raw_spin_lock_irqsave(&undef_lock, flags);
+	list_for_each_entry(hook, &undef_hook, node)
+		if ((instr & hook->instr_mask) == hook->instr_val &&
+			(regs->pstate & hook->pstate_mask) == hook->pstate_val)
+			fn = hook->fn;
+
+	raw_spin_unlock_irqrestore(&undef_lock, flags);
+exit:
+	return fn ? fn(regs, instr) : 1;
 }
 
 void force_signal_inject(int signal, int code, unsigned long address, unsigned long err)
@@ -450,40 +493,21 @@ void arm64_notify_segfault(unsigned long addr)
 	force_signal_inject(SIGSEGV, code, addr, 0);
 }
 
-void do_el0_undef(struct pt_regs *regs, unsigned long esr)
+void do_undefinstr(struct pt_regs *regs, unsigned long esr)
 {
-	u32 insn;
-
 	/* check for AArch32 breakpoint instructions */
 	if (!aarch32_break_handler(regs))
 		return;
 
-	if (user_insn_read(regs, &insn))
-		goto out_err;
-
-	if (try_emulate_mrs(regs, insn))
+	if (call_undef_hook(regs) == 0)
 		return;
 
-	if (try_emulate_armv8_deprecated(regs, insn))
-		return;
+	if (!user_mode(regs))
+		die("Oops - Undefined instruction", regs, esr);
 
-out_err:
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
 }
-
-void do_el1_undef(struct pt_regs *regs, unsigned long esr)
-{
-	u32 insn;
-
-	if (aarch64_insn_read((void *)regs->pc, &insn))
-		goto out_err;
-
-	if (try_emulate_el1_ssbs(regs, insn))
-		return;
-
-out_err:
-	die("Oops - Undefined instruction", regs, esr);
-}
+NOKPROBE_SYMBOL(do_undefinstr);
 
 void do_el0_bti(struct pt_regs *regs)
 {
@@ -494,6 +518,7 @@ void do_el1_bti(struct pt_regs *regs, unsigned long esr)
 {
 	die("Oops - BTI", regs, esr);
 }
+NOKPROBE_SYMBOL(do_el1_bti);
 
 void do_el0_fpac(struct pt_regs *regs, unsigned long esr)
 {
@@ -508,6 +533,7 @@ void do_el1_fpac(struct pt_regs *regs, unsigned long esr)
 	 */
 	die("Oops - FPAC", regs, esr);
 }
+NOKPROBE_SYMBOL(do_el1_fpac)
 
 #define __user_cache_maint(insn, address, res)			\
 	if (address >= TASK_SIZE_MAX) {				\
@@ -729,7 +755,7 @@ static const struct sys64_hook cp15_64_hooks[] = {
 	{},
 };
 
-void do_el0_cp15(unsigned long esr, struct pt_regs *regs)
+void do_cp15instr(unsigned long esr, struct pt_regs *regs)
 {
 	const struct sys64_hook *hook, *hook_base;
 
@@ -750,7 +776,7 @@ void do_el0_cp15(unsigned long esr, struct pt_regs *regs)
 		hook_base = cp15_64_hooks;
 		break;
 	default:
-		do_el0_undef(regs, esr);
+		do_undefinstr(regs, esr);
 		return;
 	}
 
@@ -765,11 +791,12 @@ void do_el0_cp15(unsigned long esr, struct pt_regs *regs)
 	 * EL0. Fall back to our usual undefined instruction handler
 	 * so that we handle these consistently.
 	 */
-	do_el0_undef(regs, esr);
+	do_undefinstr(regs, esr);
 }
+NOKPROBE_SYMBOL(do_cp15instr);
 #endif
 
-void do_el0_sys(unsigned long esr, struct pt_regs *regs)
+void do_sysinstr(unsigned long esr, struct pt_regs *regs)
 {
 	const struct sys64_hook *hook;
 
@@ -784,8 +811,9 @@ void do_el0_sys(unsigned long esr, struct pt_regs *regs)
 	 * back to our usual undefined instruction handler so that we handle
 	 * these consistently.
 	 */
-	do_el0_undef(regs, esr);
+	do_undefinstr(regs, esr);
 }
+NOKPROBE_SYMBOL(do_sysinstr);
 
 static const char *esr_class_str[] = {
 	[0 ... ESR_ELx_EC_MAX]		= "UNRECOGNIZED EC",

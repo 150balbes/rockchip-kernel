@@ -12,6 +12,7 @@
 #include <linux/pm.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
+#include <linux/gcd.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>

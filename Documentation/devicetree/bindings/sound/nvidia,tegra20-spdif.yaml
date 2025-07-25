@@ -16,9 +16,6 @@ maintainers:
   - Thierry Reding <treding@nvidia.com>
   - Jon Hunter <jonathanh@nvidia.com>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     const: nvidia,tegra20-spdif
@@ -69,7 +66,7 @@ required:
   - dma-names
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

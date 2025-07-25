@@ -392,8 +392,6 @@ TEST(mode_filter_without_nnp)
 		.filter = filter,
 	};
 	long ret;
-	cap_t cap = cap_get_proc();
-	cap_flag_value_t is_cap_sys_admin = 0;
 
 	ret = prctl(PR_GET_NO_NEW_PRIVS, 0, NULL, 0, 0);
 	ASSERT_LE(0, ret) {
@@ -402,8 +400,8 @@ TEST(mode_filter_without_nnp)
 	errno = 0;
 	ret = prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0);
 	/* Succeeds with CAP_SYS_ADMIN, fails without */
-	cap_get_flag(cap, CAP_SYS_ADMIN, CAP_EFFECTIVE, &is_cap_sys_admin);
-	if (!is_cap_sys_admin) {
+	/* TODO(wad) check caps not euid */
+	if (geteuid()) {
 		EXPECT_EQ(-1, ret);
 		EXPECT_EQ(EACCES, errno);
 	} else {

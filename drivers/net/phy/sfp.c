@@ -212,6 +212,12 @@ static const enum gpiod_flags gpio_flags[] = {
 #define SFP_PHY_ADDR		22
 #define SFP_PHY_ADDR_ROLLBALL	17
 
+/* SFP_EEPROM_BLOCK_SIZE is the size of data chunk to read the EEPROM
+ * at a time. Some SFP modules and also some Linux I2C drivers do not like
+ * reads longer than 16 bytes.
+ */
+#define SFP_EEPROM_BLOCK_SIZE	16
+
 struct sff_data {
 	unsigned int gpios;
 	bool (*module_supported)(const struct sfp_eeprom_id *id);
@@ -388,6 +394,10 @@ static const struct sfp_quirk sfp_quirks[] = {
 		  sfp_fixup_long_startup),
 
 	SFP_QUIRK_F("HALNy", "HL-GSFP", sfp_fixup_halny_gsfp),
+
+	// HG MXPD-483II-F 2.5G supports 2500Base-X, but incorrectly reports
+	// 2600MBd in their EERPOM
+	SFP_QUIRK_M("HG GENUINE", "MXPD-483II", sfp_quirk_2500basex),
 
 	// Huawei MA5671A can operate at 2500base-X, but report 1.2GBd NRZ in
 	// their EEPROM
@@ -608,22 +618,6 @@ static int sfp_write(struct sfp *sfp, bool a2, u8 addr, void *buf, size_t len)
 	return sfp->write(sfp, a2, addr, buf, len);
 }
 
-static int sfp_modify_u8(struct sfp *sfp, bool a2, u8 addr, u8 mask, u8 val)
-{
-	int ret;
-	u8 old, v;
-
-	ret = sfp_read(sfp, a2, addr, &old, sizeof(old));
-	if (ret != sizeof(old))
-		return ret;
-
-	v = (old & ~mask) | (val & mask);
-	if (v == old)
-		return sizeof(v);
-
-	return sfp_write(sfp, a2, addr, &v, sizeof(v));
-}
-
 static unsigned int sfp_soft_get_state(struct sfp *sfp)
 {
 	unsigned int state = 0;
@@ -649,14 +643,17 @@ static unsigned int sfp_soft_get_state(struct sfp *sfp)
 
 static void sfp_soft_set_state(struct sfp *sfp, unsigned int state)
 {
-	u8 mask = SFP_STATUS_TX_DISABLE_FORCE;
-	u8 val = 0;
+	u8 status;
 
-	if (state & SFP_F_TX_DISABLE)
-		val |= SFP_STATUS_TX_DISABLE_FORCE;
+	if (sfp_read(sfp, true, SFP_STATUS, &status, sizeof(status)) ==
+		     sizeof(status)) {
+		if (state & SFP_F_TX_DISABLE)
+			status |= SFP_STATUS_TX_DISABLE_FORCE;
+		else
+			status &= ~SFP_STATUS_TX_DISABLE_FORCE;
 
-
-	sfp_modify_u8(sfp, true, SFP_STATUS, mask, val);
+		sfp_write(sfp, true, SFP_STATUS, &status, sizeof(status));
+	}
 }
 
 static void sfp_soft_start_poll(struct sfp *sfp)
@@ -1774,19 +1771,10 @@ static int sfp_module_parse_power(struct sfp *sfp)
 	u32 power_mW = 1000;
 	bool supports_a2;
 
-	if (sfp->id.ext.sff8472_compliance >= SFP_SFF8472_COMPLIANCE_REV10_2 &&
-	    sfp->id.ext.options & cpu_to_be16(SFP_OPTIONS_POWER_DECL))
+	if (sfp->id.ext.options & cpu_to_be16(SFP_OPTIONS_POWER_DECL))
 		power_mW = 1500;
-	/* Added in Rev 11.9, but there is no compliance code for this */
-	if (sfp->id.ext.sff8472_compliance >= SFP_SFF8472_COMPLIANCE_REV11_4 &&
-	    sfp->id.ext.options & cpu_to_be16(SFP_OPTIONS_HIGH_POWER_LEVEL))
+	if (sfp->id.ext.options & cpu_to_be16(SFP_OPTIONS_HIGH_POWER_LEVEL))
 		power_mW = 2000;
-
-	/* Power level 1 modules (max. 1W) are always supported. */
-	if (power_mW <= 1000) {
-		sfp->module_power_mW = power_mW;
-		return 0;
-	}
 
 	supports_a2 = sfp->id.ext.sff8472_compliance !=
 				SFP_SFF8472_COMPLIANCE_NONE ||
@@ -1809,6 +1797,12 @@ static int sfp_module_parse_power(struct sfp *sfp)
 				 power_mW / 1000, (power_mW / 100) % 10);
 			return 0;
 		}
+	}
+
+	if (power_mW <= 1000) {
+		/* Modules below 1W do not require a power change sequence */
+		sfp->module_power_mW = power_mW;
+		return 0;
 	}
 
 	if (!supports_a2) {
@@ -1837,14 +1831,31 @@ static int sfp_module_parse_power(struct sfp *sfp)
 
 static int sfp_sm_mod_hpower(struct sfp *sfp, bool enable)
 {
+	u8 val;
 	int err;
 
-	err = sfp_modify_u8(sfp, true, SFP_EXT_STATUS,
-			    SFP_EXT_STATUS_PWRLVL_SELECT,
-			    enable ? SFP_EXT_STATUS_PWRLVL_SELECT : 0);
-	if (err != sizeof(u8)) {
-		dev_err(sfp->dev, "failed to %sable high power: %pe\n",
-			enable ? "en" : "dis", ERR_PTR(err));
+	err = sfp_read(sfp, true, SFP_EXT_STATUS, &val, sizeof(val));
+	if (err != sizeof(val)) {
+		dev_err(sfp->dev, "Failed to read EEPROM: %pe\n", ERR_PTR(err));
+		return -EAGAIN;
+	}
+
+	/* DM7052 reports as a high power module, responds to reads (with
+	 * all bytes 0xff) at 0x51 but does not accept writes.  In any case,
+	 * if the bit is already set, we're already in high power mode.
+	 */
+	if (!!(val & BIT(0)) == enable)
+		return 0;
+
+	if (enable)
+		val |= BIT(0);
+	else
+		val &= ~BIT(0);
+
+	err = sfp_write(sfp, true, SFP_EXT_STATUS, &val, sizeof(val));
+	if (err != sizeof(val)) {
+		dev_err(sfp->dev, "Failed to write EEPROM: %pe\n",
+			ERR_PTR(err));
 		return -EAGAIN;
 	}
 
@@ -1927,11 +1938,7 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 	u8 check;
 	int ret;
 
-	/* Some SFP modules and also some Linux I2C drivers do not like reads
-	 * longer than 16 bytes, so read the EEPROM in chunks of 16 bytes at
-	 * a time.
-	 */
-	sfp->i2c_block_size = 16;
+	sfp->i2c_block_size = SFP_EEPROM_BLOCK_SIZE;
 
 	ret = sfp_read(sfp, false, 0, &id.base, sizeof(id.base));
 	if (ret < 0) {
@@ -2143,8 +2150,7 @@ static void sfp_sm_module(struct sfp *sfp, unsigned int event)
 
 	/* Handle remove event globally, it resets this state machine */
 	if (event == SFP_E_REMOVE) {
-		if (sfp->sm_mod_state > SFP_MOD_PROBE)
-			sfp_sm_mod_remove(sfp);
+		sfp_sm_mod_remove(sfp);
 		sfp_sm_mod_next(sfp, SFP_MOD_EMPTY, 0);
 		return;
 	}
@@ -2191,6 +2197,11 @@ static void sfp_sm_module(struct sfp *sfp, unsigned int event)
 			sfp_sm_mod_next(sfp, SFP_MOD_ERROR, 0);
 			break;
 		}
+
+		/* Force a poll to re-read the hardware signal state after
+		 * sfp_sm_mod_probe() changed state_hw_mask.
+		 */
+		mod_delayed_work(system_wq, &sfp->poll, 1);
 
 		err = sfp_hwmon_insert(sfp);
 		if (err)
@@ -2614,6 +2625,7 @@ static struct sfp *sfp_alloc(struct device *dev)
 		return ERR_PTR(-ENOMEM);
 
 	sfp->dev = dev;
+	sfp->i2c_block_size = SFP_EEPROM_BLOCK_SIZE;
 
 	mutex_init(&sfp->sm_mutex);
 	mutex_init(&sfp->st_mutex);
@@ -2642,46 +2654,10 @@ static void sfp_cleanup(void *data)
 	kfree(sfp);
 }
 
-static int sfp_i2c_get(struct sfp *sfp)
-{
-	struct acpi_handle *acpi_handle;
-	struct fwnode_handle *h;
-	struct i2c_adapter *i2c;
-	struct device_node *np;
-	int err;
-
-	h = fwnode_find_reference(dev_fwnode(sfp->dev), "i2c-bus", 0);
-	if (IS_ERR(h)) {
-		dev_err(sfp->dev, "missing 'i2c-bus' property\n");
-		return -ENODEV;
-	}
-
-	if (is_acpi_device_node(h)) {
-		acpi_handle = ACPI_HANDLE_FWNODE(h);
-		i2c = i2c_acpi_find_adapter_by_handle(acpi_handle);
-	} else if ((np = to_of_node(h)) != NULL) {
-		i2c = of_find_i2c_adapter_by_node(np);
-	} else {
-		err = -EINVAL;
-		goto put;
-	}
-
-	if (!i2c) {
-		err = -EPROBE_DEFER;
-		goto put;
-	}
-
-	err = sfp_i2c_configure(sfp, i2c);
-	if (err)
-		i2c_put_adapter(i2c);
-put:
-	fwnode_handle_put(h);
-	return err;
-}
-
 static int sfp_probe(struct platform_device *pdev)
 {
 	const struct sff_data *sff;
+	struct i2c_adapter *i2c;
 	char *sfp_irq_name;
 	struct sfp *sfp;
 	int err, i;
@@ -2699,20 +2675,51 @@ static int sfp_probe(struct platform_device *pdev)
 	sff = sfp->type = &sfp_data;
 
 	if (pdev->dev.of_node) {
+		struct device_node *node = pdev->dev.of_node;
 		const struct of_device_id *id;
+		struct device_node *np;
 
-		id = of_match_node(sfp_of_match, pdev->dev.of_node);
+		id = of_match_node(sfp_of_match, node);
 		if (WARN_ON(!id))
 			return -EINVAL;
 
 		sff = sfp->type = id->data;
-	} else if (!has_acpi_companion(&pdev->dev)) {
+
+		np = of_parse_phandle(node, "i2c-bus", 0);
+		if (!np) {
+			dev_err(sfp->dev, "missing 'i2c-bus' property\n");
+			return -ENODEV;
+		}
+
+		i2c = of_find_i2c_adapter_by_node(np);
+		of_node_put(np);
+	} else if (has_acpi_companion(&pdev->dev)) {
+		struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
+		struct fwnode_handle *fw = acpi_fwnode_handle(adev);
+		struct fwnode_reference_args args;
+		struct acpi_handle *acpi_handle;
+		int ret;
+
+		ret = acpi_node_get_property_reference(fw, "i2c-bus", 0, &args);
+		if (ret || !is_acpi_device_node(args.fwnode)) {
+			dev_err(&pdev->dev, "missing 'i2c-bus' property\n");
+			return -ENODEV;
+		}
+
+		acpi_handle = ACPI_HANDLE_FWNODE(args.fwnode);
+		i2c = i2c_acpi_find_adapter_by_handle(acpi_handle);
+	} else {
 		return -EINVAL;
 	}
 
-	err = sfp_i2c_get(sfp);
-	if (err)
+	if (!i2c)
+		return -EPROBE_DEFER;
+
+	err = sfp_i2c_configure(sfp, i2c);
+	if (err < 0) {
+		i2c_put_adapter(i2c);
 		return err;
+	}
 
 	for (i = 0; i < GPIO_MAX; i++)
 		if (sff->gpios & BIT(i)) {
@@ -2733,12 +2740,8 @@ static int sfp_probe(struct platform_device *pdev)
 
 	device_property_read_u32(&pdev->dev, "maximum-power-milliwatt",
 				 &sfp->max_power_mW);
-	if (sfp->max_power_mW < 1000) {
-		if (sfp->max_power_mW)
-			dev_warn(sfp->dev,
-				 "Firmware bug: host maximum power should be at least 1W\n");
+	if (!sfp->max_power_mW)
 		sfp->max_power_mW = 1000;
-	}
 
 	dev_info(sfp->dev, "Host maximum power %u.%uW\n",
 		 sfp->max_power_mW / 1000, (sfp->max_power_mW / 100) % 10);

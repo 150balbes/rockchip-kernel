@@ -1,5 +1,5 @@
 /*
- * (C) COPYRIGHT RockChip Limited. All rights reserved.
+ * (C) COPYRIGHT Rockchip Electronics Co., Ltd. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -35,6 +35,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/delay.h>
 #include <linux/rockchip/cpu.h>
+#include <soc/rockchip/rockchip_ipa.h>
 #include <soc/rockchip/rockchip_opp_select.h>
 
 #include <linux/mali/mali_utgard.h>
@@ -226,79 +227,15 @@ static void rk_context_deinit(struct platform_device *pdev)
 
 #if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_DEVFREQ_THERMAL)
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+
 #define FALLBACK_STATIC_TEMPERATURE 55000
 
 static u32 dynamic_coefficient;
 static u32 static_coefficient;
 static s32 ts[4];
 static struct thermal_zone_device *gpu_tz;
-
-static int power_model_simple_init(struct platform_device *pdev)
-{
-	struct device_node *power_model_node;
-	const char *tz_name;
-	u32 static_power, dynamic_power;
-	u32 voltage, voltage_squared, voltage_cubed, frequency;
-
-	power_model_node = of_get_child_by_name(pdev->dev.of_node,
-			"power_model");
-	if (!power_model_node) {
-		dev_err(&pdev->dev, "could not find power_model node\n");
-		return -ENODEV;
-	}
-	if (!of_device_is_compatible(power_model_node,
-			"arm,mali-simple-power-model")) {
-		dev_err(&pdev->dev, "power_model incompatible with simple power model\n");
-		return -ENODEV;
-	}
-
-	if (of_property_read_string(power_model_node, "thermal-zone",
-			&tz_name)) {
-		dev_err(&pdev->dev, "ts in power_model not available\n");
-		return -EINVAL;
-	}
-
-	gpu_tz = thermal_zone_get_zone_by_name(tz_name);
-	if (IS_ERR(gpu_tz)) {
-		pr_warn_ratelimited("Error getting gpu thermal zone '%s'(%ld), not yet ready?\n",
-				tz_name,
-				PTR_ERR(gpu_tz));
-		gpu_tz = NULL;
-	}
-
-	if (of_property_read_u32(power_model_node, "static-power",
-			&static_power)) {
-		dev_err(&pdev->dev, "static-power in power_model not available\n");
-		return -EINVAL;
-	}
-	if (of_property_read_u32(power_model_node, "dynamic-power",
-			&dynamic_power)) {
-		dev_err(&pdev->dev, "dynamic-power in power_model not available\n");
-		return -EINVAL;
-	}
-	if (of_property_read_u32(power_model_node, "voltage",
-			&voltage)) {
-		dev_err(&pdev->dev, "voltage in power_model not available\n");
-		return -EINVAL;
-	}
-	if (of_property_read_u32(power_model_node, "frequency",
-			&frequency)) {
-		dev_err(&pdev->dev, "frequency in power_model not available\n");
-		return -EINVAL;
-	}
-	voltage_squared = (voltage * voltage) / 1000;
-	voltage_cubed = voltage * voltage * voltage;
-	static_coefficient = (static_power << 20) / (voltage_cubed >> 10);
-	dynamic_coefficient = (((dynamic_power * 1000) / voltage_squared)
-			* 1000) / frequency;
-
-	if (of_property_read_u32_array(power_model_node, "ts", (u32 *)ts, 4)) {
-		dev_err(&pdev->dev, "ts in power_model not available\n");
-		return -EINVAL;
-	}
-
-	return 0;
-}
+static struct ipa_power_model_data *model_data;
 
 /* Calculate gpu static power example for reference */
 static unsigned long rk_model_static_power(struct devfreq *devfreq,
@@ -360,15 +297,113 @@ static unsigned long rk_model_dynamic_power(struct devfreq *devfreq,
 	return dynamic_power;
 }
 
-struct devfreq_cooling_power rk_cooling_ops = {
+static struct devfreq_cooling_power rk_cooling_ops = {
 	.get_static_power = rk_model_static_power,
 	.get_dynamic_power = rk_model_dynamic_power,
 };
+
+static unsigned long mali_devfreq_get_static_power(struct devfreq *devfreq,
+						   unsigned long voltage)
+{
+	return rockchip_ipa_get_static_power(model_data, voltage);
+}
+
+static int power_model_simple_init(struct platform_device *pdev)
+{
+	struct device_node *power_model_node;
+	const char *tz_name;
+	u32 static_power, dynamic_power;
+	u32 voltage, voltage_squared, voltage_cubed, frequency;
+
+	if (of_find_compatible_node(pdev->dev.of_node, NULL, "simple-power-model")) {
+		of_property_read_u32(pdev->dev.of_node,
+				     "dynamic-power-coefficient",
+				     (u32 *)&rk_cooling_ops.dyn_power_coeff);
+		model_data = rockchip_ipa_power_model_init(&pdev->dev,
+							   "gpu_leakage");
+		if (IS_ERR_OR_NULL(model_data)) {
+			model_data = NULL;
+			dev_err(&pdev->dev, "failed to initialize power model\n");
+		} else if (model_data->dynamic_coefficient) {
+			rk_cooling_ops.dyn_power_coeff =
+			model_data->dynamic_coefficient;
+			rk_cooling_ops.get_dynamic_power = NULL;
+			rk_cooling_ops.get_static_power = mali_devfreq_get_static_power;
+		}
+		if (!rk_cooling_ops.dyn_power_coeff) {
+			dev_err(&pdev->dev, "failed to get dynamic-coefficient\n");
+			return -EINVAL;
+		}
+
+		return 0;
+	}
+
+	power_model_node = of_get_child_by_name(pdev->dev.of_node,
+			"power_model");
+	if (!power_model_node) {
+		dev_err(&pdev->dev, "could not find power_model node\n");
+		return -ENODEV;
+	}
+	if (!of_device_is_compatible(power_model_node,
+			"arm,mali-simple-power-model")) {
+		dev_err(&pdev->dev, "power_model incompatible with simple power model\n");
+		return -ENODEV;
+	}
+
+	if (of_property_read_string(power_model_node, "thermal-zone",
+			&tz_name)) {
+		dev_err(&pdev->dev, "ts in power_model not available\n");
+		return -EINVAL;
+	}
+
+	gpu_tz = thermal_zone_get_zone_by_name(tz_name);
+	if (IS_ERR(gpu_tz)) {
+		pr_warn_ratelimited("Error getting gpu thermal zone '%s'(%ld), not yet ready?\n",
+				tz_name,
+				PTR_ERR(gpu_tz));
+		gpu_tz = NULL;
+	}
+
+	if (of_property_read_u32(power_model_node, "static-power",
+			&static_power)) {
+		dev_err(&pdev->dev, "static-power in power_model not available\n");
+		return -EINVAL;
+	}
+	if (of_property_read_u32(power_model_node, "dynamic-power",
+			&dynamic_power)) {
+		dev_err(&pdev->dev, "dynamic-power in power_model not available\n");
+		return -EINVAL;
+	}
+	if (of_property_read_u32(power_model_node, "voltage",
+			&voltage)) {
+		dev_err(&pdev->dev, "voltage in power_model not available\n");
+		return -EINVAL;
+	}
+	if (of_property_read_u32(power_model_node, "frequency",
+			&frequency)) {
+		dev_err(&pdev->dev, "frequency in power_model not available\n");
+		return -EINVAL;
+	}
+	voltage_squared = (voltage * voltage) / 1000;
+	voltage_cubed = voltage * voltage * voltage;
+	static_coefficient = (static_power << 20) / (voltage_cubed >> 10);
+	dynamic_coefficient = (((dynamic_power * 1000) / voltage_squared)
+			* 1000) / frequency;
+
+	if (of_property_read_u32_array(power_model_node, "ts", (u32 *)ts, 4)) {
+		dev_err(&pdev->dev, "ts in power_model not available\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+#endif
+
 #endif
 
 /*---------------------------------------------------------------------------*/
 
-#ifdef CONFIG_PM
 
 static int rk_platform_enable_clk_gpu(struct device *dev)
 {
@@ -376,8 +411,7 @@ static int rk_platform_enable_clk_gpu(struct device *dev)
 #if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_HAVE_CLK)
 	struct mali_device *mdev = dev_get_drvdata(dev);
 
-	if (mdev->clock)
-		ret = clk_enable(mdev->clock);
+	ret = clk_bulk_enable(mdev->num_clks, mdev->clks);
 #endif
 	return ret;
 }
@@ -387,8 +421,7 @@ static void rk_platform_disable_clk_gpu(struct device *dev)
 #if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_HAVE_CLK)
 	struct mali_device *mdev = dev_get_drvdata(dev);
 
-	if (mdev->clock)
-		clk_disable(mdev->clock);
+	clk_bulk_disable(mdev->num_clks, mdev->clks);
 #endif
 }
 
@@ -432,6 +465,13 @@ static int rk_platform_power_on_gpu(struct device *dev)
 			goto fail_to_enable_regulator;
 		}
 
+		if (cpu_is_rk3528()) {
+#if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_HAVE_CLK)
+			struct mali_device *mdev = dev_get_drvdata(dev);
+
+			clk_set_rate(mdev->clock, mdev->current_freq);
+#endif
+		}
 		platform->is_powered = true;
 	}
 
@@ -449,6 +489,14 @@ static void rk_platform_power_off_gpu(struct device *dev)
 	struct rk_context *platform = s_rk_context;
 
 	if (platform->is_powered) {
+		if (cpu_is_rk3528()) {
+#if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_HAVE_CLK)
+			struct mali_device *mdev = dev_get_drvdata(dev);
+
+			//use normal pll 200M for gpu when suspend
+			clk_set_rate(mdev->clock, 200000000);
+#endif
+		}
 		rk_platform_disable_clk_gpu(dev);
 		rk_platform_disable_gpu_regulator(dev);
 
@@ -456,11 +504,18 @@ static void rk_platform_power_off_gpu(struct device *dev)
 	}
 }
 
-int rk_platform_init_opp_table(struct device *dev)
+int rk_platform_init_opp_table(struct mali_device *mdev)
 {
-	return rockchip_init_opp_table(dev, NULL, "gpu_leakage", "mali");
+	return rockchip_init_opp_table(mdev->dev, &mdev->opp_info,
+				       "clk_mali", "mali");
 }
 
+void rk_platform_uninit_opp_table(struct mali_device *mdev)
+{
+	rockchip_uninit_opp_table(mdev->dev, &mdev->opp_info);
+}
+
+#ifdef CONFIG_PM
 static int mali_runtime_suspend(struct device *device)
 {
 	int ret = 0;
@@ -609,7 +664,9 @@ static const struct mali_gpu_device_data mali_gpu_data = {
 	.shared_mem_size = 1024 * 1024 * 1024, /* 1GB */
 	.max_job_runtime = 60000, /* 60 seconds */
 #if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_DEVFREQ_THERMAL)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	.gpu_cooling_ops = &rk_cooling_ops,
+#endif
 #endif
 };
 
@@ -637,35 +694,28 @@ int mali_platform_device_init(struct platform_device *pdev)
 				       sizeof(mali_gpu_data));
 	if (err) {
 		E("fail to add platform_specific_data. err : %d.", err);
-		goto add_data_failed;
+		return err;
 	}
 
 	err = rk_context_init(pdev);
 	if (err) {
 		E("fail to init rk_context. err : %d.", err);
-		goto init_rk_context_failed;
+		return err;
 	}
 
 #if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_DEVFREQ_THERMAL)
 	if (of_machine_is_compatible("rockchip,rk3036"))
 		return 0;
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	err = power_model_simple_init(pdev);
 	if (err) {
 		E("fail to init simple_power_model, err : %d.", err);
-		goto init_power_model_failed;
+		rk_context_deinit(pdev);
+		return err;
 	}
 #endif
-
-	return 0;
-
-#if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_DEVFREQ_THERMAL)
-init_power_model_failed:
-	rk_context_deinit(pdev);
 #endif
-init_rk_context_failed:
-add_data_failed:
-	return err;
+	return 0;
 }
 
 void mali_platform_device_deinit(struct platform_device *pdev)

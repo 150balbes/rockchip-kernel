@@ -102,7 +102,7 @@ void ni_clear(struct ntfs_inode *ni)
 {
 	struct rb_node *node;
 
-	if (!ni->vfs_inode.i_nlink && is_rec_inuse(ni->mi.mrec))
+	if (!ni->vfs_inode.i_nlink && ni->mi.mrec && is_rec_inuse(ni->mi.mrec))
 		ni_delete_all(ni);
 
 	al_destroy(ni);
@@ -557,7 +557,7 @@ static int ni_repack(struct ntfs_inode *ni)
 		}
 
 		if (!mi_p) {
-			/* Do not try if not enough free space. */
+			/* Do not try if not enogh free space. */
 			if (le32_to_cpu(mi->mrec->used) + 8 >= rs)
 				continue;
 
@@ -874,6 +874,7 @@ int ni_create_attr_list(struct ntfs_inode *ni)
 	if (err)
 		goto out1;
 
+	err = -EINVAL;
 	/* Call mi_remove_attr() in reverse order to keep pointers 'arr_move' valid. */
 	while (to_free > 0) {
 		struct ATTRIB *b = arr_move[--nb];
@@ -882,7 +883,8 @@ int ni_create_attr_list(struct ntfs_inode *ni)
 
 		attr = mi_insert_attr(mi, b->type, Add2Ptr(b, name_off),
 				      b->name_len, asize, name_off);
-		WARN_ON(!attr);
+		if (!attr)
+			goto out1;
 
 		mi_get_ref(mi, &le_b[nb]->ref);
 		le_b[nb]->id = attr->id;
@@ -892,17 +894,20 @@ int ni_create_attr_list(struct ntfs_inode *ni)
 		attr->id = le_b[nb]->id;
 
 		/* Remove from primary record. */
-		WARN_ON(!mi_remove_attr(NULL, &ni->mi, b));
+		if (!mi_remove_attr(NULL, &ni->mi, b))
+			goto out1;
 
 		if (to_free <= asize)
 			break;
 		to_free -= asize;
-		WARN_ON(!nb);
+		if (!nb)
+			goto out1;
 	}
 
 	attr = mi_insert_attr(&ni->mi, ATTR_LIST, NULL, 0,
 			      lsize + SIZEOF_RESIDENT, SIZEOF_RESIDENT);
-	WARN_ON(!attr);
+	if (!attr)
+		goto out1;
 
 	attr->non_res = 0;
 	attr->flags = 0;
@@ -922,9 +927,10 @@ out1:
 	kfree(ni->attr_list.le);
 	ni->attr_list.le = NULL;
 	ni->attr_list.size = 0;
+	return err;
 
 out:
-	return err;
+	return 0;
 }
 
 /*
@@ -1645,7 +1651,6 @@ struct ATTR_FILE_NAME *ni_fname_name(struct ntfs_inode *ni,
 {
 	struct ATTRIB *attr = NULL;
 	struct ATTR_FILE_NAME *fname;
-       struct le_str *fns;
 
 	if (le)
 		*le = NULL;
@@ -1669,8 +1674,8 @@ next:
 	if (uni->len != fname->name_len)
 		goto next;
 
-	fns = (struct le_str *)&fname->name_len;
-	if (ntfs_cmp_names_cpu(uni, fns, NULL, false))
+	if (ntfs_cmp_names_cpu(uni, (struct le_str *)&fname->name_len, NULL,
+			       false))
 		goto next;
 
 	return fname;
@@ -2144,7 +2149,7 @@ out1:
 
 	for (i = 0; i < pages_per_frame; i++) {
 		pg = pages[i];
-		if (i == idx)
+		if (i == idx || !pg)
 			continue;
 		unlock_page(pg);
 		put_page(pg);
@@ -2224,7 +2229,7 @@ int ni_decompress_file(struct ntfs_inode *ni)
 
 		for (vcn = vbo >> sbi->cluster_bits; vcn < end; vcn += clen) {
 			err = attr_data_get_block(ni, vcn, cend - vcn, &lcn,
-						  &clen, &new, false);
+						  &clen, &new);
 			if (err)
 				goto out;
 		}
@@ -3012,26 +3017,12 @@ int ni_add_name(struct ntfs_inode *dir_ni, struct ntfs_inode *ni,
 		struct NTFS_DE *de)
 {
 	int err;
-	struct ntfs_sb_info *sbi = ni->mi.sbi;
 	struct ATTRIB *attr;
 	struct ATTR_LIST_ENTRY *le;
 	struct mft_inode *mi;
 	struct ATTR_FILE_NAME *fname;
 	struct ATTR_FILE_NAME *de_name = (struct ATTR_FILE_NAME *)(de + 1);
 	u16 de_key_size = le16_to_cpu(de->key_size);
-
-	if (sbi->options->windows_names &&
-	    !valid_windows_name(sbi, (struct le_str *)&de_name->name_len))
-		return -EINVAL;
-
-	/* If option "hide_dot_files" then set hidden attribute for dot files. */
-	if (ni->mi.sbi->options->hide_dot_files) {
-		if (de_name->name_len > 0 &&
-		    le16_to_cpu(de_name->name[0]) == '.')
-			ni->std_fa |= FILE_ATTRIBUTE_HIDDEN;
-		else
-			ni->std_fa &= ~FILE_ATTRIBUTE_HIDDEN;
-	}
 
 	mi_get_ref(&ni->mi, &de->ref);
 	mi_get_ref(&dir_ni->mi, &de_name->home);
@@ -3051,7 +3042,7 @@ int ni_add_name(struct ntfs_inode *dir_ni, struct ntfs_inode *ni,
 	memcpy(Add2Ptr(attr, SIZEOF_RESIDENT), de_name, de_key_size);
 
 	/* Insert new name into directory. */
-	err = indx_insert_entry(&dir_ni->dir, dir_ni, de, sbi, NULL, 0);
+	err = indx_insert_entry(&dir_ni->dir, dir_ni, de, ni->mi.sbi, NULL, 0);
 	if (err)
 		ni_remove_attr_le(ni, attr, mi, le);
 
@@ -3207,6 +3198,12 @@ static bool ni_update_parent(struct ntfs_inode *ni, struct NTFS_DUP_INFO *dup,
 		if (!fname || !memcmp(&fname->dup, dup, sizeof(fname->dup)))
 			continue;
 
+		/* Check simple case when parent inode equals current inode. */
+		if (ino_get(&fname->home) == ni->vfs_inode.i_ino) {
+			ntfs_set_state(sbi, NTFS_DIRTY_ERROR);
+			continue;
+		}
+
 		/* ntfs_iget5 may sleep. */
 		dir = ntfs_iget5(sb, &fname->home, NULL);
 		if (IS_ERR(dir)) {
@@ -3258,6 +3255,9 @@ int ni_write_inode(struct inode *inode, int sync, const char *hint)
 		return 0;
 	}
 
+	if (!ni->mi.mrec)
+		goto out;
+
 	if (is_rec_inuse(ni->mi.mrec) &&
 	    !(sbi->flags & NTFS_FLAGS_LOG_REPLAYING) && inode->i_nlink) {
 		bool modified = false;
@@ -3294,7 +3294,6 @@ int ni_write_inode(struct inode *inode, int sync, const char *hint)
 			modified = true;
 		}
 
-		/* std attribute is always in primary MFT record. */
 		if (modified)
 			ni->mi.dirty = true;
 

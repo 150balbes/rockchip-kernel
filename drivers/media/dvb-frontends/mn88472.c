@@ -572,7 +572,8 @@ static struct dvb_frontend *mn88472_get_dvb_frontend(struct i2c_client *client)
 	return &dev->fe;
 }
 
-static int mn88472_probe(struct i2c_client *client)
+static int mn88472_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct mn88472_config *pdata = client->dev.platform_data;
 	struct mn88472_dev *dev;
@@ -718,7 +719,7 @@ static struct i2c_driver mn88472_driver = {
 		.name = "mn88472",
 		.suppress_bind_attrs = true,
 	},
-	.probe_new = mn88472_probe,
+	.probe    = mn88472_probe,
 	.remove   = mn88472_remove,
 	.id_table = mn88472_id_table,
 };

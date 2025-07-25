@@ -20,10 +20,7 @@ MODULE_ALIAS("acpi*:HPQ6001:*");
 MODULE_ALIAS("acpi*:WSTADEF:*");
 MODULE_ALIAS("acpi*:AMDI0051:*");
 
-struct wl_button {
-	struct input_dev *input_dev;
-	char phys[32];
-};
+static struct input_dev *wl_input_dev;
 
 static const struct acpi_device_id wl_ids[] = {
 	{"HPQ6001", 0},
@@ -32,80 +29,64 @@ static const struct acpi_device_id wl_ids[] = {
 	{"", 0},
 };
 
-static int wireless_input_setup(struct acpi_device *device)
+static int wireless_input_setup(void)
 {
-	struct wl_button *button = acpi_driver_data(device);
 	int err;
 
-	button->input_dev = input_allocate_device();
-	if (!button->input_dev)
+	wl_input_dev = input_allocate_device();
+	if (!wl_input_dev)
 		return -ENOMEM;
 
-	snprintf(button->phys, sizeof(button->phys), "%s/input0", acpi_device_hid(device));
+	wl_input_dev->name = "Wireless hotkeys";
+	wl_input_dev->phys = "hpq6001/input0";
+	wl_input_dev->id.bustype = BUS_HOST;
+	wl_input_dev->evbit[0] = BIT(EV_KEY);
+	set_bit(KEY_RFKILL, wl_input_dev->keybit);
 
-	button->input_dev->name = "Wireless hotkeys";
-	button->input_dev->phys = button->phys;
-	button->input_dev->id.bustype = BUS_HOST;
-	button->input_dev->evbit[0] = BIT(EV_KEY);
-	set_bit(KEY_RFKILL, button->input_dev->keybit);
-
-	err = input_register_device(button->input_dev);
+	err = input_register_device(wl_input_dev);
 	if (err)
 		goto err_free_dev;
 
 	return 0;
 
 err_free_dev:
-	input_free_device(button->input_dev);
+	input_free_device(wl_input_dev);
 	return err;
 }
 
-static void wireless_input_destroy(struct acpi_device *device)
+static void wireless_input_destroy(void)
 {
-	struct wl_button *button = acpi_driver_data(device);
-
-	input_unregister_device(button->input_dev);
-	kfree(button);
+	input_unregister_device(wl_input_dev);
 }
 
 static void wl_notify(struct acpi_device *acpi_dev, u32 event)
 {
-	struct wl_button *button = acpi_driver_data(acpi_dev);
-
 	if (event != 0x80) {
 		pr_info("Received unknown event (0x%x)\n", event);
 		return;
 	}
 
-	input_report_key(button->input_dev, KEY_RFKILL, 1);
-	input_sync(button->input_dev);
-	input_report_key(button->input_dev, KEY_RFKILL, 0);
-	input_sync(button->input_dev);
+	input_report_key(wl_input_dev, KEY_RFKILL, 1);
+	input_sync(wl_input_dev);
+	input_report_key(wl_input_dev, KEY_RFKILL, 0);
+	input_sync(wl_input_dev);
 }
 
 static int wl_add(struct acpi_device *device)
 {
-	struct wl_button *button;
 	int err;
 
-	button = kzalloc(sizeof(struct wl_button), GFP_KERNEL);
-	if (!button)
-		return -ENOMEM;
-
-	device->driver_data = button;
-
-	err = wireless_input_setup(device);
-	if (err) {
+	err = wireless_input_setup();
+	if (err)
 		pr_err("Failed to setup wireless hotkeys\n");
-		kfree(button);
-	}
 
 	return err;
 }
 
-static void wl_remove(struct acpi_device *device)
+static int wl_remove(struct acpi_device *device)
 {
-	wireless_input_destroy(device);
+	wireless_input_destroy();
+	return 0;
 }
 
 static struct acpi_driver wl_driver = {

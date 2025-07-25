@@ -59,7 +59,7 @@ struct GUID {
 struct cpu_str {
 	u8 len;
 	u8 unused;
-	u16 name[10];
+	u16 name[];
 };
 
 struct le_str {
@@ -84,6 +84,7 @@ typedef u32 CLST;
 
 #define COMPRESSION_UNIT     4
 #define COMPRESS_MAX_CLUSTER 0x1000
+#define MFT_INCREASE_CHUNK   1024
 
 enum RECORD_NUM {
 	MFT_REC_MFT		= 0,
@@ -435,9 +436,6 @@ static inline u64 attr_svcn(const struct ATTRIB *attr)
 	return attr->non_res ? le64_to_cpu(attr->nres.svcn) : 0;
 }
 
-/* The size of resident attribute by its resident size. */
-#define BYTES_PER_RESIDENT(b) (0x18 + (b))
-
 static_assert(sizeof(struct ATTRIB) == 0x48);
 static_assert(sizeof(((struct ATTRIB *)NULL)->res) == 0x08);
 static_assert(sizeof(((struct ATTRIB *)NULL)->nres) == 0x38);
@@ -519,11 +517,9 @@ struct ATTR_LIST_ENTRY {
 	__le64 vcn;		// 0x08: Starting VCN of this attribute.
 	struct MFT_REF ref;	// 0x10: MFT record number with attribute.
 	__le16 id;		// 0x18: struct ATTRIB ID.
-	__le16 name[3];		// 0x1A: Just to align. To get real name can use bNameOffset.
+	__le16 name[];		// 0x1A: Just to align. To get real name can use name_off.
 
 }; // sizeof(0x20)
-
-static_assert(sizeof(struct ATTR_LIST_ENTRY) == 0x20);
 
 static inline u32 le_size(u8 name_len)
 {
@@ -714,13 +710,12 @@ static inline struct NTFS_DE *hdr_first_de(const struct INDEX_HDR *hdr)
 {
 	u32 de_off = le32_to_cpu(hdr->de_off);
 	u32 used = le32_to_cpu(hdr->used);
-	struct NTFS_DE *e;
+	struct NTFS_DE *e = Add2Ptr(hdr, de_off);
 	u16 esize;
 
-	if (de_off >= used || de_off + sizeof(struct NTFS_DE) > used )
+	if (de_off >= used || de_off >= le32_to_cpu(hdr->total))
 		return NULL;
 
-	e = Add2Ptr(hdr, de_off);
 	esize = le16_to_cpu(e->size);
 	if (esize < sizeof(struct NTFS_DE) || de_off + esize > used)
 		return NULL;

@@ -20,7 +20,7 @@ struct btrfs_ordered_sum {
 	/*
 	 * this is the length in bytes covered by the sums array below.
 	 */
-	int len;
+	u32 len;
 	struct list_head list;
 	/* last field is a variable length array of csums */
 	u8 sums[];
@@ -206,8 +206,7 @@ void btrfs_wait_ordered_roots(struct btrfs_fs_info *fs_info, u64 nr,
 void btrfs_lock_and_flush_ordered_range(struct btrfs_inode *inode, u64 start,
 					u64 end,
 					struct extent_state **cached_state);
-bool btrfs_try_lock_ordered_range(struct btrfs_inode *inode, u64 start, u64 end,
-				  struct extent_state **cached_state);
+bool btrfs_try_lock_ordered_range(struct btrfs_inode *inode, u64 start, u64 end);
 int btrfs_split_ordered_extent(struct btrfs_ordered_extent *ordered, u64 pre,
 			       u64 post);
 int __init ordered_data_init(void);

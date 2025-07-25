@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
-config FW_CS_DSP
+config CS_DSP
 	tristate
 	default n

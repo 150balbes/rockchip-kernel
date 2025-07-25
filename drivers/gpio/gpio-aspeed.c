@@ -5,9 +5,10 @@
  * Joel Stanley <joel@jms.id.au>
  */
 
+#include <asm/div64.h>
 #include <linux/clk.h>
-#include <linux/gpio/aspeed.h>
 #include <linux/gpio/driver.h>
+#include <linux/gpio/aspeed.h>
 #include <linux/hashtable.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -17,8 +18,6 @@
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
-
-#include <asm/div64.h>
 
 /*
  * These two headers aren't meant to be used by GPIO drivers. We need
@@ -964,7 +963,7 @@ static int aspeed_gpio_set_config(struct gpio_chip *chip, unsigned int offset,
 	else if (param == PIN_CONFIG_BIAS_DISABLE ||
 			param == PIN_CONFIG_BIAS_PULL_DOWN ||
 			param == PIN_CONFIG_DRIVE_STRENGTH)
-		return pinctrl_gpio_set_config(offset, config);
+		return pinctrl_gpio_set_config(chip->base + offset, config);
 	else if (param == PIN_CONFIG_DRIVE_OPEN_DRAIN ||
 			param == PIN_CONFIG_DRIVE_OPEN_SOURCE)
 		/* Return -ENOTSUPP to trigger emulation, as per datasheet */

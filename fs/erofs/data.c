@@ -13,7 +13,9 @@
 void erofs_unmap_metabuf(struct erofs_buf *buf)
 {
 	if (buf->kmap_type == EROFS_KMAP)
-		kunmap_local(buf->base);
+		kunmap(buf->page);
+	else if (buf->kmap_type == EROFS_KMAP_ATOMIC)
+		kunmap_atomic(buf->base);
 	buf->base = NULL;
 	buf->kmap_type = EROFS_NO_KMAP;
 }
@@ -52,7 +54,9 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 	}
 	if (buf->kmap_type == EROFS_NO_KMAP) {
 		if (type == EROFS_KMAP)
-			buf->base = kmap_local_page(page);
+			buf->base = kmap(page);
+		else if (type == EROFS_KMAP_ATOMIC)
+			buf->base = kmap_atomic(page);
 		buf->kmap_type = type;
 	} else if (buf->kmap_type != type) {
 		DBG_BUGON(1);
@@ -91,11 +95,8 @@ static int erofs_map_blocks_flatmode(struct inode *inode,
 		map->m_pa = blknr_to_addr(vi->raw_blkaddr) + map->m_la;
 		map->m_plen = blknr_to_addr(lastblk) - offset;
 	} else if (tailendpacking) {
-		/* 2 - inode inline B: inode, [xattrs], inline last blk... */
-		struct erofs_sb_info *sbi = EROFS_SB(inode->i_sb);
-
-		map->m_pa = iloc(sbi, vi->nid) + vi->inode_isize +
-			vi->xattr_isize + erofs_blkoff(map->m_la);
+		map->m_pa = erofs_iloc(inode) + vi->inode_isize +
+			vi->xattr_isize + erofs_blkoff(offset);
 		map->m_plen = inode->i_size - offset;
 
 		/* inline data should be located in the same meta block */
@@ -150,7 +151,7 @@ int erofs_map_blocks(struct inode *inode,
 		unit = EROFS_BLOCK_MAP_ENTRY_SIZE;	/* block map */
 
 	chunknr = map->m_la >> vi->chunkbits;
-	pos = ALIGN(iloc(EROFS_SB(sb), vi->nid) + vi->inode_isize +
+	pos = ALIGN(erofs_iloc(inode) + vi->inode_isize +
 		    vi->xattr_isize, unit) + unit * chunknr;
 
 	kaddr = erofs_read_metabuf(&buf, sb, erofs_blknr(pos), EROFS_KMAP);
@@ -399,8 +400,6 @@ const struct address_space_operations erofs_raw_access_aops = {
 	.readahead = erofs_readahead,
 	.bmap = erofs_bmap,
 	.direct_IO = noop_direct_IO,
-	.release_folio = iomap_release_folio,
-	.invalidate_folio = iomap_invalidate_folio,
 };
 
 #ifdef CONFIG_FS_DAX
@@ -430,6 +429,9 @@ static int erofs_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 	vma->vm_ops = &erofs_dax_vm_ops;
 	vma->vm_flags |= VM_HUGEPAGE;
+#if defined(CONFIG_ROCKCHIP_RAMDISK) && defined(CONFIG_ARM)
+	vma->vm_flags |= VM_MIXEDMAP;
+#endif
 	return 0;
 }
 #else
@@ -441,4 +443,5 @@ const struct file_operations erofs_file_fops = {
 	.read_iter	= erofs_file_read_iter,
 	.mmap		= erofs_file_mmap,
 	.splice_read	= generic_file_splice_read,
+	.get_unmapped_area = thp_get_unmapped_area,
 };

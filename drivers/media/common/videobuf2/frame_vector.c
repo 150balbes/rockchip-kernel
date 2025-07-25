@@ -14,7 +14,6 @@
  * get_vaddr_frames() - map virtual addresses to pfns
  * @start:	starting user address
  * @nr_frames:	number of pages / pfns from start to map
- * @write:	the mapped address has write permission
  * @vec:	structure which receives pages / pfns of the addresses mapped.
  *		It should have space for at least nr_frames entries.
  *
@@ -31,13 +30,16 @@
  * different type underlying the specified range of virtual addresses.
  * When the function isn't able to map a single page, it returns error.
  *
+ * Note that get_vaddr_frames() cannot follow VM_IO mappings. It used
+ * to be able to do that, but that could (racily) return non-refcounted
+ * pfns.
+ *
  * This function takes care of grabbing mmap_lock as necessary.
  */
-int get_vaddr_frames(unsigned long start, unsigned int nr_frames, bool write,
+int get_vaddr_frames(unsigned long start, unsigned int nr_frames,
 		     struct frame_vector *vec)
 {
 	int ret;
-	unsigned int gup_flags = FOLL_LONGTERM;
 
 	if (nr_frames == 0)
 		return 0;
@@ -47,10 +49,8 @@ int get_vaddr_frames(unsigned long start, unsigned int nr_frames, bool write,
 
 	start = untagged_addr(start);
 
-	if (write)
-		gup_flags |= FOLL_WRITE;
-
-	ret = pin_user_pages_fast(start, nr_frames, gup_flags,
+	ret = pin_user_pages_fast(start, nr_frames,
+				  FOLL_FORCE | FOLL_WRITE | FOLL_LONGTERM,
 				  (struct page **)(vec->ptrs));
 	vec->got_ref = true;
 	vec->is_pfns = false;
@@ -59,8 +59,6 @@ int get_vaddr_frames(unsigned long start, unsigned int nr_frames, bool write,
 	if (likely(ret > 0))
 		return ret;
 
-	/* This used to (racily) return non-refcounted pfns. Let people know */
-	WARN_ONCE(1, "get_vaddr_frames() cannot follow VM_IO mapping");
 	vec->nr_frames = 0;
 	return ret ? ret : -EFAULT;
 }

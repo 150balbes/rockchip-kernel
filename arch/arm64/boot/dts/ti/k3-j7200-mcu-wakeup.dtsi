@@ -56,7 +56,34 @@
 	wkup_pmx0: pinctrl@4301c000 {
 		compatible = "pinctrl-single";
 		/* Proxy 0 addressing */
-		reg = <0x00 0x4301c000 0x00 0x178>;
+		reg = <0x00 0x4301c000 0x00 0x34>;
+		#pinctrl-cells = <1>;
+		pinctrl-single,register-width = <32>;
+		pinctrl-single,function-mask = <0xffffffff>;
+	};
+
+	wkup_pmx1: pinctrl@0x4301c038 {
+		compatible = "pinctrl-single";
+		/* Proxy 0 addressing */
+		reg = <0x00 0x4301c038 0x00 0x8>;
+		#pinctrl-cells = <1>;
+		pinctrl-single,register-width = <32>;
+		pinctrl-single,function-mask = <0xffffffff>;
+	};
+
+	wkup_pmx2: pinctrl@0x4301c068 {
+		compatible = "pinctrl-single";
+		/* Proxy 0 addressing */
+		reg = <0x00 0x4301c068 0x00 0xec>;
+		#pinctrl-cells = <1>;
+		pinctrl-single,register-width = <32>;
+		pinctrl-single,function-mask = <0xffffffff>;
+	};
+
+	wkup_pmx3: pinctrl@0x4301c174 {
+		compatible = "pinctrl-single";
+		/* Proxy 0 addressing */
+		reg = <0x00 0x4301c174 0x00 0x20>;
 		#pinctrl-cells = <1>;
 		pinctrl-single,register-width = <32>;
 		pinctrl-single,function-mask = <0xffffffff>;
@@ -79,7 +106,6 @@
 		power-domains = <&k3_pds 287 TI_SCI_PD_EXCLUSIVE>;
 		clocks = <&k3_clks 287 2>;
 		clock-names = "fclk";
-		status = "disabled";
 	};
 
 	mcu_uart0: serial@40a00000 {
@@ -91,7 +117,6 @@
 		power-domains = <&k3_pds 149 TI_SCI_PD_EXCLUSIVE>;
 		clocks = <&k3_clks 149 2>;
 		clock-names = "fclk";
-		status = "disabled";
 	};
 
 	wkup_gpio_intr: interrupt-controller@42200000 {
@@ -251,7 +276,6 @@
 		clock-names = "fck";
 		clocks = <&k3_clks 194 1>;
 		power-domains = <&k3_pds 194 TI_SCI_PD_EXCLUSIVE>;
-		status = "disabled";
 	};
 
 	mcu_i2c1: i2c@40b10000 {
@@ -263,7 +287,6 @@
 		clock-names = "fck";
 		clocks = <&k3_clks 195 1>;
 		power-domains = <&k3_pds 195 TI_SCI_PD_EXCLUSIVE>;
-		status = "disabled";
 	};
 
 	wkup_i2c0: i2c@42120000 {
@@ -275,7 +298,6 @@
 		clock-names = "fck";
 		clocks = <&k3_clks 197 1>;
 		power-domains = <&k3_pds 197 TI_SCI_PD_SHARED>;
-		status = "disabled";
 	};
 
 	fss: syscon@47000000 {
@@ -330,7 +352,7 @@
 		clocks = <&k3_clks 0 1>;
 		assigned-clocks = <&k3_clks 0 3>;
 		assigned-clock-rates = <60000000>;
-		clock-names = "fck";
+		clock-names = "adc_tsc_fck";
 		dmas = <&main_udmap 0x7400>,
 			<&main_udmap 0x7401>;
 		dma-names = "fifo0", "fifo1";

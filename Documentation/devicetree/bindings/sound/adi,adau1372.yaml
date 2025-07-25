@@ -8,14 +8,11 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Analog Devices ADAU1372 CODEC
 
 maintainers:
-  - Alexandre Belloni <alexandre.belloni@bootlin.com>
+  - Alexandre Belloni <alexandre.belloni@bootlin.om>
 
 description: |
   Analog Devices ADAU1372 four inputs and two outputs codec.
   https://www.analog.com/media/en/technical-documentation/data-sheets/ADAU1372.pdf
-
-allOf:
-  - $ref: dai-common.yaml#
 
 properties:
   compatible:
@@ -45,7 +42,7 @@ required:
   - clocks
   - clock-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

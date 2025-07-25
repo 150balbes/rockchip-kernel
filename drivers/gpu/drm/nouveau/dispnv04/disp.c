@@ -61,7 +61,7 @@ nv04_display_fini(struct drm_device *dev, bool runtime, bool suspend)
 	struct drm_crtc *crtc;
 
 	/* Disable flip completion events. */
-	nvif_event_block(&disp->flip);
+	nvif_notify_put(&disp->flip);
 
 	/* Disable vblank interrupts. */
 	NVWriteCRTC(dev, 0, NV_PCRTC_INTR_EN_0, 0);
@@ -121,7 +121,7 @@ nv04_display_init(struct drm_device *dev, bool resume, bool runtime)
 		encoder->enc_save(&encoder->base.base);
 
 	/* Enable flip completion events. */
-	nvif_event_allow(&disp->flip);
+	nvif_notify_get(&disp->flip);
 
 	if (!resume)
 		return 0;
@@ -202,7 +202,7 @@ nv04_display_destroy(struct drm_device *dev)
 
 	nouveau_hw_save_vga_fonts(dev, 0);
 
-	nvif_event_dtor(&disp->flip);
+	nvif_notify_dtor(&disp->flip);
 
 	nouveau_display(dev)->priv = NULL;
 	vfree(disp);
@@ -227,8 +227,6 @@ nv04_display_create(struct drm_device *dev)
 	if (!disp)
 		return -ENOMEM;
 
-	disp->drm = drm;
-
 	nvif_object_map(&drm->client.device.object, NULL, 0);
 
 	nouveau_display(dev)->priv = disp;
@@ -241,10 +239,9 @@ nv04_display_create(struct drm_device *dev)
 
 	/* Request page flip completion event. */
 	if (drm->channel) {
-		ret = nvif_event_ctor(&drm->channel->nvsw, "kmsFlip", 0, nv04_flip_complete,
-				      true, NULL, 0, &disp->flip);
-		if (ret)
-			return ret;
+		nvif_notify_ctor(&drm->channel->nvsw, "kmsFlip", nv04_flip_complete,
+				 false, NV04_NVSW_NTFY_UEVENT,
+				 NULL, 0, 0, &disp->flip);
 	}
 
 	nouveau_hw_save_vga_fonts(dev, 1);

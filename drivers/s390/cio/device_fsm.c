@@ -9,7 +9,6 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/string.h>
 
@@ -64,7 +63,7 @@ static void ccw_timeout_log(struct ccw_device *cdev)
 		printk(KERN_WARNING "cio: orb indicates transport mode\n");
 		printk(KERN_WARNING "cio: last tcw:\n");
 		print_hex_dump(KERN_WARNING, "cio:  ", DUMP_PREFIX_NONE, 16, 1,
-			       phys_to_virt(orb->tm.tcw),
+			       (void *)(addr_t)orb->tm.tcw,
 			       sizeof(struct tcw), 0);
 	} else {
 		printk(KERN_WARNING "cio: orb indicates command mode\n");
@@ -78,7 +77,7 @@ static void ccw_timeout_log(struct ccw_device *cdev)
 			printk(KERN_WARNING "cio: last channel program:\n");
 
 		print_hex_dump(KERN_WARNING, "cio:  ", DUMP_PREFIX_NONE, 16, 1,
-			       phys_to_virt(orb->cmd.cpa),
+			       (void *)(addr_t)orb->cmd.cpa,
 			       sizeof(struct ccw1), 0);
 	}
 	printk(KERN_WARNING "cio: ccw device state: %d\n",
@@ -398,7 +397,7 @@ void ccw_device_recognition(struct ccw_device *cdev)
 	 */
 	cdev->private->flags.recog_done = 0;
 	cdev->private->state = DEV_STATE_SENSE_ID;
-	if (cio_enable_subchannel(sch, (u32)virt_to_phys(sch))) {
+	if (cio_enable_subchannel(sch, (u32) (addr_t) sch)) {
 		ccw_device_recog_done(cdev, DEV_STATE_NOT_OPER);
 		return;
 	}
@@ -549,7 +548,7 @@ ccw_device_online(struct ccw_device *cdev)
 	    (cdev->private->state != DEV_STATE_BOXED))
 		return -EINVAL;
 	sch = to_subchannel(cdev->dev.parent);
-	ret = cio_enable_subchannel(sch, (u32)virt_to_phys(sch));
+	ret = cio_enable_subchannel(sch, (u32)(addr_t)sch);
 	if (ret != 0) {
 		/* Couldn't enable the subchannel for i/o. Sick device. */
 		if (ret == -ENODEV)
@@ -692,7 +691,7 @@ static void ccw_device_boxed_verify(struct ccw_device *cdev,
 	struct subchannel *sch = to_subchannel(cdev->dev.parent);
 
 	if (cdev->online) {
-		if (cio_enable_subchannel(sch, (u32)virt_to_phys(sch)))
+		if (cio_enable_subchannel(sch, (u32) (addr_t) sch))
 			ccw_device_done(cdev, DEV_STATE_NOT_OPER);
 		else
 			ccw_device_online_verify(cdev, dev_event);
@@ -923,7 +922,7 @@ ccw_device_start_id(struct ccw_device *cdev, enum dev_event dev_event)
 	struct subchannel *sch;
 
 	sch = to_subchannel(cdev->dev.parent);
-	if (cio_enable_subchannel(sch, (u32)virt_to_phys(sch)) != 0)
+	if (cio_enable_subchannel(sch, (u32)(addr_t)sch) != 0)
 		/* Couldn't enable the subchannel for i/o. Sick device. */
 		return;
 	cdev->private->state = DEV_STATE_DISCONNECTED_SENSE_ID;

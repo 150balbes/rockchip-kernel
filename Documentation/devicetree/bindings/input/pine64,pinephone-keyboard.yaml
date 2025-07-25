@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/input/pine64,pinephone-keyboard.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Pine64 PinePhone keyboard
+title: Pine64 PinePhone keyboard device tree bindings
 
 maintainers:
   - Samuel Holland <samuel@sholland.org>

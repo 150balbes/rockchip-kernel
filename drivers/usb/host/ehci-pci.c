@@ -411,12 +411,11 @@ static struct pci_driver ehci_pci_driver = {
 	.remove =	ehci_pci_remove,
 	.shutdown = 	usb_hcd_pci_shutdown,
 
-	.driver =	{
 #ifdef CONFIG_PM
-		.pm =	&usb_hcd_pci_pm_ops,
-#endif
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+	.driver =	{
+		.pm =	&usb_hcd_pci_pm_ops
 	},
+#endif
 };
 
 static int __init ehci_pci_init(void)

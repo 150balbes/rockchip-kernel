@@ -131,6 +131,8 @@ static void ice_ptp_src_cmd(struct ice_hw *hw, enum ice_ptp_tmr_cmd cmd)
 	case READ_TIME:
 		cmd_val |= GLTSYN_CMD_READ_TIME;
 		break;
+	case ICE_PTP_NOP:
+		break;
 	}
 
 	wr32(hw, GLTSYN_CMD, cmd_val);
@@ -653,32 +655,6 @@ ice_clear_phy_tstamp_e822(struct ice_hw *hw, u8 quad, u8 idx)
 	}
 
 	return 0;
-}
-
-/**
- * ice_ptp_reset_ts_memory_quad_e822 - Clear all timestamps from the quad block
- * @hw: pointer to the HW struct
- * @quad: the quad to read from
- *
- * Clear all timestamps from the PHY quad block that is shared between the
- * internal PHYs on the E822 devices.
- */
-void ice_ptp_reset_ts_memory_quad_e822(struct ice_hw *hw, u8 quad)
-{
-	ice_write_quad_reg_e822(hw, quad, Q_REG_TS_CTRL, Q_REG_TS_CTRL_M);
-	ice_write_quad_reg_e822(hw, quad, Q_REG_TS_CTRL, ~(u32)Q_REG_TS_CTRL_M);
-}
-
-/**
- * ice_ptp_reset_ts_memory_e822 - Clear all timestamps from all quad blocks
- * @hw: pointer to the HW struct
- */
-static void ice_ptp_reset_ts_memory_e822(struct ice_hw *hw)
-{
-	unsigned int quad;
-
-	for (quad = 0; quad < ICE_MAX_QUAD; quad++)
-		ice_ptp_reset_ts_memory_quad_e822(hw, quad);
 }
 
 /**
@@ -1226,18 +1202,18 @@ ice_ptp_read_port_capture(struct ice_hw *hw, u8 port, u64 *tx_ts, u64 *rx_ts)
 }
 
 /**
- * ice_ptp_one_port_cmd - Prepare a single PHY port for a timer command
+ * ice_ptp_write_port_cmd_e822 - Prepare a single PHY port for a timer command
  * @hw: pointer to HW struct
  * @port: Port to which cmd has to be sent
  * @cmd: Command to be sent to the port
  *
  * Prepare the requested port for an upcoming timer sync command.
  *
- * Note there is no equivalent of this operation on E810, as that device
- * always handles all external PHYs internally.
+ * Do not use this function directly. If you want to configure exactly one
+ * port, use ice_ptp_one_port_cmd() instead.
  */
 static int
-ice_ptp_one_port_cmd(struct ice_hw *hw, u8 port, enum ice_ptp_tmr_cmd cmd)
+ice_ptp_write_port_cmd_e822(struct ice_hw *hw, u8 port, enum ice_ptp_tmr_cmd cmd)
 {
 	u32 cmd_val, val;
 	u8 tmr_idx;
@@ -1260,6 +1236,8 @@ ice_ptp_one_port_cmd(struct ice_hw *hw, u8 port, enum ice_ptp_tmr_cmd cmd)
 		break;
 	case ADJ_TIME_AT_TIME:
 		cmd_val |= PHY_CMD_ADJ_TIME_AT_TIME;
+		break;
+	case ICE_PTP_NOP:
 		break;
 	}
 
@@ -1307,6 +1285,39 @@ ice_ptp_one_port_cmd(struct ice_hw *hw, u8 port, enum ice_ptp_tmr_cmd cmd)
 }
 
 /**
+ * ice_ptp_one_port_cmd - Prepare one port for a timer command
+ * @hw: pointer to the HW struct
+ * @configured_port: the port to configure with configured_cmd
+ * @configured_cmd: timer command to prepare on the configured_port
+ *
+ * Prepare the configured_port for the configured_cmd, and prepare all other
+ * ports for ICE_PTP_NOP. This causes the configured_port to execute the
+ * desired command while all other ports perform no operation.
+ */
+static int
+ice_ptp_one_port_cmd(struct ice_hw *hw, u8 configured_port,
+		     enum ice_ptp_tmr_cmd configured_cmd)
+{
+	u8 port;
+
+	for (port = 0; port < ICE_NUM_EXTERNAL_PORTS; port++) {
+		enum ice_ptp_tmr_cmd cmd;
+		int err;
+
+		if (port == configured_port)
+			cmd = configured_cmd;
+		else
+			cmd = ICE_PTP_NOP;
+
+		err = ice_ptp_write_port_cmd_e822(hw, port, cmd);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+/**
  * ice_ptp_port_cmd_e822 - Prepare all ports for a timer command
  * @hw: pointer to the HW struct
  * @cmd: timer command to prepare
@@ -1322,7 +1333,7 @@ ice_ptp_port_cmd_e822(struct ice_hw *hw, enum ice_ptp_tmr_cmd cmd)
 	for (port = 0; port < ICE_NUM_EXTERNAL_PORTS; port++) {
 		int err;
 
-		err = ice_ptp_one_port_cmd(hw, port, cmd);
+		err = ice_ptp_write_port_cmd_e822(hw, port, cmd);
 		if (err)
 			return err;
 	}
@@ -1741,48 +1752,21 @@ ice_calc_fixed_tx_offset_e822(struct ice_hw *hw, enum ice_ptp_link_spd link_spd)
  * adjust Tx timestamps by. This is calculated by combining some known static
  * latency along with the Vernier offset computations done by hardware.
  *
- * This function will not return successfully until the Tx offset calculations
- * have been completed, which requires waiting until at least one packet has
- * been transmitted by the device. It is safe to call this function
- * periodically until calibration succeeds, as it will only program the offset
- * once.
+ * This function must be called only after the offset registers are valid,
+ * i.e. after the Vernier calibration wait has passed, to ensure that the PHY
+ * has measured the offset.
  *
  * To avoid overflow, when calculating the offset based on the known static
  * latency values, we use measurements in 1/100th of a nanosecond, and divide
  * the TUs per second up front. This avoids overflow while allowing
  * calculation of the adjustment using integer arithmetic.
- *
- * Returns zero on success, -EBUSY if the hardware vernier offset
- * calibration has not completed, or another error code on failure.
  */
-int ice_phy_cfg_tx_offset_e822(struct ice_hw *hw, u8 port)
+static int ice_phy_cfg_tx_offset_e822(struct ice_hw *hw, u8 port)
 {
 	enum ice_ptp_link_spd link_spd;
 	enum ice_ptp_fec_mode fec_mode;
 	u64 total_offset, val;
 	int err;
-	u32 reg;
-
-	/* Nothing to do if we've already programmed the offset */
-	err = ice_read_phy_reg_e822(hw, port, P_REG_TX_OR, &reg);
-	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read TX_OR for port %u, err %d\n",
-			  port, err);
-		return err;
-	}
-
-	if (reg)
-		return 0;
-
-	err = ice_read_phy_reg_e822(hw, port, P_REG_TX_OV_STATUS, &reg);
-	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read TX_OV_STATUS for port %u, err %d\n",
-			  port, err);
-		return err;
-	}
-
-	if (!(reg & P_REG_TX_OV_STATUS_OV_M))
-		return -EBUSY;
 
 	err = ice_phy_get_speed_and_fec_e822(hw, port, &link_spd, &fec_mode);
 	if (err)
@@ -1836,8 +1820,46 @@ int ice_phy_cfg_tx_offset_e822(struct ice_hw *hw, u8 port)
 	if (err)
 		return err;
 
-	dev_info(ice_hw_to_dev(hw), "Port=%d Tx vernier offset calibration complete\n",
-		 port);
+	return 0;
+}
+
+/**
+ * ice_phy_cfg_fixed_tx_offset_e822 - Configure Tx offset for bypass mode
+ * @hw: pointer to the HW struct
+ * @port: the PHY port to configure
+ *
+ * Calculate and program the fixed Tx offset, and indicate that the offset is
+ * ready. This can be used when operating in bypass mode.
+ */
+static int
+ice_phy_cfg_fixed_tx_offset_e822(struct ice_hw *hw, u8 port)
+{
+	enum ice_ptp_link_spd link_spd;
+	enum ice_ptp_fec_mode fec_mode;
+	u64 total_offset;
+	int err;
+
+	err = ice_phy_get_speed_and_fec_e822(hw, port, &link_spd, &fec_mode);
+	if (err)
+		return err;
+
+	total_offset = ice_calc_fixed_tx_offset_e822(hw, link_spd);
+
+	/* Program the fixed Tx offset into the P_REG_TOTAL_TX_OFFSET_L
+	 * register, then indicate that the Tx offset is ready. After this,
+	 * timestamps will be enabled.
+	 *
+	 * Note that this skips including the more precise offsets generated
+	 * by the Vernier calibration.
+	 */
+	err = ice_write_64b_phy_reg_e822(hw, port, P_REG_TOTAL_TX_OFFSET_L,
+					 total_offset);
+	if (err)
+		return err;
+
+	err = ice_write_phy_reg_e822(hw, port, P_REG_TX_OR, 1);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -2041,11 +2063,6 @@ ice_calc_fixed_rx_offset_e822(struct ice_hw *hw, enum ice_ptp_link_spd link_spd)
  * measurements taken in hardware with some data about known fixed delay as
  * well as adjusting for multi-lane alignment delay.
  *
- * This function will not return successfully until the Rx offset calculations
- * have been completed, which requires waiting until at least one packet has
- * been received by the device. It is safe to call this function periodically
- * until calibration succeeds, as it will only program the offset once.
- *
  * This function must be called only after the offset registers are valid,
  * i.e. after the Vernier calibration wait has passed, to ensure that the PHY
  * has measured the offset.
@@ -2054,38 +2071,13 @@ ice_calc_fixed_rx_offset_e822(struct ice_hw *hw, enum ice_ptp_link_spd link_spd)
  * latency values, we use measurements in 1/100th of a nanosecond, and divide
  * the TUs per second up front. This avoids overflow while allowing
  * calculation of the adjustment using integer arithmetic.
- *
- * Returns zero on success, -EBUSY if the hardware vernier offset
- * calibration has not completed, or another error code on failure.
  */
-int ice_phy_cfg_rx_offset_e822(struct ice_hw *hw, u8 port)
+static int ice_phy_cfg_rx_offset_e822(struct ice_hw *hw, u8 port)
 {
 	enum ice_ptp_link_spd link_spd;
 	enum ice_ptp_fec_mode fec_mode;
 	u64 total_offset, pmd, val;
 	int err;
-	u32 reg;
-
-	/* Nothing to do if we've already programmed the offset */
-	err = ice_read_phy_reg_e822(hw, port, P_REG_RX_OR, &reg);
-	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read RX_OR for port %u, err %d\n",
-			  port, err);
-		return err;
-	}
-
-	if (reg)
-		return 0;
-
-	err = ice_read_phy_reg_e822(hw, port, P_REG_RX_OV_STATUS, &reg);
-	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read RX_OV_STATUS for port %u, err %d\n",
-			  port, err);
-		return err;
-	}
-
-	if (!(reg & P_REG_RX_OV_STATUS_OV_M))
-		return -EBUSY;
 
 	err = ice_phy_get_speed_and_fec_e822(hw, port, &link_spd, &fec_mode);
 	if (err)
@@ -2146,8 +2138,46 @@ int ice_phy_cfg_rx_offset_e822(struct ice_hw *hw, u8 port)
 	if (err)
 		return err;
 
-	dev_info(ice_hw_to_dev(hw), "Port=%d Rx vernier offset calibration complete\n",
-		 port);
+	return 0;
+}
+
+/**
+ * ice_phy_cfg_fixed_rx_offset_e822 - Configure fixed Rx offset for bypass mode
+ * @hw: pointer to the HW struct
+ * @port: the PHY port to configure
+ *
+ * Calculate and program the fixed Rx offset, and indicate that the offset is
+ * ready. This can be used when operating in bypass mode.
+ */
+static int
+ice_phy_cfg_fixed_rx_offset_e822(struct ice_hw *hw, u8 port)
+{
+	enum ice_ptp_link_spd link_spd;
+	enum ice_ptp_fec_mode fec_mode;
+	u64 total_offset;
+	int err;
+
+	err = ice_phy_get_speed_and_fec_e822(hw, port, &link_spd, &fec_mode);
+	if (err)
+		return err;
+
+	total_offset = ice_calc_fixed_rx_offset_e822(hw, link_spd);
+
+	/* Program the fixed Rx offset into the P_REG_TOTAL_RX_OFFSET_L
+	 * register, then indicate that the Rx offset is ready. After this,
+	 * timestamps will be enabled.
+	 *
+	 * Note that this skips including the more precise offsets generated
+	 * by Vernier calibration.
+	 */
+	err = ice_write_64b_phy_reg_e822(hw, port, P_REG_TOTAL_RX_OFFSET_L,
+					 total_offset);
+	if (err)
+		return err;
+
+	err = ice_write_phy_reg_e822(hw, port, P_REG_RX_OR, 1);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -2252,6 +2282,9 @@ static int ice_sync_phy_timer_e822(struct ice_hw *hw, u8 port)
 	if (err)
 		goto err_unlock;
 
+	/* Do not perform any action on the main timer */
+	ice_ptp_src_cmd(hw, ICE_PTP_NOP);
+
 	/* Issue the sync to activate the time adjustment */
 	ice_ptp_exec_tmr_cmd(hw);
 
@@ -2330,14 +2363,20 @@ ice_stop_phy_timer_e822(struct ice_hw *hw, u8 port, bool soft_reset)
  * ice_start_phy_timer_e822 - Start the PHY clock timer
  * @hw: pointer to the HW struct
  * @port: the PHY port to start
+ * @bypass: if true, start the PHY in bypass mode
  *
  * Start the clock of a PHY port. This must be done as part of the flow to
  * re-calibrate Tx and Rx timestamping offsets whenever the clock time is
  * initialized or when link speed changes.
  *
- * Hardware will take Vernier measurements on Tx or Rx of packets.
+ * Bypass mode enables timestamps immediately without waiting for Vernier
+ * calibration to complete. Hardware will still continue taking Vernier
+ * measurements on Tx or Rx of packets, but they will not be applied to
+ * timestamps. Use ice_phy_exit_bypass_e822 to exit bypass mode once hardware
+ * has completed offset calculation.
  */
-int ice_start_phy_timer_e822(struct ice_hw *hw, u8 port)
+int
+ice_start_phy_timer_e822(struct ice_hw *hw, u8 port, bool bypass)
 {
 	u32 lo, hi, val;
 	u64 incval;
@@ -2371,6 +2410,9 @@ int ice_start_phy_timer_e822(struct ice_hw *hw, u8 port)
 	err = ice_ptp_one_port_cmd(hw, port, INIT_INCVAL);
 	if (err)
 		return err;
+
+	/* Do not perform any action on the main timer */
+	ice_ptp_src_cmd(hw, ICE_PTP_NOP);
 
 	ice_ptp_exec_tmr_cmd(hw);
 
@@ -2415,42 +2457,110 @@ int ice_start_phy_timer_e822(struct ice_hw *hw, u8 port)
 	if (err)
 		return err;
 
+	if (bypass) {
+		val |= P_REG_PS_BYPASS_MODE_M;
+		/* Enter BYPASS mode, enabling timestamps immediately. */
+		err = ice_write_phy_reg_e822(hw, port, P_REG_PS, val);
+		if (err)
+			return err;
+
+		/* Program the fixed Tx offset */
+		err = ice_phy_cfg_fixed_tx_offset_e822(hw, port);
+		if (err)
+			return err;
+
+		/* Program the fixed Rx offset */
+		err = ice_phy_cfg_fixed_rx_offset_e822(hw, port);
+		if (err)
+			return err;
+	}
+
 	ice_debug(hw, ICE_DBG_PTP, "Enabled clock on PHY port %u\n", port);
 
 	return 0;
 }
 
 /**
- * ice_get_phy_tx_tstamp_ready_e822 - Read Tx memory status register
+ * ice_phy_exit_bypass_e822 - Exit bypass mode, after vernier calculations
  * @hw: pointer to the HW struct
- * @quad: the timestamp quad to read from
- * @tstamp_ready: contents of the Tx memory status register
+ * @port: the PHY port to configure
  *
- * Read the Q_REG_TX_MEMORY_STATUS register indicating which timestamps in
- * the PHY are ready. A set bit means the corresponding timestamp is valid and
- * ready to be captured from the PHY timestamp block.
+ * After hardware finishes vernier calculations for the Tx and Rx offset, this
+ * function can be used to exit bypass mode by updating the total Tx and Rx
+ * offsets, and then disabling bypass. This will enable hardware to include
+ * the more precise offset calibrations, increasing precision of the generated
+ * timestamps.
+ *
+ * This cannot be done until hardware has measured the offsets, which requires
+ * waiting until at least one packet has been sent and received by the device.
  */
-static int
-ice_get_phy_tx_tstamp_ready_e822(struct ice_hw *hw, u8 quad, u64 *tstamp_ready)
+int ice_phy_exit_bypass_e822(struct ice_hw *hw, u8 port)
 {
-	u32 hi, lo;
 	int err;
+	u32 val;
 
-	err = ice_read_quad_reg_e822(hw, quad, Q_REG_TX_MEMORY_STATUS_U, &hi);
+	err = ice_read_phy_reg_e822(hw, port, P_REG_TX_OV_STATUS, &val);
 	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read TX_MEMORY_STATUS_U for quad %u, err %d\n",
-			  quad, err);
+		ice_debug(hw, ICE_DBG_PTP, "Failed to read TX_OV_STATUS for port %u, err %d\n",
+			  port, err);
 		return err;
 	}
 
-	err = ice_read_quad_reg_e822(hw, quad, Q_REG_TX_MEMORY_STATUS_L, &lo);
+	if (!(val & P_REG_TX_OV_STATUS_OV_M)) {
+		ice_debug(hw, ICE_DBG_PTP, "Tx offset is not yet valid for port %u\n",
+			  port);
+		return -EBUSY;
+	}
+
+	err = ice_read_phy_reg_e822(hw, port, P_REG_RX_OV_STATUS, &val);
 	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read TX_MEMORY_STATUS_L for quad %u, err %d\n",
-			  quad, err);
+		ice_debug(hw, ICE_DBG_PTP, "Failed to read RX_OV_STATUS for port %u, err %d\n",
+			  port, err);
 		return err;
 	}
 
-	*tstamp_ready = (u64)hi << 32 | (u64)lo;
+	if (!(val & P_REG_TX_OV_STATUS_OV_M)) {
+		ice_debug(hw, ICE_DBG_PTP, "Rx offset is not yet valid for port %u\n",
+			  port);
+		return -EBUSY;
+	}
+
+	err = ice_phy_cfg_tx_offset_e822(hw, port);
+	if (err) {
+		ice_debug(hw, ICE_DBG_PTP, "Failed to program total Tx offset for port %u, err %d\n",
+			  port, err);
+		return err;
+	}
+
+	err = ice_phy_cfg_rx_offset_e822(hw, port);
+	if (err) {
+		ice_debug(hw, ICE_DBG_PTP, "Failed to program total Rx offset for port %u, err %d\n",
+			  port, err);
+		return err;
+	}
+
+	/* Exit bypass mode now that the offset has been updated */
+	err = ice_read_phy_reg_e822(hw, port, P_REG_PS, &val);
+	if (err) {
+		ice_debug(hw, ICE_DBG_PTP, "Failed to read P_REG_PS for port %u, err %d\n",
+			  port, err);
+		return err;
+	}
+
+	if (!(val & P_REG_PS_BYPASS_MODE_M))
+		ice_debug(hw, ICE_DBG_PTP, "Port %u not in bypass mode\n",
+			  port);
+
+	val &= ~P_REG_PS_BYPASS_MODE_M;
+	err = ice_write_phy_reg_e822(hw, port, P_REG_PS, val);
+	if (err) {
+		ice_debug(hw, ICE_DBG_PTP, "Failed to disable bypass for port %u, err %d\n",
+			  port, err);
+		return err;
+	}
+
+	dev_info(ice_hw_to_dev(hw), "Exiting bypass mode on PHY port %u\n",
+		 port);
 
 	return 0;
 }
@@ -2847,6 +2957,8 @@ static int ice_ptp_port_cmd_e810(struct ice_hw *hw, enum ice_ptp_tmr_cmd cmd)
 	case ADJ_TIME_AT_TIME:
 		cmd_val = GLTSYN_CMD_ADJ_INIT_TIME;
 		break;
+	case ICE_PTP_NOP:
+		return 0;
 	}
 
 	/* Read, modify, write */
@@ -2896,18 +3008,16 @@ bool ice_ptp_lock(struct ice_hw *hw)
 	u32 hw_lock;
 	int i;
 
-#define MAX_TRIES 15
+#define MAX_TRIES 5
 
 	for (i = 0; i < MAX_TRIES; i++) {
 		hw_lock = rd32(hw, PFTSYN_SEM + (PFTSYN_SEM_BYTES * hw->pf_id));
 		hw_lock = hw_lock & PFTSYN_SEM_BUSY_M;
-		if (hw_lock) {
-			/* Somebody is holding the lock */
-			usleep_range(5000, 6000);
-			continue;
-		}
+		if (!hw_lock)
+			break;
 
-		break;
+		/* Somebody is holding the lock */
+		usleep_range(10000, 20000);
 	}
 
 	return !hw_lock;
@@ -3129,22 +3239,6 @@ int ice_clear_phy_tstamp(struct ice_hw *hw, u8 block, u8 idx)
 		return ice_clear_phy_tstamp_e822(hw, block, idx);
 }
 
-/**
- * ice_get_phy_tx_tstamp_ready_e810 - Read Tx memory status register
- * @hw: pointer to the HW struct
- * @port: the PHY port to read
- * @tstamp_ready: contents of the Tx memory status register
- *
- * E810 devices do not use a Tx memory status register. Instead simply
- * indicate that all timestamps are currently ready.
- */
-static int
-ice_get_phy_tx_tstamp_ready_e810(struct ice_hw *hw, u8 port, u64 *tstamp_ready)
-{
-	*tstamp_ready = 0xFFFFFFFFFFFFFFFF;
-	return 0;
-}
-
 /* E810T SMA functions
  *
  * The following functions operate specifically on E810T hardware and are used
@@ -3328,18 +3422,6 @@ bool ice_is_pca9575_present(struct ice_hw *hw)
 }
 
 /**
- * ice_ptp_reset_ts_memory - Reset timestamp memory for all blocks
- * @hw: pointer to the HW struct
- */
-void ice_ptp_reset_ts_memory(struct ice_hw *hw)
-{
-	if (ice_is_e810(hw))
-		return;
-
-	ice_ptp_reset_ts_memory_e822(hw);
-}
-
-/**
  * ice_ptp_init_phc - Initialize PTP hardware clock
  * @hw: pointer to the HW struct
  *
@@ -3359,25 +3441,4 @@ int ice_ptp_init_phc(struct ice_hw *hw)
 		return ice_ptp_init_phc_e810(hw);
 	else
 		return ice_ptp_init_phc_e822(hw);
-}
-
-/**
- * ice_get_phy_tx_tstamp_ready - Read PHY Tx memory status indication
- * @hw: pointer to the HW struct
- * @block: the timestamp block to check
- * @tstamp_ready: storage for the PHY Tx memory status information
- *
- * Check the PHY for Tx timestamp memory status. This reports a 64 bit value
- * which indicates which timestamps in the block may be captured. A set bit
- * means the timestamp can be read. An unset bit means the timestamp is not
- * ready and software should avoid reading the register.
- */
-int ice_get_phy_tx_tstamp_ready(struct ice_hw *hw, u8 block, u64 *tstamp_ready)
-{
-	if (ice_is_e810(hw))
-		return ice_get_phy_tx_tstamp_ready_e810(hw, block,
-							tstamp_ready);
-	else
-		return ice_get_phy_tx_tstamp_ready_e822(hw, block,
-							tstamp_ready);
 }

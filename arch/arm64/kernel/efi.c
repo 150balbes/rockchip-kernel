@@ -11,6 +11,7 @@
 #include <linux/init.h>
 
 #include <asm/efi.h>
+#include <asm/stacktrace.h>
 
 static bool region_is_misaligned(const efi_memory_desc_t *md)
 {
@@ -145,7 +146,7 @@ asmlinkage efi_status_t efi_handle_corrupted_x18(efi_status_t s, const char *f)
 	return s;
 }
 
-DEFINE_SPINLOCK(efi_rt_lock);
+DEFINE_RAW_SPINLOCK(efi_rt_lock);
 
 asmlinkage u64 *efi_rt_stack_top __ro_after_init;
 
@@ -154,7 +155,7 @@ asmlinkage efi_status_t __efi_rt_asm_recover(void);
 bool efi_runtime_fixup_exception(struct pt_regs *regs, const char *msg)
 {
 	 /* Check whether the exception occurred while running the firmware */
-	if (current_work() != &efi_rts_work.work || regs->pc >= TASK_SIZE_64)
+	if (!current_in_efi() || regs->pc >= TASK_SIZE_64)
 		return false;
 
 	pr_err(FW_BUG "Unable to handle %s in EFI runtime service\n", msg);

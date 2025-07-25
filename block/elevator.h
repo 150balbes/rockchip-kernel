@@ -84,21 +84,6 @@ struct elevator_type
 	struct list_head list;
 };
 
-static inline bool elevator_tryget(struct elevator_type *e)
-{
-	return try_module_get(e->elevator_owner);
-}
-
-static inline void __elevator_get(struct elevator_type *e)
-{
-	__module_get(e->elevator_owner);
-}
-
-static inline void elevator_put(struct elevator_type *e)
-{
-	module_put(e->elevator_owner);
-}
-
 #define ELV_HASH_BITS 6
 
 void elv_rqhash_del(struct request_queue *q, struct request *rq);
@@ -115,12 +100,9 @@ struct elevator_queue
 	void *elevator_data;
 	struct kobject kobj;
 	struct mutex sysfs_lock;
-	unsigned long flags;
+	unsigned int registered:1;
 	DECLARE_HASHTABLE(hash, ELV_HASH_BITS);
 };
-
-#define ELEVATOR_FLAG_REGISTERED	0
-#define ELEVATOR_FLAG_DISABLE_WBT	1
 
 /*
  * block elevator interface

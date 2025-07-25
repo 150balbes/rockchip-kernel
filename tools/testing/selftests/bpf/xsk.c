@@ -33,7 +33,6 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include "xsk.h"
-#include "bpf_util.h"
 
 #ifndef SOL_XDP
  #define SOL_XDP 283
@@ -522,6 +521,25 @@ static int xsk_create_bpf_link(struct xsk_socket *xsk)
 	return 0;
 }
 
+/* Copy up to sz - 1 bytes from zero-terminated src string and ensure that dst
+ * is zero-terminated string no matter what (unless sz == 0, in which case
+ * it's a no-op). It's conceptually close to FreeBSD's strlcpy(), but differs
+ * in what is returned. Given this is internal helper, it's trivial to extend
+ * this, when necessary. Use this instead of strncpy inside libbpf source code.
+ */
+static inline void libbpf_strlcpy(char *dst, const char *src, size_t sz)
+{
+        size_t i;
+
+        if (sz == 0)
+                return;
+
+        sz--;
+        for (i = 0; i < sz && src[i]; i++)
+                dst[i] = src[i];
+        dst[i] = '\0';
+}
+
 static int xsk_get_max_queues(struct xsk_socket *xsk)
 {
 	struct ethtool_channels channels = { .cmd = ETHTOOL_GCHANNELS };
@@ -534,7 +552,7 @@ static int xsk_get_max_queues(struct xsk_socket *xsk)
 		return -errno;
 
 	ifr.ifr_data = (void *)&channels;
-	bpf_strlcpy(ifr.ifr_name, ctx->ifname, IFNAMSIZ);
+	libbpf_strlcpy(ifr.ifr_name, ctx->ifname, IFNAMSIZ);
 	err = ioctl(fd, SIOCETHTOOL, &ifr);
 	if (err && errno != EOPNOTSUPP) {
 		ret = -errno;
@@ -753,7 +771,7 @@ static int xsk_create_xsk_struct(int ifindex, struct xsk_socket *xsk)
 	}
 
 	ctx->ifindex = ifindex;
-	bpf_strlcpy(ctx->ifname, ifname, IFNAMSIZ);
+	libbpf_strlcpy(ctx->ifname, ifname, IFNAMSIZ);
 
 	xsk->ctx = ctx;
 	xsk->ctx->has_bpf_link = xsk_probe_bpf_link();
@@ -940,7 +958,7 @@ static struct xsk_ctx *xsk_create_ctx(struct xsk_socket *xsk,
 	ctx->refcount = 1;
 	ctx->umem = umem;
 	ctx->queue_id = queue_id;
-	bpf_strlcpy(ctx->ifname, ifname, IFNAMSIZ);
+	libbpf_strlcpy(ctx->ifname, ifname, IFNAMSIZ);
 
 	ctx->fill = fill;
 	ctx->comp = comp;

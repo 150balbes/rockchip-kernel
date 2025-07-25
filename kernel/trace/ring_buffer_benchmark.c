@@ -258,7 +258,7 @@ static void ring_buffer_producer(void)
 				hit++;
 				entry = ring_buffer_event_data(event);
 				*entry = smp_processor_id();
-				ring_buffer_unlock_commit(buffer);
+				ring_buffer_unlock_commit(buffer, event);
 			}
 		}
 		end_time = ktime_get();

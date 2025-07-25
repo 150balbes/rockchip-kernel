@@ -1008,39 +1008,41 @@ static struct kbase_device *to_kbase_device(struct device *dev)
 static int assign_irqs(struct platform_device *pdev)
 {
 	struct kbase_device *kbdev = to_kbase_device(&pdev->dev);
+
+	static const char *const irq_names_caps[] = { "JOB", "MMU", "GPU" };
+
+#if IS_ENABLED(CONFIG_OF)
+	static const char *const irq_names[] = { "job", "mmu", "gpu" };
+#endif
 	int i;
 
 	if (!kbdev)
 		return -ENODEV;
 
-	/* 3 IRQ resources */
-	for (i = 0; i < 3; i++) {
-		struct resource *irq_res;
-		int irqtag;
+	for (i = 0; i < ARRAY_SIZE(irq_names_caps); i++) {
+		int irq;
 
-		irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, i);
-		if (!irq_res) {
-			dev_err(kbdev->dev, "No IRQ resource at index %d\n", i);
-			return -ENOENT;
-		}
-
-#ifdef CONFIG_OF
-		if (!strncasecmp(irq_res->name, "JOB", 3)) {
-			irqtag = JOB_IRQ_TAG;
-		} else if (!strncasecmp(irq_res->name, "MMU", 3)) {
-			irqtag = MMU_IRQ_TAG;
-		} else if (!strncasecmp(irq_res->name, "GPU", 3)) {
-			irqtag = GPU_IRQ_TAG;
-		} else {
-			dev_err(&pdev->dev, "Invalid irq res name: '%s'\n",
-				irq_res->name);
-			return -EINVAL;
-		}
+#if IS_ENABLED(CONFIG_OF)
+		/* We recommend using Upper case for the irq names in dts, but if
+		 * there are devices in the world using Lower case then we should
+		 * avoid breaking support for them. So try using names in Upper case
+		 * first then try using Lower case names. If both attempts fail then
+		 * we assume there is no IRQ resource specified for the GPU.
+		 */
+		irq = platform_get_irq_byname(pdev, irq_names_caps[i]);
+		if (irq < 0)
+			irq = platform_get_irq_byname(pdev, irq_names[i]);
 #else
-		irqtag = i;
+		irq = platform_get_irq(pdev, i);
 #endif /* CONFIG_OF */
-		kbdev->irqs[irqtag].irq = irq_res->start;
-		kbdev->irqs[irqtag].flags = irq_res->flags & IRQF_TRIGGER_MASK;
+
+		if (irq < 0) {
+			dev_err(kbdev->dev, "No IRQ resource '%s'\n", irq_names_caps[i]);
+			return irq;
+		}
+
+		kbdev->irqs[i].irq = irq;
+		kbdev->irqs[i].flags = irqd_get_trigger_type(irq_get_irq_data(irq));
 	}
 
 	return 0;
@@ -2059,6 +2061,7 @@ static bool align_and_check(unsigned long *gap_end, unsigned long gap_start,
 static unsigned long kbase_unmapped_area_topdown(struct vm_unmapped_area_info
 		*info, bool is_shader_code)
 {
+#if (KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE)
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma;
 	unsigned long length, low_limit, high_limit, gap_start, gap_end;
@@ -2149,7 +2152,37 @@ check_current:
 			}
 		}
 	}
+#else
+	unsigned long length, high_limit, gap_start, gap_end;
 
+	MA_STATE(mas, &current->mm->mm_mt, 0, 0);
+	/* Adjust search length to account for worst case alignment overhead */
+	length = info->length + info->align_mask;
+	if (length < info->length)
+		return -ENOMEM;
+
+	/*
+	 * Adjust search limits by the desired length.
+	 * See implementation comment at top of unmapped_area().
+	 */
+	gap_end = info->high_limit;
+	if (gap_end < length)
+		return -ENOMEM;
+	high_limit = gap_end - length;
+
+	if (info->low_limit > high_limit)
+		return -ENOMEM;
+
+	while (true) {
+		if (mas_empty_area_rev(&mas, info->low_limit, info->high_limit - 1, length))
+			return -ENOMEM;
+		gap_end = mas.last + 1;
+		gap_start = mas.min;
+
+		if (align_and_check(&gap_end, gap_start, info, is_shader_code))
+			return gap_end;
+	}
+#endif
 	return -ENOMEM;
 }
 
@@ -4140,7 +4173,7 @@ static int kbase_device_debugfs_init(struct kbase_device *kbdev)
 
 #ifdef CONFIG_MALI_DEVFREQ
 #ifdef CONFIG_DEVFREQ_THERMAL
-	if (kbdev->inited_subsys & inited_devfreq)
+	if ((kbdev->inited_subsys & inited_devfreq) && kbdev->devfreq_cooling)
 		kbase_ipa_debugfs_init(kbdev);
 #endif /* CONFIG_DEVFREQ_THERMAL */
 #endif /* CONFIG_MALI_DEVFREQ */
@@ -4927,6 +4960,7 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION(MALI_RELEASE_NAME " (UK version " \
 		__stringify(BASE_UK_VERSION_MAJOR) "." \
 		__stringify(BASE_UK_VERSION_MINOR) ")");
+MODULE_INFO(import_ns, "DMA_BUF");
 
 #if defined(CONFIG_MALI_GATOR_SUPPORT) || defined(CONFIG_MALI_SYSTEM_TRACE)
 #define CREATE_TRACE_POINTS

@@ -241,8 +241,7 @@ static void nft_log_destroy(const struct nft_ctx *ctx,
 	nf_logger_put(ctx->family, li->type);
 }
 
-static int nft_log_dump(struct sk_buff *skb,
-			const struct nft_expr *expr, bool reset)
+static int nft_log_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_log *priv = nft_expr_priv(expr);
 	const struct nf_loginfo *li = &priv->loginfo;

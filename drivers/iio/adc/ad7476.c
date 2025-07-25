@@ -368,7 +368,16 @@ static int ad7476_probe(struct spi_device *spi)
 	}
 
 	if (st->chip_info->has_vdrive) {
-		ret = devm_regulator_get_enable(&spi->dev, "vdrive");
+		reg = devm_regulator_get(&spi->dev, "vdrive");
+		if (IS_ERR(reg))
+			return PTR_ERR(reg);
+
+		ret = regulator_enable(reg);
+		if (ret)
+			return ret;
+
+		ret = devm_add_action_or_reset(&spi->dev, ad7476_reg_disable,
+					       reg);
 		if (ret)
 			return ret;
 	}

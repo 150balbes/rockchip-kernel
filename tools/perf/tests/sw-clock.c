@@ -13,7 +13,6 @@
 #include "util/evlist.h"
 #include "util/cpumap.h"
 #include "util/mmap.h"
-#include "util/sample.h"
 #include "util/thread_map.h"
 #include <perf/evlist.h>
 #include <perf/mmap.h>

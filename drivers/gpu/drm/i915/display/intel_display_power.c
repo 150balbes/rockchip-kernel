@@ -129,18 +129,6 @@ intel_display_power_domain_str(enum intel_display_power_domain domain)
 		return "AUDIO_MMIO";
 	case POWER_DOMAIN_AUDIO_PLAYBACK:
 		return "AUDIO_PLAYBACK";
-	case POWER_DOMAIN_AUX_IO_A:
-		return "AUX_IO_A";
-	case POWER_DOMAIN_AUX_IO_B:
-		return "AUX_IO_B";
-	case POWER_DOMAIN_AUX_IO_C:
-		return "AUX_IO_C";
-	case POWER_DOMAIN_AUX_IO_D:
-		return "AUX_IO_D";
-	case POWER_DOMAIN_AUX_IO_E:
-		return "AUX_IO_E";
-	case POWER_DOMAIN_AUX_IO_F:
-		return "AUX_IO_F";
 	case POWER_DOMAIN_AUX_A:
 		return "AUX_A";
 	case POWER_DOMAIN_AUX_B:
@@ -165,6 +153,8 @@ intel_display_power_domain_str(enum intel_display_power_domain domain)
 		return "AUX_USBC5";
 	case POWER_DOMAIN_AUX_USBC6:
 		return "AUX_USBC6";
+	case POWER_DOMAIN_AUX_IO_A:
+		return "AUX_IO_A";
 	case POWER_DOMAIN_AUX_TBT1:
 		return "AUX_TBT1";
 	case POWER_DOMAIN_AUX_TBT2:
@@ -1158,9 +1148,10 @@ static void hsw_assert_cdclk(struct drm_i915_private *dev_priv)
 
 static void assert_can_disable_lcpll(struct drm_i915_private *dev_priv)
 {
+	struct drm_device *dev = &dev_priv->drm;
 	struct intel_crtc *crtc;
 
-	for_each_intel_crtc(&dev_priv->drm, crtc)
+	for_each_intel_crtc(dev, crtc)
 		I915_STATE_WARN(crtc->active, "CRTC for pipe %c enabled\n",
 				pipe_name(crtc->pipe));
 
@@ -2299,7 +2290,6 @@ struct intel_ddi_port_domains {
 
 	enum intel_display_power_domain ddi_lanes;
 	enum intel_display_power_domain ddi_io;
-	enum intel_display_power_domain aux_io;
 	enum intel_display_power_domain aux_legacy_usbc;
 	enum intel_display_power_domain aux_tbt;
 };
@@ -2314,7 +2304,6 @@ i9xx_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_A,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_A,
-		.aux_io = POWER_DOMAIN_AUX_IO_A,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_A,
 		.aux_tbt = POWER_DOMAIN_INVALID,
 	},
@@ -2330,7 +2319,6 @@ d11_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_A,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_A,
-		.aux_io = POWER_DOMAIN_AUX_IO_A,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_A,
 		.aux_tbt = POWER_DOMAIN_INVALID,
 	}, {
@@ -2341,7 +2329,6 @@ d11_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_C,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_C,
-		.aux_io = POWER_DOMAIN_AUX_IO_C,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_C,
 		.aux_tbt = POWER_DOMAIN_AUX_TBT1,
 	},
@@ -2357,7 +2344,6 @@ d12_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_A,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_A,
-		.aux_io = POWER_DOMAIN_AUX_IO_A,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_A,
 		.aux_tbt = POWER_DOMAIN_INVALID,
 	}, {
@@ -2368,7 +2354,6 @@ d12_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_TC1,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_TC1,
-		.aux_io = POWER_DOMAIN_INVALID,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_USBC1,
 		.aux_tbt = POWER_DOMAIN_AUX_TBT1,
 	},
@@ -2384,7 +2369,6 @@ d13_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_A,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_A,
-		.aux_io = POWER_DOMAIN_AUX_IO_A,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_A,
 		.aux_tbt = POWER_DOMAIN_INVALID,
 	}, {
@@ -2395,7 +2379,6 @@ d13_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_TC1,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_TC1,
-		.aux_io = POWER_DOMAIN_INVALID,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_USBC1,
 		.aux_tbt = POWER_DOMAIN_AUX_TBT1,
 	}, {
@@ -2406,7 +2389,6 @@ d13_port_domains[] = {
 
 		.ddi_lanes = POWER_DOMAIN_PORT_DDI_LANES_D,
 		.ddi_io = POWER_DOMAIN_PORT_DDI_IO_D,
-		.aux_io = POWER_DOMAIN_AUX_IO_D,
 		.aux_legacy_usbc = POWER_DOMAIN_AUX_D,
 		.aux_tbt = POWER_DOMAIN_INVALID,
 	},
@@ -2482,17 +2464,6 @@ intel_port_domains_for_aux_ch(struct drm_i915_private *i915, enum aux_ch aux_ch)
 			return &domains[i];
 
 	return NULL;
-}
-
-enum intel_display_power_domain
-intel_display_power_aux_io_domain(struct drm_i915_private *i915, enum aux_ch aux_ch)
-{
-	const struct intel_ddi_port_domains *domains = intel_port_domains_for_aux_ch(i915, aux_ch);
-
-	if (drm_WARN_ON(&i915->drm, !domains || domains->aux_io == POWER_DOMAIN_INVALID))
-		return POWER_DOMAIN_AUX_IO_A;
-
-	return domains->aux_io + (int)(aux_ch - domains->aux_ch_start);
 }
 
 enum intel_display_power_domain

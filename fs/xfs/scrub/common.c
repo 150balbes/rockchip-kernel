@@ -424,6 +424,10 @@ xchk_ag_read_headers(
 	if (error && want_ag_read_header_failure(sc, XFS_SCRUB_TYPE_AGF))
 		return error;
 
+	error = xfs_alloc_read_agfl(sa->pag, sc->tp, &sa->agfl_bp);
+	if (error && want_ag_read_header_failure(sc, XFS_SCRUB_TYPE_AGFL))
+		return error;
+
 	return 0;
 }
 
@@ -511,6 +515,10 @@ xchk_ag_free(
 	struct xchk_ag		*sa)
 {
 	xchk_ag_btcur_free(sa);
+	if (sa->agfl_bp) {
+		xfs_trans_brelse(sc->tp, sa->agfl_bp);
+		sa->agfl_bp = NULL;
+	}
 	if (sa->agf_bp) {
 		xfs_trans_brelse(sc->tp, sa->agf_bp);
 		sa->agf_bp = NULL;
@@ -781,33 +789,6 @@ xchk_buffer_recheck(
 	trace_xchk_block_error(sc, xfs_buf_daddr(bp), fa);
 }
 
-static inline int
-xchk_metadata_inode_subtype(
-	struct xfs_scrub	*sc,
-	unsigned int		scrub_type)
-{
-	__u32			smtype = sc->sm->sm_type;
-	int			error;
-
-	sc->sm->sm_type = scrub_type;
-
-	switch (scrub_type) {
-	case XFS_SCRUB_TYPE_INODE:
-		error = xchk_inode(sc);
-		break;
-	case XFS_SCRUB_TYPE_BMBTD:
-		error = xchk_bmap_data(sc);
-		break;
-	default:
-		ASSERT(0);
-		error = -EFSCORRUPTED;
-		break;
-	}
-
-	sc->sm->sm_type = smtype;
-	return error;
-}
-
 /*
  * Scrub the attr/data forks of a metadata inode.  The metadata inode must be
  * pointed to by sc->ip and the ILOCK must be held.
@@ -816,16 +797,12 @@ int
 xchk_metadata_inode_forks(
 	struct xfs_scrub	*sc)
 {
+	__u32			smtype;
 	bool			shared;
 	int			error;
 
 	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
 		return 0;
-
-	/* Check the inode record. */
-	error = xchk_metadata_inode_subtype(sc, XFS_SCRUB_TYPE_INODE);
-	if (error || (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT))
-		return error;
 
 	/* Metadata inodes don't live on the rt device. */
 	if (sc->ip->i_diflags & XFS_DIFLAG_REALTIME) {
@@ -846,7 +823,10 @@ xchk_metadata_inode_forks(
 	}
 
 	/* Invoke the data fork scrubber. */
-	error = xchk_metadata_inode_subtype(sc, XFS_SCRUB_TYPE_BMBTD);
+	smtype = sc->sm->sm_type;
+	sc->sm->sm_type = XFS_SCRUB_TYPE_BMBTD;
+	error = xchk_bmap_data(sc);
+	sc->sm->sm_type = smtype;
 	if (error || (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT))
 		return error;
 
@@ -861,7 +841,7 @@ xchk_metadata_inode_forks(
 			xchk_ino_set_corrupt(sc, sc->ip->i_ino);
 	}
 
-	return 0;
+	return error;
 }
 
 /*
@@ -884,30 +864,4 @@ xchk_ilock_inverted(
 		delay(1);
 	}
 	return -EDEADLOCK;
-}
-
-/* Pause background reaping of resources. */
-void
-xchk_stop_reaping(
-	struct xfs_scrub	*sc)
-{
-	sc->flags |= XCHK_REAPING_DISABLED;
-	xfs_blockgc_stop(sc->mp);
-	xfs_inodegc_stop(sc->mp);
-}
-
-/* Restart background reaping of resources. */
-void
-xchk_start_reaping(
-	struct xfs_scrub	*sc)
-{
-	/*
-	 * Readonly filesystems do not perform inactivation or speculative
-	 * preallocation, so there's no need to restart the workers.
-	 */
-	if (!xfs_is_readonly(sc->mp)) {
-		xfs_inodegc_start(sc->mp);
-		xfs_blockgc_start(sc->mp);
-	}
-	sc->flags &= ~XCHK_REAPING_DISABLED;
 }

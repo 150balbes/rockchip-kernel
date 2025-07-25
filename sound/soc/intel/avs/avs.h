@@ -9,7 +9,6 @@
 #ifndef __SOUND_SOC_INTEL_AVS_H
 #define __SOUND_SOC_INTEL_AVS_H
 
-#include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/firmware.h>
 #include <linux/kfifo.h>
@@ -24,13 +23,6 @@ struct avs_tplg;
 struct avs_tplg_library;
 struct avs_soc_component;
 struct avs_ipc_msg;
-
-#ifdef CONFIG_ACPI
-#define AVS_S0IX_SUPPORTED \
-	(acpi_gbl_FADT.flags & ACPI_FADT_LOW_POWER_S0)
-#else
-#define AVS_S0IX_SUPPORTED false
-#endif
 
 /*
  * struct avs_dsp_ops - Platform-specific DSP operations
@@ -94,6 +86,16 @@ struct avs_fw_entry {
 	struct list_head node;
 };
 
+struct avs_debug {
+	struct kfifo trace_fifo;
+	spinlock_t fifo_lock;	/* serialize I/O for trace_fifo */
+	spinlock_t trace_lock;	/* serialize debug window I/O between each LOG_BUFFER_STATUS */
+	wait_queue_head_t trace_waitq;
+	u32 aging_timer_period;
+	u32 fifo_full_timer_period;
+	u32 logged_resources;	/* context dependent: core or library */
+};
+
 /*
  * struct avs_dev - Intel HD-Audio driver data
  *
@@ -125,7 +127,6 @@ struct avs_dev {
 	struct list_head fw_list;
 	int *core_refs;		/* reference count per core */
 	char **lib_names;
-	int num_lp_paths;
 
 	struct completion fw_ready;
 	struct work_struct probe_work;
@@ -137,18 +138,7 @@ struct avs_dev {
 	spinlock_t path_list_lock;
 	struct mutex path_mutex;
 
-	spinlock_t trace_lock;	/* serialize debug window I/O between each LOG_BUFFER_STATUS */
-#ifdef CONFIG_DEBUG_FS
-	struct kfifo trace_fifo;
-	wait_queue_head_t trace_waitq;
-	u32 aging_timer_period;
-	u32 fifo_full_timer_period;
-	u32 logged_resources;	/* context dependent: core or library */
-	struct dentry *debugfs_root;
-	/* probes */
-	struct hdac_ext_stream *extractor;
-	unsigned int num_probe_streams;
-#endif
+	struct avs_debug dbg;
 };
 
 /* from hda_bus to avs_dev */
@@ -230,10 +220,8 @@ static inline void avs_ipc_err(struct avs_dev *adev, struct avs_ipc_msg *tx,
 	/*
 	 * If IPC channel is blocked e.g.: due to ongoing recovery,
 	 * -EPERM error code is expected and thus it's not an actual error.
-	 *
-	 * Unsupported IPCs are of no harm either.
 	 */
-	if (error == -EPERM || error == AVS_IPC_NOT_SUPPORTED)
+	if (error == -EPERM)
 		dev_dbg(adev->dev, "%s 0x%08x 0x%08x failed: %d\n", name,
 			tx->glb.primary, tx->glb.ext.val, error);
 	else
@@ -323,9 +311,6 @@ struct avs_soc_component {
 
 extern const struct snd_soc_dai_ops avs_dai_fe_ops;
 
-int avs_soc_component_register(struct device *dev, const char *name,
-			       const struct snd_soc_component_driver *drv,
-			       struct snd_soc_dai_driver *cpu_dais, int num_cpu_dais);
 int avs_dmic_platform_register(struct avs_dev *adev, const char *name);
 int avs_i2s_platform_register(struct avs_dev *adev, const char *name, unsigned long port_mask,
 			      unsigned long *tdms);
@@ -336,6 +321,9 @@ void avs_unregister_all_boards(struct avs_dev *adev);
 
 /* Firmware tracing helpers */
 
+unsigned int __kfifo_fromio_locked(struct kfifo *fifo, const void __iomem *src, unsigned int len,
+				   spinlock_t *lock);
+
 #define avs_log_buffer_size(adev) \
 	((adev)->fw_cfg.trace_log_bytes / (adev)->hw_cfg.dsp_cores)
 
@@ -345,18 +333,6 @@ void avs_unregister_all_boards(struct avs_dev *adev);
 	(__offset < 0) ? NULL : \
 			 (avs_sram_addr(adev, AVS_DEBUG_WINDOW) + __offset); \
 })
-
-static inline int avs_log_buffer_status_locked(struct avs_dev *adev, union avs_notify_msg *msg)
-{
-	unsigned long flags;
-	int ret;
-
-	spin_lock_irqsave(&adev->trace_lock, flags);
-	ret = avs_dsp_op(adev, log_buffer_status, msg);
-	spin_unlock_irqrestore(&adev->trace_lock, flags);
-
-	return ret;
-}
 
 struct apl_log_buffer_layout {
 	u32 read_ptr;
@@ -369,43 +345,5 @@ struct apl_log_buffer_layout {
 
 #define apl_log_payload_addr(addr) \
 	(addr + sizeof(struct apl_log_buffer_layout))
-
-#ifdef CONFIG_DEBUG_FS
-#define AVS_SET_ENABLE_LOGS_OP(name) \
-	.enable_logs = name##_enable_logs
-
-bool avs_logging_fw(struct avs_dev *adev);
-void avs_dump_fw_log(struct avs_dev *adev, const void __iomem *src, unsigned int len);
-void avs_dump_fw_log_wakeup(struct avs_dev *adev, const void __iomem *src, unsigned int len);
-
-int avs_probe_platform_register(struct avs_dev *adev, const char *name);
-
-void avs_debugfs_init(struct avs_dev *adev);
-void avs_debugfs_exit(struct avs_dev *adev);
-#else
-#define AVS_SET_ENABLE_LOGS_OP(name)
-
-static inline bool avs_logging_fw(struct avs_dev *adev)
-{
-	return false;
-}
-
-static inline void avs_dump_fw_log(struct avs_dev *adev, const void __iomem *src, unsigned int len)
-{
-}
-
-static inline void
-avs_dump_fw_log_wakeup(struct avs_dev *adev, const void __iomem *src, unsigned int len)
-{
-}
-
-static inline int avs_probe_platform_register(struct avs_dev *adev, const char *name)
-{
-	return 0;
-}
-
-static inline void avs_debugfs_init(struct avs_dev *adev) { }
-static inline void avs_debugfs_exit(struct avs_dev *adev) { }
-#endif
 
 #endif /* __SOUND_SOC_INTEL_AVS_H */

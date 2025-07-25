@@ -46,7 +46,6 @@ struct stack_frame {
 			unsigned long sie_savearea;
 			unsigned long sie_reason;
 			unsigned long sie_flags;
-			unsigned long sie_control_block_phys;
 		};
 	};
 	unsigned long gprs[10];

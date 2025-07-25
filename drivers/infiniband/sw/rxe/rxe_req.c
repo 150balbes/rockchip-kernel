@@ -100,7 +100,7 @@ void rnr_nak_timer(struct timer_list *t)
 {
 	struct rxe_qp *qp = from_timer(qp, t, rnr_nak_timer);
 
-	rxe_dbg_qp(qp, "nak timer fired\n");
+	pr_debug("%s: fired for qp#%d\n", __func__, qp_num(qp));
 
 	/* request a send queue retry */
 	qp->req.need_retry = 1;
@@ -241,9 +241,6 @@ static int next_opcode_rc(struct rxe_qp *qp, u32 opcode, int fits)
 				IB_OPCODE_RC_SEND_ONLY_WITH_IMMEDIATE :
 				IB_OPCODE_RC_SEND_FIRST;
 
-	case IB_WR_FLUSH:
-		return IB_OPCODE_RC_FLUSH;
-
 	case IB_WR_RDMA_READ:
 		return IB_OPCODE_RC_RDMA_READ_REQUEST;
 
@@ -261,10 +258,6 @@ static int next_opcode_rc(struct rxe_qp *qp, u32 opcode, int fits)
 		else
 			return fits ? IB_OPCODE_RC_SEND_ONLY_WITH_INVALIDATE :
 				IB_OPCODE_RC_SEND_FIRST;
-
-	case IB_WR_ATOMIC_WRITE:
-		return IB_OPCODE_RC_ATOMIC_WRITE;
-
 	case IB_WR_REG_MR:
 	case IB_WR_LOCAL_INV:
 		return opcode;
@@ -428,17 +421,10 @@ static struct sk_buff *init_req_packet(struct rxe_qp *qp,
 
 	/* init optional headers */
 	if (pkt->mask & RXE_RETH_MASK) {
-		if (pkt->mask & RXE_FETH_MASK)
-			reth_set_rkey(pkt, ibwr->wr.flush.rkey);
-		else
-			reth_set_rkey(pkt, ibwr->wr.rdma.rkey);
+		reth_set_rkey(pkt, ibwr->wr.rdma.rkey);
 		reth_set_va(pkt, wqe->iova);
 		reth_set_len(pkt, wqe->dma.resid);
 	}
-
-	/* Fill Flush Extension Transport Header */
-	if (pkt->mask & RXE_FETH_MASK)
-		feth_init(pkt, ibwr->wr.flush.type, ibwr->wr.flush.level);
 
 	if (pkt->mask & RXE_IMMDT_MASK)
 		immdt_set_imm(pkt, ibwr->ex.imm_data);
@@ -498,14 +484,6 @@ static int finish_packet(struct rxe_qp *qp, struct rxe_av *av,
 
 			memset(pad, 0, bth_pad(pkt));
 		}
-	} else if (pkt->mask & RXE_FLUSH_MASK) {
-		/* oA19-2: shall have no payload. */
-		wqe->dma.resid = 0;
-	}
-
-	if (pkt->mask & RXE_ATOMIC_WRITE_MASK) {
-		memcpy(payload_addr(pkt), wqe->dma.atomic_wr, payload);
-		wqe->dma.resid -= payload;
 	}
 
 	return 0;
@@ -551,10 +529,11 @@ static void save_state(struct rxe_send_wqe *wqe,
 		       struct rxe_send_wqe *rollback_wqe,
 		       u32 *rollback_psn)
 {
-	rollback_wqe->state     = wqe->state;
+	rollback_wqe->state = wqe->state;
 	rollback_wqe->first_psn = wqe->first_psn;
-	rollback_wqe->last_psn  = wqe->last_psn;
-	*rollback_psn		= qp->req.psn;
+	rollback_wqe->last_psn = wqe->last_psn;
+	rollback_wqe->dma = wqe->dma;
+	*rollback_psn = qp->req.psn;
 }
 
 static void rollback_state(struct rxe_send_wqe *wqe,
@@ -562,10 +541,11 @@ static void rollback_state(struct rxe_send_wqe *wqe,
 			   struct rxe_send_wqe *rollback_wqe,
 			   u32 rollback_psn)
 {
-	wqe->state     = rollback_wqe->state;
+	wqe->state = rollback_wqe->state;
 	wqe->first_psn = rollback_wqe->first_psn;
-	wqe->last_psn  = rollback_wqe->last_psn;
-	qp->req.psn    = rollback_psn;
+	wqe->last_psn = rollback_wqe->last_psn;
+	wqe->dma = rollback_wqe->dma;
+	qp->req.psn = rollback_psn;
 }
 
 static void update_state(struct rxe_qp *qp, struct rxe_pkt_info *pkt)
@@ -617,7 +597,7 @@ static int rxe_do_local_ops(struct rxe_qp *qp, struct rxe_send_wqe *wqe)
 		}
 		break;
 	default:
-		rxe_dbg_qp(qp, "Unexpected send wqe opcode %d\n", opcode);
+		pr_err("Unexpected send wqe opcode %d\n", opcode);
 		wqe->status = IB_WC_LOC_QP_OP_ERR;
 		return -EINVAL;
 	}
@@ -731,15 +711,13 @@ int rxe_requester(void *arg)
 	}
 
 	mask = rxe_opcode[opcode].mask;
-	if (unlikely(mask & (RXE_READ_OR_ATOMIC_MASK |
-			RXE_ATOMIC_WRITE_MASK))) {
+	if (unlikely(mask & RXE_READ_OR_ATOMIC_MASK)) {
 		if (check_init_depth(qp, wqe))
 			goto exit;
 	}
 
 	mtu = get_mtu(qp);
-	payload = (mask & (RXE_WRITE_OR_SEND_MASK | RXE_ATOMIC_WRITE_MASK)) ?
-			wqe->dma.resid : 0;
+	payload = (mask & RXE_WRITE_OR_SEND_MASK) ? wqe->dma.resid : 0;
 	if (payload > mtu) {
 		if (qp_type(qp) == IB_QPT_UD) {
 			/* C10-93.1.1: If the total sum of all the buffer lengths specified for a
@@ -770,16 +748,19 @@ int rxe_requester(void *arg)
 	pkt.mask = rxe_opcode[opcode].mask;
 	pkt.wqe = wqe;
 
+	/* save wqe state before we build and send packet */
+	save_state(wqe, qp, &rollback_wqe, &rollback_psn);
+
 	av = rxe_get_av(&pkt, &ah);
 	if (unlikely(!av)) {
-		rxe_dbg_qp(qp, "Failed no address vector\n");
+		pr_err("qp#%d Failed no address vector\n", qp_num(qp));
 		wqe->status = IB_WC_LOC_QP_OP_ERR;
 		goto err;
 	}
 
 	skb = init_req_packet(qp, av, wqe, opcode, payload, &pkt);
 	if (unlikely(!skb)) {
-		rxe_dbg_qp(qp, "Failed allocating skb\n");
+		pr_err("qp#%d Failed allocating skb\n", qp_num(qp));
 		wqe->status = IB_WC_LOC_QP_OP_ERR;
 		if (ah)
 			rxe_put(ah);
@@ -788,7 +769,7 @@ int rxe_requester(void *arg)
 
 	err = finish_packet(qp, av, wqe, &pkt, skb, payload);
 	if (unlikely(err)) {
-		rxe_dbg_qp(qp, "Error during finish packet\n");
+		pr_debug("qp#%d Error during finish packet\n", qp_num(qp));
 		if (err == -EFAULT)
 			wqe->status = IB_WC_LOC_PROT_ERR;
 		else
@@ -802,29 +783,29 @@ int rxe_requester(void *arg)
 	if (ah)
 		rxe_put(ah);
 
-	/*
-	 * To prevent a race on wqe access between requester and completer,
-	 * wqe members state and psn need to be set before calling
-	 * rxe_xmit_packet().
-	 * Otherwise, completer might initiate an unjustified retry flow.
-	 */
-	save_state(wqe, qp, &rollback_wqe, &rollback_psn);
+	/* update wqe state as though we had sent it */
 	update_wqe_state(qp, wqe, &pkt);
 	update_wqe_psn(qp, wqe, &pkt, payload);
 
 	err = rxe_xmit_packet(qp, &pkt, skb);
 	if (err) {
-		qp->need_req_skb = 1;
-
-		rollback_state(wqe, qp, &rollback_wqe, rollback_psn);
-
-		if (err == -EAGAIN) {
-			rxe_sched_task(&qp->req.task);
-			goto exit;
+		if (err != -EAGAIN) {
+			wqe->status = IB_WC_LOC_QP_OP_ERR;
+			goto err;
 		}
 
-		wqe->status = IB_WC_LOC_QP_OP_ERR;
-		goto err;
+		/* the packet was dropped so reset wqe to the state
+		 * before we sent it so we can try to resend
+		 */
+		rollback_state(wqe, qp, &rollback_wqe, rollback_psn);
+
+		/* force a delay until the dropped packet is freed and
+		 * the send queue is drained below the low water mark
+		 */
+		qp->need_req_skb = 1;
+
+		rxe_sched_task(&qp->req.task);
+		goto exit;
 	}
 
 	update_state(qp, &pkt);

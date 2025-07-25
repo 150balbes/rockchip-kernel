@@ -161,7 +161,8 @@ out:
 /*
  * Probe function to setup the device, input system and interrupt
  */
-static int atmel_captouch_probe(struct i2c_client *client)
+static int atmel_captouch_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct atmel_captouch_device *capdev;
 	struct device *dev = &client->dev;
@@ -248,6 +249,7 @@ static int atmel_captouch_probe(struct i2c_client *client)
 	return 0;
 }
 
+#ifdef CONFIG_OF
 static const struct of_device_id atmel_captouch_of_id[] = {
 	{
 		.compatible = "atmel,captouch",
@@ -255,6 +257,7 @@ static const struct of_device_id atmel_captouch_of_id[] = {
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, atmel_captouch_of_id);
+#endif
 
 static const struct i2c_device_id atmel_captouch_id[] = {
 	{ "atmel_captouch", 0 },
@@ -263,11 +266,11 @@ static const struct i2c_device_id atmel_captouch_id[] = {
 MODULE_DEVICE_TABLE(i2c, atmel_captouch_id);
 
 static struct i2c_driver atmel_captouch_driver = {
-	.probe_new	= atmel_captouch_probe,
+	.probe		= atmel_captouch_probe,
 	.id_table	= atmel_captouch_id,
 	.driver		= {
 		.name	= "atmel_captouch",
-		.of_match_table = atmel_captouch_of_id,
+		.of_match_table = of_match_ptr(atmel_captouch_of_id),
 	},
 };
 module_i2c_driver(atmel_captouch_driver);

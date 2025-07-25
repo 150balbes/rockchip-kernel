@@ -3,7 +3,7 @@
 #define __NOUVEAU_FENCE_H__
 
 #include <linux/dma-fence.h>
-#include <nvif/event.h>
+#include <nvif/notify.h>
 
 struct nouveau_drm;
 struct nouveau_bo;
@@ -44,7 +44,7 @@ struct nouveau_fence_chan {
 	u32 context;
 	char name[32];
 
-	struct nvif_event event;
+	struct nvif_notify notify;
 	int notify_ref, dead;
 };
 

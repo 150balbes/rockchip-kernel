@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/linkage.h>
 #include <asm/asm.h>
-#include <asm/asm-offsets.h>
 #include <asm/bitsperlong.h>
 #include <asm/kvm_vcpu_regs.h>
 #include <asm/nospec-branch.h>
@@ -223,6 +222,9 @@ SYM_FUNC_START(__svm_vcpu_run)
 	 * from the kernel.
 	 */
 	UNTRAIN_RET
+
+	/* SRSO */
+	ALTERNATIVE "", "call entry_ibpb", X86_FEATURE_IBPB_ON_VMEXIT
 
 	/*
 	 * Clear all general purpose registers except RSP and RAX to prevent

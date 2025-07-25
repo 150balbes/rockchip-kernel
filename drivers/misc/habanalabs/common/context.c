@@ -9,46 +9,38 @@
 
 #include <linux/slab.h>
 
-static void encaps_handle_do_release(struct hl_cs_encaps_sig_handle *handle, bool put_hw_sob,
-					bool put_ctx)
+void hl_encaps_handle_do_release(struct kref *ref)
 {
+	struct hl_cs_encaps_sig_handle *handle =
+		container_of(ref, struct hl_cs_encaps_sig_handle, refcount);
 	struct hl_encaps_signals_mgr *mgr = &handle->ctx->sig_mgr;
-
-	if (put_hw_sob)
-		hw_sob_put(handle->hw_sob);
 
 	spin_lock(&mgr->lock);
 	idr_remove(&mgr->handles, handle->id);
 	spin_unlock(&mgr->lock);
 
-	if (put_ctx)
-		hl_ctx_put(handle->ctx);
-
+	hl_ctx_put(handle->ctx);
 	kfree(handle);
 }
 
-void hl_encaps_release_handle_and_put_ctx(struct kref *ref)
+static void hl_encaps_handle_do_release_sob(struct kref *ref)
 {
 	struct hl_cs_encaps_sig_handle *handle =
-			container_of(ref, struct hl_cs_encaps_sig_handle, refcount);
+		container_of(ref, struct hl_cs_encaps_sig_handle, refcount);
+	struct hl_encaps_signals_mgr *mgr = &handle->ctx->sig_mgr;
 
-	encaps_handle_do_release(handle, false, true);
-}
+	/* if we're here, then there was a signals reservation but cs with
+	 * encaps signals wasn't submitted, so need to put refcount
+	 * to hw_sob taken at the reservation.
+	 */
+	hw_sob_put(handle->hw_sob);
 
-static void hl_encaps_release_handle_and_put_sob(struct kref *ref)
-{
-	struct hl_cs_encaps_sig_handle *handle =
-			container_of(ref, struct hl_cs_encaps_sig_handle, refcount);
+	spin_lock(&mgr->lock);
+	idr_remove(&mgr->handles, handle->id);
+	spin_unlock(&mgr->lock);
 
-	encaps_handle_do_release(handle, true, false);
-}
-
-void hl_encaps_release_handle_and_put_sob_ctx(struct kref *ref)
-{
-	struct hl_cs_encaps_sig_handle *handle =
-			container_of(ref, struct hl_cs_encaps_sig_handle, refcount);
-
-	encaps_handle_do_release(handle, true, true);
+	hl_ctx_put(handle->ctx);
+	kfree(handle);
 }
 
 static void hl_encaps_sig_mgr_init(struct hl_encaps_signals_mgr *mgr)
@@ -57,7 +49,8 @@ static void hl_encaps_sig_mgr_init(struct hl_encaps_signals_mgr *mgr)
 	idr_init(&mgr->handles);
 }
 
-static void hl_encaps_sig_mgr_fini(struct hl_device *hdev, struct hl_encaps_signals_mgr *mgr)
+static void hl_encaps_sig_mgr_fini(struct hl_device *hdev,
+			struct hl_encaps_signals_mgr *mgr)
 {
 	struct hl_cs_encaps_sig_handle *handle;
 	struct idr *idp;
@@ -65,14 +58,11 @@ static void hl_encaps_sig_mgr_fini(struct hl_device *hdev, struct hl_encaps_sign
 
 	idp = &mgr->handles;
 
-	/* The IDR is expected to be empty at this stage, because any left signal should have been
-	 * released as part of CS roll-back.
-	 */
 	if (!idr_is_empty(idp)) {
-		dev_warn(hdev->dev,
-			"device released while some encaps signals handles are still allocated\n");
+		dev_warn(hdev->dev, "device released while some encaps signals handles are still allocated\n");
 		idr_for_each_entry(idp, handle, id)
-			kref_put(&handle->refcount, hl_encaps_release_handle_and_put_sob);
+			kref_put(&handle->refcount,
+					hl_encaps_handle_do_release_sob);
 	}
 
 	idr_destroy(&mgr->handles);

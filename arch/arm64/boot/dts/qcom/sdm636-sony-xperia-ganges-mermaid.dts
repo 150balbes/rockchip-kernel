@@ -19,7 +19,7 @@
 };
 
 &sdc2_state_on {
-	clk-pins {
+	clk {
 		drive-strength = <14>;
 	};
 };

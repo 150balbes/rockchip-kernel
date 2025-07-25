@@ -7,7 +7,6 @@
 #define __HDLCD_DRV_H__
 
 struct hdlcd_drm_private {
-	struct drm_device		base;
 	void __iomem			*mmio;
 	struct clk			*clk;
 	struct drm_crtc			crtc;
@@ -21,7 +20,6 @@ struct hdlcd_drm_private {
 #endif
 };
 
-#define drm_to_hdlcd_priv(x)	container_of(x, struct hdlcd_drm_private, base)
 #define crtc_to_hdlcd_priv(x)	container_of(x, struct hdlcd_drm_private, crtc)
 
 static inline void hdlcd_write(struct hdlcd_drm_private *hdlcd,

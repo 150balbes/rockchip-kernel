@@ -41,7 +41,6 @@
 	.text
 	.align PAGE_SIZE
 	.code64
-SYM_CODE_START_NOALIGN(relocate_range)
 SYM_CODE_START_NOALIGN(relocate_kernel)
 	UNWIND_HINT_EMPTY
 	ANNOTATE_NOENDBR
@@ -313,5 +312,5 @@ SYM_CODE_START_LOCAL_NOALIGN(swap_pages)
 	int3
 SYM_CODE_END(swap_pages)
 
-	.skip KEXEC_CONTROL_CODE_MAX_SIZE - (. - relocate_kernel), 0xcc
-SYM_CODE_END(relocate_range);
+	.globl kexec_control_code_size
+.set kexec_control_code_size, . - relocate_kernel

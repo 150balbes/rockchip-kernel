@@ -13,7 +13,7 @@
     |        csky: |  ..  |
     |     hexagon: |  ..  |
     |        ia64: | TODO |
-    |   loongarch: |  ok  |
+    |       loong: |  ok  |
     |        m68k: |  ..  |
     |  microblaze: |  ..  |
     |        mips: |  ok  |

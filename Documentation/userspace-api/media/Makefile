@@ -47,11 +47,10 @@ $(BUILDDIR)/lirc.h.rst: ${UAPI}/lirc.h ${PARSER} $(SRC_DIR)/lirc.h.rst.exception
 
 # Media build rules
 
-.PHONY: all html texinfo epub xml latex
+.PHONY: all html epub xml latex
 
 all: $(IMGDOT) $(BUILDDIR) ${TARGETS}
 html: all
-texinfo: all
 epub: all
 xml: all
 latex: $(IMGPDF) all

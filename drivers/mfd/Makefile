@@ -19,9 +19,13 @@ obj-$(CONFIG_MFD_EXYNOS_LPASS)	+= exynos-lpass.o
 obj-$(CONFIG_MFD_GATEWORKS_GSC)	+= gateworks-gsc.o
 
 obj-$(CONFIG_HTC_PASIC3)	+= htc-pasic3.o
+obj-$(CONFIG_HTC_I2CPLD)	+= htc-i2cpld.o
 
 obj-$(CONFIG_MFD_TI_LP873X)	+= lp873x.o
 obj-$(CONFIG_MFD_TI_LP87565)	+= lp87565.o
+
+obj-$(CONFIG_MFD_DAVINCI_VOICECODEC)	+= davinci_voicecodec.o
+obj-$(CONFIG_MFD_DM355EVM_MSP)	+= dm355evm_msp.o
 obj-$(CONFIG_MFD_TI_AM335X_TSCADC)	+= ti_am335x_tscadc.o
 
 obj-$(CONFIG_MFD_STA2X11)	+= sta2x11-mfd.o
@@ -97,7 +101,6 @@ obj-$(CONFIG_TPS6507X)		+= tps6507x.o
 obj-$(CONFIG_MFD_TPS65086)	+= tps65086.o
 obj-$(CONFIG_MFD_TPS65217)	+= tps65217.o
 obj-$(CONFIG_MFD_TPS65218)	+= tps65218.o
-obj-$(CONFIG_MFD_TPS65219)	+= tps65219.o
 obj-$(CONFIG_MFD_TPS65910)	+= tps65910.o
 obj-$(CONFIG_MFD_TPS65912)	+= tps65912-core.o
 obj-$(CONFIG_MFD_TPS65912_I2C)	+= tps65912-i2c.o
@@ -169,6 +172,8 @@ max8925-objs			:= max8925-core.o max8925-i2c.o
 obj-$(CONFIG_MFD_MAX8925)	+= max8925.o
 obj-$(CONFIG_MFD_MAX8997)	+= max8997.o max8997-irq.o
 obj-$(CONFIG_MFD_MAX8998)	+= max8998.o max8998-irq.o
+obj-$(CONFIG_MFD_MAX96745)	+= max96745.o
+obj-$(CONFIG_MFD_MAX96755F)	+= max96755f.o
 
 obj-$(CONFIG_MFD_MP2629)	+= mp2629.o
 
@@ -220,9 +225,18 @@ obj-$(CONFIG_MFD_PALMAS)	+= palmas.o
 obj-$(CONFIG_MFD_VIPERBOARD)    += viperboard.o
 obj-$(CONFIG_MFD_NTXEC)		+= ntxec.o
 obj-$(CONFIG_MFD_RC5T583)	+= rc5t583.o rc5t583-irq.o
-obj-$(CONFIG_MFD_RK8XX)		+= rk8xx-core.o
-obj-$(CONFIG_MFD_RK8XX_I2C)	+= rk8xx-i2c.o
-obj-$(CONFIG_MFD_RK8XX_SPI)	+= rk8xx-spi.o
+obj-$(CONFIG_MFD_RK618)		+= rk618.o
+obj-$(CONFIG_MFD_RK630)		+= rk630.o
+obj-$(CONFIG_MFD_RK630_I2C)	+= rk630-i2c.o
+obj-$(CONFIG_MFD_RK630_SPI)	+= rk630-spi.o
+obj-$(CONFIG_MFD_RK806)		+= rk806-core.o
+obj-$(CONFIG_MFD_RK806_I2C)	+= rk806-i2c.o
+obj-$(CONFIG_MFD_RK806_SPI)	+= rk806-spi.o
+obj-$(CONFIG_MFD_RK808)		+= rk808.o
+obj-$(CONFIG_MFD_RK1000)	+= rk1000-core.o
+obj-$(CONFIG_MFD_ROCKCHIP_FLEXBUS)	+= rockchip-flexbus.o
+obj-$(CONFIG_MFD_SERDES_DISPLAY)	+= display-serdes/
+obj-y				+= rkx110_x120/
 obj-$(CONFIG_MFD_RN5T618)	+= rn5t618.o
 obj-$(CONFIG_MFD_SEC_CORE)	+= sec-core.o sec-irq.o
 obj-$(CONFIG_MFD_SYSCON)	+= syscon.o
@@ -270,7 +284,6 @@ obj-$(CONFIG_MFD_QCOM_PM8008)	+= qcom-pm8008.o
 
 obj-$(CONFIG_SGI_MFD_IOC3)	+= ioc3.o
 obj-$(CONFIG_MFD_SIMPLE_MFD_I2C)	+= simple-mfd-i2c.o
-obj-$(CONFIG_MFD_SMPRO)		+= smpro-core.o
 obj-$(CONFIG_MFD_INTEL_M10_BMC)   += intel-m10-bmc.o
 
 obj-$(CONFIG_MFD_ATC260X)	+= atc260x-core.o

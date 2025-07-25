@@ -117,7 +117,8 @@ static const struct regmap_irq_chip stpmic1_regmap_irq_chip = {
 	.num_irqs = ARRAY_SIZE(stpmic1_irqs),
 };
 
-static int stpmic1_probe(struct i2c_client *i2c)
+static int stpmic1_probe(struct i2c_client *i2c,
+			 const struct i2c_device_id *id)
 {
 	struct stpmic1 *ddata;
 	struct device *dev = &i2c->dev;
@@ -162,6 +163,7 @@ static int stpmic1_probe(struct i2c_client *i2c)
 	return devm_of_platform_populate(dev);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int stpmic1_suspend(struct device *dev)
 {
 	struct i2c_client *i2c = to_i2c_client(dev);
@@ -186,8 +188,9 @@ static int stpmic1_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(stpmic1_pm, stpmic1_suspend, stpmic1_resume);
+static SIMPLE_DEV_PM_OPS(stpmic1_pm, stpmic1_suspend, stpmic1_resume);
 
 static const struct of_device_id stpmic1_of_match[] = {
 	{ .compatible = "st,stpmic1", },
@@ -199,9 +202,9 @@ static struct i2c_driver stpmic1_driver = {
 	.driver = {
 		.name = "stpmic1",
 		.of_match_table = of_match_ptr(stpmic1_of_match),
-		.pm = pm_sleep_ptr(&stpmic1_pm),
+		.pm = &stpmic1_pm,
 	},
-	.probe_new = stpmic1_probe,
+	.probe = stpmic1_probe,
 };
 
 module_i2c_driver(stpmic1_driver);

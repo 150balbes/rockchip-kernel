@@ -104,8 +104,6 @@ static enum ib_wc_opcode wr_to_wc_opcode(enum ib_wr_opcode opcode)
 	case IB_WR_LOCAL_INV:			return IB_WC_LOCAL_INV;
 	case IB_WR_REG_MR:			return IB_WC_REG_MR;
 	case IB_WR_BIND_MW:			return IB_WC_BIND_MW;
-	case IB_WR_ATOMIC_WRITE:		return IB_WC_ATOMIC_WRITE;
-	case IB_WR_FLUSH:			return IB_WC_FLUSH;
 
 	default:
 		return 0xff;
@@ -116,7 +114,7 @@ void retransmit_timer(struct timer_list *t)
 {
 	struct rxe_qp *qp = from_timer(qp, t, retrans_timer);
 
-	rxe_dbg_qp(qp, "retransmit timer fired\n");
+	pr_debug("%s: fired for qp#%d\n", __func__, qp->elem.index);
 
 	if (qp->valid) {
 		qp->comp.timeout = 1;
@@ -128,11 +126,11 @@ void rxe_comp_queue_pkt(struct rxe_qp *qp, struct sk_buff *skb)
 {
 	int must_sched;
 
-	skb_queue_tail(&qp->resp_pkts, skb);
-
-	must_sched = skb_queue_len(&qp->resp_pkts) > 1;
+	must_sched = skb_queue_len(&qp->resp_pkts) > 0;
 	if (must_sched != 0)
 		rxe_counter_inc(SKB_TO_PKT(skb)->rxe, RXE_CNT_COMPLETER_SCHED);
+
+	skb_queue_tail(&qp->resp_pkts, skb);
 
 	if (must_sched)
 		rxe_sched_task(&qp->comp.task);
@@ -205,10 +203,6 @@ static inline enum comp_state check_psn(struct rxe_qp *qp,
 		 */
 		if (pkt->psn == wqe->last_psn)
 			return COMPST_COMP_ACK;
-		else if (pkt->opcode == IB_OPCODE_RC_ACKNOWLEDGE &&
-			 (qp->comp.opcode == IB_OPCODE_RC_RDMA_READ_RESPONSE_FIRST ||
-			  qp->comp.opcode == IB_OPCODE_RC_RDMA_READ_RESPONSE_MIDDLE))
-			return COMPST_CHECK_ACK;
 		else
 			return COMPST_DONE;
 	} else if ((diff > 0) && (wqe->mask & WR_ATOMIC_OR_READ_MASK)) {
@@ -237,10 +231,6 @@ static inline enum comp_state check_ack(struct rxe_qp *qp,
 
 	case IB_OPCODE_RC_RDMA_READ_RESPONSE_FIRST:
 	case IB_OPCODE_RC_RDMA_READ_RESPONSE_MIDDLE:
-		/* Check NAK code to handle a remote error */
-		if (pkt->opcode == IB_OPCODE_RC_ACKNOWLEDGE)
-			break;
-
 		if (pkt->opcode != IB_OPCODE_RC_RDMA_READ_RESPONSE_MIDDLE &&
 		    pkt->opcode != IB_OPCODE_RC_RDMA_READ_RESPONSE_LAST) {
 			/* read retries of partial data may restart from
@@ -271,16 +261,12 @@ static inline enum comp_state check_ack(struct rxe_qp *qp,
 		if ((syn & AETH_TYPE_MASK) != AETH_ACK)
 			return COMPST_ERROR;
 
-		if (wqe->wr.opcode == IB_WR_ATOMIC_WRITE)
-			return COMPST_WRITE_SEND;
-
 		fallthrough;
 		/* (IB_OPCODE_RC_RDMA_READ_RESPONSE_MIDDLE doesn't have an AETH)
 		 */
 	case IB_OPCODE_RC_RDMA_READ_RESPONSE_MIDDLE:
 		if (wqe->wr.opcode != IB_WR_RDMA_READ &&
-		    wqe->wr.opcode != IB_WR_RDMA_READ_WITH_INV &&
-		    wqe->wr.opcode != IB_WR_FLUSH) {
+		    wqe->wr.opcode != IB_WR_RDMA_READ_WITH_INV) {
 			wqe->status = IB_WC_FATAL_ERR;
 			return COMPST_ERROR;
 		}
@@ -340,7 +326,7 @@ static inline enum comp_state check_ack(struct rxe_qp *qp,
 				return COMPST_ERROR;
 
 			default:
-				rxe_dbg_qp(qp, "unexpected nak %x\n", syn);
+				pr_warn("unexpected nak %x\n", syn);
 				wqe->status = IB_WC_REM_OP_ERR;
 				return COMPST_ERROR;
 			}
@@ -351,7 +337,7 @@ static inline enum comp_state check_ack(struct rxe_qp *qp,
 		break;
 
 	default:
-		rxe_dbg_qp(qp, "unexpected opcode\n");
+		pr_warn("unexpected opcode\n");
 	}
 
 	return COMPST_ERROR;
@@ -604,7 +590,8 @@ int rxe_completer(void *arg)
 	state = COMPST_GET_ACK;
 
 	while (1) {
-		rxe_dbg_qp(qp, "state = %s\n", comp_state_name[state]);
+		pr_debug("qp#%d state = %s\n", qp_num(qp),
+			 comp_state_name[state]);
 		switch (state) {
 		case COMPST_GET_ACK:
 			skb = skb_dequeue(&qp->resp_pkts);
@@ -751,7 +738,8 @@ int rxe_completer(void *arg)
 				 * rnr timer has fired
 				 */
 				qp->req.wait_for_rnr_timer = 1;
-				rxe_dbg_qp(qp, "set rnr nak timer\n");
+				pr_debug("qp#%d set rnr nak timer\n",
+					 qp_num(qp));
 				mod_timer(&qp->rnr_nak_timer,
 					  jiffies + rnrnak_jiffies(aeth_syn(pkt)
 						& ~AETH_TYPE_MASK));

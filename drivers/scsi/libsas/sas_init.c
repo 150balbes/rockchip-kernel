@@ -35,6 +35,7 @@ struct sas_task *sas_alloc_task(gfp_t flags)
 
 	return task;
 }
+EXPORT_SYMBOL_GPL(sas_alloc_task);
 
 struct sas_task *sas_alloc_slow_task(gfp_t flags)
 {
@@ -55,6 +56,7 @@ struct sas_task *sas_alloc_slow_task(gfp_t flags)
 
 	return task;
 }
+EXPORT_SYMBOL_GPL(sas_alloc_slow_task);
 
 void sas_free_task(struct sas_task *task)
 {
@@ -63,6 +65,7 @@ void sas_free_task(struct sas_task *task)
 		kmem_cache_free(sas_task_cache, task);
 	}
 }
+EXPORT_SYMBOL_GPL(sas_free_task);
 
 /*------------ SAS addr hash -----------*/
 void sas_hash_addr(u8 *hashed, const u8 *sas_addr)

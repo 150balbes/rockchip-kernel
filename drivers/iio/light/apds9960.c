@@ -223,16 +223,14 @@ static const struct iio_event_spec apds9960_pxs_event_spec[] = {
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_RISING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_FALLING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
-	},
-	{
-		.type = IIO_EV_TYPE_THRESH,
-		.mask_separate = BIT(IIO_EV_INFO_ENABLE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 };
 
@@ -240,16 +238,14 @@ static const struct iio_event_spec apds9960_als_event_spec[] = {
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_RISING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_FALLING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
-	},
-	{
-		.type = IIO_EV_TYPE_THRESH,
-		.mask_separate = BIT(IIO_EV_INFO_ENABLE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 };
 
@@ -988,7 +984,8 @@ static int apds9960_chip_init(struct apds9960_data *data)
 	return apds9960_set_powermode(data, 1);
 }
 
-static int apds9960_probe(struct i2c_client *client)
+static int apds9960_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct apds9960_data *data;
 	struct iio_dev *indio_dev;
@@ -1131,7 +1128,7 @@ static struct i2c_driver apds9960_driver = {
 		.pm	= &apds9960_pm_ops,
 		.acpi_match_table = apds9960_acpi_match,
 	},
-	.probe_new	= apds9960_probe,
+	.probe		= apds9960_probe,
 	.remove		= apds9960_remove,
 	.id_table	= apds9960_id,
 };

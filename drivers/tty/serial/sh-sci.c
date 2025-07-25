@@ -31,6 +31,7 @@
 #include <linux/ioport.h>
 #include <linux/ktime.h>
 #include <linux/major.h>
+#include <linux/minmax.h>
 #include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/of.h>
@@ -1181,7 +1182,10 @@ static void sci_dma_tx_complete(void *arg)
 
 	spin_lock_irqsave(&port->lock, flags);
 
-	uart_xmit_advance(port, s->tx_dma_len);
+	xmit->tail += s->tx_dma_len;
+	xmit->tail &= UART_XMIT_SIZE - 1;
+
+	port->icount.tx += s->tx_dma_len;
 
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
 		uart_write_wakeup(port);
@@ -1240,9 +1244,14 @@ static void sci_dma_rx_chan_invalidate(struct sci_port *s)
 static void sci_dma_rx_release(struct sci_port *s)
 {
 	struct dma_chan *chan = s->chan_rx_saved;
+	struct uart_port *port = &s->port;
+	unsigned long flags;
 
+	uart_port_lock_irqsave(port, &flags);
 	s->chan_rx_saved = NULL;
 	sci_dma_rx_chan_invalidate(s);
+	uart_port_unlock_irqrestore(port, flags);
+
 	dmaengine_terminate_sync(chan);
 	dma_free_coherent(chan->device->dev, s->buf_len_rx * 2, s->rx_buf[0],
 			  sg_dma_address(&s->sg_rx[0]));
@@ -2864,6 +2873,13 @@ static int sci_init_single(struct platform_device *dev,
 			sci_port->irqs[i] = platform_get_irq(dev, i);
 	}
 
+	/*
+	 * The fourth interrupt on SCI port is transmit end interrupt, so
+	 * shuffle the interrupts.
+	 */
+	if (p->type == PORT_SCI)
+		swap(sci_port->irqs[SCIx_BRI_IRQ], sci_port->irqs[SCIx_TEI_IRQ]);
+
 	/* The SCI generates several interrupts. They can be muxed together or
 	 * connected to different interrupt lines. In the muxed case only one
 	 * interrupt resource is specified as there is only one interrupt ID.
@@ -2929,7 +2945,7 @@ static int sci_init_single(struct platform_device *dev,
 	port->flags		= UPF_FIXED_PORT | UPF_BOOT_AUTOCONF | p->flags;
 	port->fifosize		= sci_port->params->fifosize;
 
-	if (port->type == PORT_SCI) {
+	if (port->type == PORT_SCI && !dev->dev.of_node) {
 		if (sci_port->reg_size >= 0x20)
 			port->regshift = 2;
 		else
@@ -3051,28 +3067,14 @@ static struct console serial_console = {
 };
 
 #ifdef CONFIG_SUPERH
-static char early_serial_buf[32];
-
-static int early_serial_console_setup(struct console *co, char *options)
-{
-	/*
-	 * This early console is always registered using the earlyprintk=
-	 * parameter, which does not call add_preferred_console(). Thus
-	 * @options is always NULL and the options for this early console
-	 * are passed using a custom buffer.
-	 */
-	WARN_ON(options);
-
-	return serial_console_setup(co, early_serial_buf);
-}
-
 static struct console early_serial_console = {
 	.name           = "early_ttySC",
 	.write          = serial_console_write,
-	.setup		= early_serial_console_setup,
 	.flags          = CON_PRINTBUFFER,
 	.index		= -1,
 };
+
+static char early_serial_buf[32];
 
 static int sci_probe_earlyprintk(struct platform_device *pdev)
 {
@@ -3084,6 +3086,8 @@ static int sci_probe_earlyprintk(struct platform_device *pdev)
 	early_serial_console.index = pdev->id;
 
 	sci_init_single(pdev, &sci_ports[pdev->id], pdev->id, cfg, true);
+
+	serial_console_setup(&early_serial_console, early_serial_buf);
 
 	if (!strstr(early_serial_buf, "keep"))
 		early_serial_console.flags |= CON_BOOT;

@@ -545,6 +545,7 @@ static int cuse_channel_release(struct inode *inode, struct file *file)
 {
 	struct fuse_dev *fud = file->private_data;
 	struct cuse_conn *cc = fc_to_cc(fud->fc);
+	int rc;
 
 	/* remove from the conntbl, no more access from this point on */
 	mutex_lock(&cuse_lock);
@@ -559,7 +560,9 @@ static int cuse_channel_release(struct inode *inode, struct file *file)
 		cdev_del(cc->cdev);
 	}
 
-	return fuse_dev_release(inode, file);
+	rc = fuse_dev_release(inode, file);	/* puts the base reference */
+
+	return rc;
 }
 
 static struct file_operations cuse_channel_fops; /* initialized during init */

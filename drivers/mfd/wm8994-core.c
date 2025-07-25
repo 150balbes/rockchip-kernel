@@ -110,6 +110,7 @@ static const char *wm8958_main_supplies[] = {
 	"SPKVDD2",
 };
 
+#ifdef CONFIG_PM
 static int wm8994_suspend(struct device *dev)
 {
 	struct wm8994 *wm8994 = dev_get_drvdata(dev);
@@ -212,6 +213,7 @@ err_enable:
 
 	return ret;
 }
+#endif
 
 #ifdef CONFIG_REGULATOR
 static int wm8994_ldo_in_use(struct wm8994_pdata *pdata, int ldo)
@@ -621,9 +623,9 @@ static const struct of_device_id wm8994_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, wm8994_of_match);
 
-static int wm8994_i2c_probe(struct i2c_client *i2c)
+static int wm8994_i2c_probe(struct i2c_client *i2c,
+				      const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	const struct of_device_id *of_id;
 	struct wm8994 *wm8994;
 	int ret;
@@ -672,16 +674,16 @@ static const struct i2c_device_id wm8994_i2c_id[] = {
 MODULE_DEVICE_TABLE(i2c, wm8994_i2c_id);
 
 static const struct dev_pm_ops wm8994_pm_ops = {
-	RUNTIME_PM_OPS(wm8994_suspend, wm8994_resume, NULL)
+	SET_RUNTIME_PM_OPS(wm8994_suspend, wm8994_resume, NULL)
 };
 
 static struct i2c_driver wm8994_i2c_driver = {
 	.driver = {
 		.name = "wm8994",
-		.pm = pm_ptr(&wm8994_pm_ops),
+		.pm = &wm8994_pm_ops,
 		.of_match_table = wm8994_of_match,
 	},
-	.probe_new = wm8994_i2c_probe,
+	.probe = wm8994_i2c_probe,
 	.remove = wm8994_i2c_remove,
 	.id_table = wm8994_i2c_id,
 };

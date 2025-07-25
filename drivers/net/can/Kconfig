@@ -174,10 +174,10 @@ config CAN_SLCAN
 
 config CAN_SUN4I
 	tristate "Allwinner A10 CAN controller"
-	depends on MACH_SUN4I || MACH_SUN7I || COMPILE_TEST
+	depends on MACH_SUN4I || MACH_SUN7I || (RISCV && ARCH_SUNXI) || COMPILE_TEST
 	help
 	  Say Y here if you want to use CAN controller found on Allwinner
-	  A10/A20 SoCs.
+	  A10/A20/D1 SoCs.
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called sun4i_can.
@@ -198,6 +198,14 @@ config CAN_XILINXCAN
 	  Xilinx CAN driver. This driver supports both soft AXI CAN IP and
 	  Zynq CANPS IP.
 
+config PCH_CAN
+	tristate "Intel EG20T PCH CAN controller"
+	depends on PCI && (X86_32 || COMPILE_TEST)
+	help
+	  This driver is for PCH CAN of Topcliff (Intel EG20T PCH) which
+	  is an IOH for x86 embedded processor (Intel Atom E6xx series).
+	  This driver can access CAN bus.
+
 source "drivers/net/can/c_can/Kconfig"
 source "drivers/net/can/cc770/Kconfig"
 source "drivers/net/can/ctucanfd/Kconfig"
@@ -206,6 +214,7 @@ source "drivers/net/can/m_can/Kconfig"
 source "drivers/net/can/mscan/Kconfig"
 source "drivers/net/can/peak_canfd/Kconfig"
 source "drivers/net/can/rcar/Kconfig"
+source "drivers/net/can/rockchip/Kconfig"
 source "drivers/net/can/sja1000/Kconfig"
 source "drivers/net/can/softing/Kconfig"
 source "drivers/net/can/spi/Kconfig"

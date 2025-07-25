@@ -12,7 +12,6 @@
  *
  ****************************************************************************/
 
-#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <generated/utsrelease.h>
@@ -548,7 +547,6 @@ DEF_CONFIGFS_ATTRIB_SHOW(unmap_granularity);
 DEF_CONFIGFS_ATTRIB_SHOW(unmap_granularity_alignment);
 DEF_CONFIGFS_ATTRIB_SHOW(unmap_zeroes_data);
 DEF_CONFIGFS_ATTRIB_SHOW(max_write_same_len);
-DEF_CONFIGFS_ATTRIB_SHOW(emulate_rsoc);
 
 #define DEF_CONFIGFS_ATTRIB_STORE_U32(_name)				\
 static ssize_t _name##_store(struct config_item *item, const char *page,\
@@ -579,7 +577,7 @@ static ssize_t _name##_store(struct config_item *item, const char *page,	\
 	bool flag;							\
 	int ret;							\
 									\
-	ret = kstrtobool(page, &flag);					\
+	ret = strtobool(page, &flag);					\
 	if (ret < 0)							\
 		return ret;						\
 	da->_name = flag;						\
@@ -639,7 +637,7 @@ static ssize_t emulate_model_alias_store(struct config_item *item,
 		return -EINVAL;
 	}
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -661,7 +659,7 @@ static ssize_t emulate_write_cache_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -713,7 +711,7 @@ static ssize_t emulate_tas_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -738,7 +736,7 @@ static ssize_t emulate_tpu_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -768,7 +766,7 @@ static ssize_t emulate_tpws_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -867,7 +865,7 @@ static ssize_t pi_prot_format_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -904,7 +902,7 @@ static ssize_t pi_prot_verify_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -933,7 +931,7 @@ static ssize_t force_pr_aptpl_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 	if (da->da_dev->export_count) {
@@ -955,7 +953,7 @@ static ssize_t emulate_rest_reord_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -978,7 +976,7 @@ static ssize_t unmap_zeroes_data_store(struct config_item *item,
 	bool flag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -1102,6 +1100,8 @@ static ssize_t block_size_store(struct config_item *item,
 	}
 
 	da->block_size = val;
+	if (da->max_bytes_per_io)
+		da->hw_max_sectors = da->max_bytes_per_io / val;
 
 	pr_debug("dev[%p]: SE Device block_size changed to %u\n",
 			da->da_dev, val);
@@ -1125,7 +1125,7 @@ static ssize_t alua_support_store(struct config_item *item,
 	bool flag, oldflag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -1164,7 +1164,7 @@ static ssize_t pgr_support_store(struct config_item *item,
 	bool flag, oldflag;
 	int ret;
 
-	ret = kstrtobool(page, &flag);
+	ret = strtobool(page, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -1186,23 +1186,6 @@ static ssize_t pgr_support_store(struct config_item *item,
 	return count;
 }
 
-static ssize_t emulate_rsoc_store(struct config_item *item,
-		const char *page, size_t count)
-{
-	struct se_dev_attrib *da = to_attrib(item);
-	bool flag;
-	int ret;
-
-	ret = kstrtobool(page, &flag);
-	if (ret < 0)
-		return ret;
-
-	da->emulate_rsoc = flag;
-	pr_debug("dev[%p]: SE Device REPORT_SUPPORTED_OPERATION_CODES_EMULATION flag: %d\n",
-			da->da_dev, flag);
-	return count;
-}
-
 CONFIGFS_ATTR(, emulate_model_alias);
 CONFIGFS_ATTR(, emulate_dpo);
 CONFIGFS_ATTR(, emulate_fua_write);
@@ -1215,7 +1198,6 @@ CONFIGFS_ATTR(, emulate_tpws);
 CONFIGFS_ATTR(, emulate_caw);
 CONFIGFS_ATTR(, emulate_3pc);
 CONFIGFS_ATTR(, emulate_pr);
-CONFIGFS_ATTR(, emulate_rsoc);
 CONFIGFS_ATTR(, pi_prot_type);
 CONFIGFS_ATTR_RO(, hw_pi_prot_type);
 CONFIGFS_ATTR(, pi_prot_format);
@@ -1279,7 +1261,6 @@ struct configfs_attribute *sbc_attrib_attrs[] = {
 	&attr_max_write_same_len,
 	&attr_alua_support,
 	&attr_pgr_support,
-	&attr_emulate_rsoc,
 	NULL,
 };
 EXPORT_SYMBOL(sbc_attrib_attrs);
@@ -3606,6 +3587,8 @@ static int __init target_core_init_configfs(void)
 {
 	struct configfs_subsystem *subsys = &target_core_fabrics;
 	struct t10_alua_lu_gp *lu_gp;
+	struct cred *kern_cred;
+	const struct cred *old_cred;
 	int ret;
 
 	pr_debug("TARGET_CORE[0]: Loading Generic Kernel Storage"
@@ -3682,11 +3665,21 @@ static int __init target_core_init_configfs(void)
 	if (ret < 0)
 		goto out;
 
+	/* We use the kernel credentials to access the target directory */
+	kern_cred = prepare_kernel_cred(&init_task);
+	if (!kern_cred) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	old_cred = override_creds(kern_cred);
 	target_init_dbroot();
+	revert_creds(old_cred);
+	put_cred(kern_cred);
 
 	return 0;
 
 out:
+	target_xcopy_release_pt();
 	configfs_unregister_subsystem(subsys);
 	core_dev_release_virtual_lun0();
 	rd_module_exit();

@@ -3,7 +3,6 @@
  * Copyright (C) 2021 Rafał Miłecki <rafal@milecki.pl>
  */
 
-#include <linux/bcm47xx_nvram.h>
 #include <linux/io.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
@@ -98,6 +97,9 @@ static int brcm_nvram_parse(struct brcm_nvram *priv)
 	len = le32_to_cpu(header.len);
 
 	data = kzalloc(len, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
 	memcpy_fromio(data, priv->base, len);
 	data[len - 1] = '\0';
 
@@ -136,8 +138,6 @@ static int brcm_nvram_probe(struct platform_device *pdev)
 	err = brcm_nvram_parse(priv);
 	if (err)
 		return err;
-
-	bcm47xx_nvram_init_from_iomem(priv->base, resource_size(res));
 
 	config.dev = dev;
 	config.cells = priv->cells;

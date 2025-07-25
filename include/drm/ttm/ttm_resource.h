@@ -197,7 +197,7 @@ struct ttm_bus_placement {
  * struct ttm_resource
  *
  * @start: Start of the allocation.
- * @size: Actual size of resource in bytes.
+ * @num_pages: Actual size of resource in pages.
  * @mem_type: Resource type of the allocation.
  * @placement: Placement flags.
  * @bus: Placement on io bus accessible to the CPU
@@ -208,7 +208,7 @@ struct ttm_bus_placement {
  */
 struct ttm_resource {
 	unsigned long start;
-	size_t size;
+	unsigned long num_pages;
 	uint32_t mem_type;
 	uint32_t placement;
 	struct ttm_bus_placement bus;

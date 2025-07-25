@@ -1475,6 +1475,8 @@ sisfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 
 	vtotal = var->upper_margin + var->lower_margin + var->vsync_len;
 
+	if (!var->pixclock)
+		return -EINVAL;
 	pixclock = var->pixclock;
 
 	if((var->vmode & FB_VMODE_MASK) == FB_VMODE_NONINTERLACED) {
@@ -6588,12 +6590,7 @@ static int __init sisfb_init(void)
 {
 #ifndef MODULE
 	char *options = NULL;
-#endif
 
-	if (fb_modesetting_disabled("sisfb"))
-		return -ENODEV;
-
-#ifndef MODULE
 	if(fb_get_options("sisfb", &options))
 		return -ENODEV;
 

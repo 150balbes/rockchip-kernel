@@ -16,8 +16,7 @@ struct nvkm_ltc_func {
 	void (*cbc_clear)(struct nvkm_ltc *, u32 start, u32 limit);
 	void (*cbc_wait)(struct nvkm_ltc *);
 
-	int zbc_color;
-	int zbc_depth;
+	int zbc;
 	void (*zbc_clear_color)(struct nvkm_ltc *, int, const u32[4]);
 	void (*zbc_clear_depth)(struct nvkm_ltc *, int, const u32);
 	void (*zbc_clear_stencil)(struct nvkm_ltc *, int, const u32);

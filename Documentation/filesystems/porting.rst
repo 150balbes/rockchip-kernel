@@ -462,8 +462,8 @@ ERR_PTR(...).
 argument; instead of passing IPERM_FLAG_RCU we add MAY_NOT_BLOCK into mask.
 
 generic_permission() has also lost the check_acl argument; ACL checking
-has been taken to VFS and filesystems need to provide a non-NULL
-->i_op->get_inode_acl to read an ACL from disk.
+has been taken to VFS and filesystems need to provide a non-NULL ->i_op->get_acl
+to read an ACL from disk.
 
 ---
 
@@ -943,3 +943,21 @@ file pointer instead of struct dentry pointer.  d_tmpfile() is similarly
 changed to simplify callers.  The passed file is in a non-open state and on
 success must be opened before returning (e.g. by calling
 finish_open_simple()).
+
+---
+
+**mandatory**
+
+If ->rename() update of .. on cross-directory move needs an exclusion with
+directory modifications, do *not* lock the subdirectory in question in your
+->rename() - it's done by the caller now [that item should've been added in
+28eceeda130f "fs: Lock moved directories"].
+
+---
+
+**mandatory**
+
+On same-directory ->rename() the (tautological) update of .. is not protected
+by any locks; just don't do it if the old parent is the same as the new one.
+We really can't lock two subdirectories in same-directory rename - not without
+deadlocks.

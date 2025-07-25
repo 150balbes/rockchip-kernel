@@ -14,6 +14,7 @@
 #include <linux/swab.h>
 #include <linux/crc7.h>
 #include <linux/spi/spi.h>
+#include <linux/wl12xx.h>
 #include <linux/platform_device.h>
 #include <linux/of_irq.h>
 #include <linux/regulator/consumer.h>

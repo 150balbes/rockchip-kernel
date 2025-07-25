@@ -310,7 +310,7 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb,
 tx_error:
 	kfree_skb(skb);
 
-	DEV_STATS_INC(dev, tx_errors);
+	dev->stats.tx_errors++;
 	return NETDEV_TX_OK;
 }
 

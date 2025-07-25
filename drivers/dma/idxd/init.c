@@ -14,6 +14,7 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/device.h>
 #include <linux/idr.h>
+#include <linux/intel-svm.h>
 #include <linux/iommu.h>
 #include <uapi/linux/idxd.h>
 #include <linux/dmaengine.h>
@@ -47,6 +48,7 @@ static struct idxd_driver_data idxd_driver_data[] = {
 		.compl_size = sizeof(struct dsa_completion_record),
 		.align = 32,
 		.dev_type = &dsa_device_type,
+		.user_submission_safe = false, /* See INTEL-SA-01084 security advisory */
 	},
 	[IDXD_TYPE_IAX] = {
 		.name_prefix = "iax",
@@ -54,6 +56,7 @@ static struct idxd_driver_data idxd_driver_data[] = {
 		.compl_size = sizeof(struct iax_completion_record),
 		.align = 64,
 		.dev_type = &iax_device_type,
+		.user_submission_safe = false, /* See INTEL-SA-01084 security advisory */
 	},
 };
 
@@ -295,7 +298,7 @@ static int idxd_setup_groups(struct idxd_device *idxd)
 		}
 
 		idxd->groups[i] = group;
-		if (idxd->hw.version < DEVICE_VERSION_2 && !tc_override) {
+		if (idxd->hw.version <= DEVICE_VERSION_2 && !tc_override) {
 			group->tc_a = 1;
 			group->tc_b = 1;
 		} else {
@@ -501,7 +504,29 @@ static struct idxd_device *idxd_alloc(struct pci_dev *pdev, struct idxd_driver_d
 
 static int idxd_enable_system_pasid(struct idxd_device *idxd)
 {
-	return -EOPNOTSUPP;
+	int flags;
+	unsigned int pasid;
+	struct iommu_sva *sva;
+
+	flags = SVM_FLAG_SUPERVISOR_MODE;
+
+	sva = iommu_sva_bind_device(&idxd->pdev->dev, NULL, &flags);
+	if (IS_ERR(sva)) {
+		dev_warn(&idxd->pdev->dev,
+			 "iommu sva bind failed: %ld\n", PTR_ERR(sva));
+		return PTR_ERR(sva);
+	}
+
+	pasid = iommu_sva_get_pasid(sva);
+	if (pasid == IOMMU_PASID_INVALID) {
+		iommu_sva_unbind_device(sva);
+		return -ENODEV;
+	}
+
+	idxd->sva = sva;
+	idxd->pasid = pasid;
+	dev_dbg(&idxd->pdev->dev, "system pasid: %u\n", pasid);
+	return 0;
 }
 
 static void idxd_disable_system_pasid(struct idxd_device *idxd)
@@ -639,6 +664,8 @@ static int idxd_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	dev_info(&pdev->dev, "Intel(R) Accelerator Device (v%x)\n",
 		 idxd->hw.version);
+
+	idxd->user_submission_safe = data->user_submission_safe;
 
 	return 0;
 

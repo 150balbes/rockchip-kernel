@@ -194,6 +194,11 @@ static int fat_get_block(struct inode *inode, sector_t iblock,
 	return 0;
 }
 
+static int fat_writepage(struct page *page, struct writeback_control *wbc)
+{
+	return block_write_full_page(page, fat_get_block, wbc);
+}
+
 static int fat_writepages(struct address_space *mapping,
 			  struct writeback_control *wbc)
 {
@@ -341,12 +346,12 @@ static const struct address_space_operations fat_aops = {
 	.invalidate_folio = block_invalidate_folio,
 	.read_folio	= fat_read_folio,
 	.readahead	= fat_readahead,
+	.writepage	= fat_writepage,
 	.writepages	= fat_writepages,
 	.write_begin	= fat_write_begin,
 	.write_end	= fat_write_end,
 	.direct_IO	= fat_direct_IO,
-	.bmap		= _fat_bmap,
-	.migrate_folio	= buffer_migrate_folio,
+	.bmap		= _fat_bmap
 };
 
 /*

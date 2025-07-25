@@ -487,8 +487,7 @@ fail:
 }
 
 /* Get upper dentry from index */
-struct dentry *ovl_index_upper(struct ovl_fs *ofs, struct dentry *index,
-			       bool connected)
+struct dentry *ovl_index_upper(struct ovl_fs *ofs, struct dentry *index)
 {
 	struct ovl_fh *fh;
 	struct dentry *upper;
@@ -500,7 +499,7 @@ struct dentry *ovl_index_upper(struct ovl_fs *ofs, struct dentry *index,
 	if (IS_ERR_OR_NULL(fh))
 		return ERR_CAST(fh);
 
-	upper = ovl_decode_real_fh(ofs, fh, ovl_upper_mnt(ofs), connected);
+	upper = ovl_decode_real_fh(ofs, fh, ovl_upper_mnt(ofs), true);
 	kfree(fh);
 
 	if (IS_ERR_OR_NULL(upper))
@@ -573,7 +572,7 @@ int ovl_verify_index(struct ovl_fs *ofs, struct dentry *index)
 	 * directly from the index dentry, but for dir index we first need to
 	 * decode the upper directory.
 	 */
-	upper = ovl_index_upper(ofs, index, false);
+	upper = ovl_index_upper(ofs, index);
 	if (IS_ERR_OR_NULL(upper)) {
 		err = PTR_ERR(upper);
 		/*
@@ -1086,11 +1085,6 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			.mnt = ovl_upper_mnt(ofs),
 		};
 
-		/*
-		 * It's safe to assign upperredirect here: the previous
-		 * assignment of happens only if upperdentry is non-NULL, and
-		 * this one only if upperdentry is NULL.
-		 */
 		upperredirect = ovl_get_redirect_xattr(ofs, &upperpath, 0);
 		if (IS_ERR(upperredirect)) {
 			err = PTR_ERR(upperredirect);
@@ -1122,8 +1116,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			ovl_set_flag(OVL_UPPERDATA, inode);
 	}
 
-	ovl_dentry_update_reval(dentry, upperdentry,
-			DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE);
+	ovl_dentry_init_reval(dentry, upperdentry);
 
 	revert_creds(old_cred);
 	if (origin_path) {

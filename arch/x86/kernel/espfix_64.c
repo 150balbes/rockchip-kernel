@@ -94,7 +94,17 @@ static inline unsigned long espfix_base_addr(unsigned int cpu)
 
 static void init_espfix_random(void)
 {
-	unsigned long rand = get_random_long();
+	unsigned long rand;
+
+	/*
+	 * This is run before the entropy pools are initialized,
+	 * but this is hopefully better than nothing.
+	 */
+	if (!arch_get_random_longs(&rand, 1)) {
+		/* The constant is an arbitrary large prime */
+		rand = rdtsc();
+		rand *= 0xc345c6b72fd16123UL;
+	}
 
 	slot_random = rand % ESPFIX_STACKS_PER_PAGE;
 	page_random = (rand / ESPFIX_STACKS_PER_PAGE)

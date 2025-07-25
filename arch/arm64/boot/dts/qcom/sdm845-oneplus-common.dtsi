@@ -19,7 +19,7 @@
 / {
 	aliases {
 		serial0 = &uart9;
-		serial1 = &uart6;
+		hsuart0 = &uart6;
 	};
 
 	chosen {
@@ -50,8 +50,7 @@
 	};
 
 	reserved-memory {
-		/*
-		 * The rmtfs_mem needs to be guarded due to "XPU limitations"
+		/* The rmtfs_mem needs to be guarded due to "XPU limitations"
 		 * it is otherwise possible for an allocation adjacent to the
 		 * rmtfs_mem region to trigger an XPU violation, causing a crash.
 		 */
@@ -145,7 +144,7 @@
 };
 
 &apps_rsc {
-	pm8998-rpmh-regulators {
+	regulators-0 {
 		compatible = "qcom,pm8998-rpmh-regulators";
 		qcom,pmic-id = "a";
 
@@ -281,7 +280,7 @@
 		};
 	};
 
-	pmi8998-rpmh-regulators {
+	regulators-1 {
 		compatible = "qcom,pmi8998-rpmh-regulators";
 		qcom,pmic-id = "b";
 
@@ -295,7 +294,7 @@
 		};
 	};
 
-	pm8005-rpmh-regulators {
+	regulators-2 {
 		compatible = "qcom,pm8005-rpmh-regulators";
 		qcom,pmic-id = "c";
 
@@ -434,7 +433,7 @@
 	status = "okay";
 };
 
-/* Modem/wifi */
+/* Modem/wifi*/
 &mss_pil {
 	status = "okay";
 	firmware-name = "qcom/sdm845/oneplus6/mba.mbn", "qcom/sdm845/oneplus6/modem.mbn";
@@ -460,10 +459,6 @@
 			qcom,drive-strength = <0>;
 		};
 	};
-};
-
-&pmi8998_rradc {
-	status = "okay";
 };
 
 &qupv3_id_1 {
@@ -505,10 +500,34 @@
 	};
 };
 
+/*
+ * Prevent garbage data on bluetooth UART lines
+ */
+&qup_uart6_default {
+	pinmux {
+		pins = "gpio45", "gpio46", "gpio47", "gpio48";
+		function = "qup6";
+	};
+
+	cts {
+		pins = "gpio45";
+		bias-pull-down;
+	};
+
+	rts-tx {
+		pins = "gpio46", "gpio47";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	rx {
+		pins = "gpio48";
+		bias-pull-up;
+	};
+};
+
 &uart6 {
 	status = "okay";
-
-	pinctrl-0 = <&qup_uart6_4pin>;
 
 	bluetooth {
 		compatible = "qcom,wcn3990-bt";

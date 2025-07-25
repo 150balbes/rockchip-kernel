@@ -19,7 +19,11 @@ struct snd_sof_dsp_ops sof_hda_common_ops = {
 	.probe		= hda_dsp_probe,
 	.remove		= hda_dsp_remove,
 
-	/* Register IO uses direct mmio */
+	/* Register IO */
+	.write		= sof_io_write,
+	.read		= sof_io_read,
+	.write64	= sof_io_write64,
+	.read64		= sof_io_read64,
 
 	/* Block IO */
 	.block_read	= sof_block_read,

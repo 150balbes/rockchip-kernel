@@ -142,7 +142,8 @@ struct mcck_volatile_info {
 			   CR14_EXTERNAL_DAMAGE_SUBMASK)
 
 #define SIDAD_SIZE_MASK		0xff
-#define sida_addr(sie_block) phys_to_virt((sie_block)->sidad & PAGE_MASK)
+#define sida_origin(sie_block) \
+	((sie_block)->sidad & PAGE_MASK)
 #define sida_size(sie_block) \
 	((((sie_block)->sidad & SIDAD_SIZE_MASK) + 1) * PAGE_SIZE)
 
@@ -275,7 +276,6 @@ struct kvm_s390_sie_block {
 #define ECB3_AES 0x04
 #define ECB3_RI  0x01
 	__u8    ecb3;			/* 0x0063 */
-#define ESCA_SCAOL_MASK ~0x3fU
 	__u32	scaol;			/* 0x0064 */
 	__u8	sdf;			/* 0x0068 */
 	__u8    epdx;			/* 0x0069 */
@@ -427,6 +427,7 @@ struct kvm_vcpu_stat {
 	u64 instruction_io_other;
 	u64 instruction_lpsw;
 	u64 instruction_lpswe;
+	u64 instruction_lpswey;
 	u64 instruction_pfmf;
 	u64 instruction_ptff;
 	u64 instruction_sck;
@@ -777,6 +778,13 @@ struct kvm_vm_stat {
 	u64 inject_service_signal;
 	u64 inject_virtio;
 	u64 aen_forward;
+	u64 gmap_shadow_create;
+	u64 gmap_shadow_reuse;
+	u64 gmap_shadow_r1_entry;
+	u64 gmap_shadow_r2_entry;
+	u64 gmap_shadow_r3_entry;
+	u64 gmap_shadow_sg_entry;
+	u64 gmap_shadow_pg_entry;
 };
 
 struct kvm_arch_memory_slot {
@@ -942,8 +950,6 @@ struct kvm_s390_pv {
 	unsigned long stor_base;
 	void *stor_var;
 	bool dumping;
-	void *set_aside;
-	struct list_head need_cleanup;
 	struct mmu_notifier mmu_notifier;
 };
 
@@ -1019,13 +1025,7 @@ void kvm_arch_crypto_clear_masks(struct kvm *kvm);
 void kvm_arch_crypto_set_masks(struct kvm *kvm, unsigned long *apm,
 			       unsigned long *aqm, unsigned long *adm);
 
-int __sie64a(phys_addr_t sie_block_phys, struct kvm_s390_sie_block *sie_block, u64 *rsa);
-
-static inline int sie64a(struct kvm_s390_sie_block *sie_block, u64 *rsa)
-{
-	return __sie64a(virt_to_phys(sie_block), sie_block, rsa);
-}
-
+extern int sie64a(struct kvm_s390_sie_block *, u64 *);
 extern char sie_exit;
 
 extern int kvm_s390_gisc_register(struct kvm *kvm, u32 gisc);

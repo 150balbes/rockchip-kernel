@@ -34,14 +34,7 @@ the ``BPF_F_NO_COMMON_LRU`` flag when calling ``bpf_map_create``.
 Usage
 =====
 
-Kernel BPF
-----------
-
-bpf_map_update_elem()
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: c
-
+.. c:function::
    long bpf_map_update_elem(struct bpf_map *map, const void *key, const void *value, u64 flags)
 
 Hash entries can be added or updated using the ``bpf_map_update_elem()``
@@ -56,22 +49,14 @@ parameter can be used to control the update behaviour:
 ``bpf_map_update_elem()`` returns 0 on success, or negative error in
 case of failure.
 
-bpf_map_lookup_elem()
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: c
-
+.. c:function::
    void *bpf_map_lookup_elem(struct bpf_map *map, const void *key)
 
 Hash entries can be retrieved using the ``bpf_map_lookup_elem()``
 helper. This helper returns a pointer to the value associated with
 ``key``, or ``NULL`` if no entry was found.
 
-bpf_map_delete_elem()
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: c
-
+.. c:function::
    long bpf_map_delete_elem(struct bpf_map *map, const void *key)
 
 Hash entries can be deleted using the ``bpf_map_delete_elem()``
@@ -85,11 +70,7 @@ For ``BPF_MAP_TYPE_PERCPU_HASH`` and ``BPF_MAP_TYPE_LRU_PERCPU_HASH``
 the ``bpf_map_update_elem()`` and ``bpf_map_lookup_elem()`` helpers
 automatically access the hash slot for the current CPU.
 
-bpf_map_lookup_percpu_elem()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: c
-
+.. c:function::
    void *bpf_map_lookup_percpu_elem(struct bpf_map *map, const void *key, u32 cpu)
 
 The ``bpf_map_lookup_percpu_elem()`` helper can be used to lookup the
@@ -108,11 +89,7 @@ See ``tools/testing/selftests/bpf/progs/test_spin_lock.c``.
 Userspace
 ---------
 
-bpf_map_get_next_key()
-~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: c
-
+.. c:function::
    int bpf_map_get_next_key(int fd, const void *cur_key, void *next_key)
 
 In userspace, it is possible to iterate through the keys of a hash using

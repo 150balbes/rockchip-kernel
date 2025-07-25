@@ -12,7 +12,6 @@
 #include "strbuf.h"
 #include "pmu.h"
 #include "pmu-hybrid.h"
-#include "print-events.h"
 #include "expr.h"
 #include "rblist.h"
 #include <string.h>
@@ -29,7 +28,6 @@
 #include "util.h"
 #include <asm/bug.h>
 #include "cgroup.h"
-#include "util/hashmap.h"
 
 struct metric_event *metricgroup__lookup(struct rblist *metric_events,
 					 struct evsel *evsel,
@@ -290,7 +288,7 @@ static int setup_metric_events(struct hashmap *ids,
 		 * combined or shared groups, this metric may not care
 		 * about this event.
 		 */
-		if (hashmap__find(ids, metric_id, &val_ptr)) {
+		if (hashmap__find(ids, metric_id, (void **)&val_ptr)) {
 			metric_events[matched_events++] = ev;
 
 			if (matched_events >= ids_size)
@@ -354,65 +352,51 @@ static bool match_pe_metric(const struct pmu_event *pe, const char *metric)
 	       match_metric(pe->metric_name, metric);
 }
 
-/** struct mep - RB-tree node for building printing information. */
 struct mep {
-	/** nd - RB-tree element. */
 	struct rb_node nd;
-	/** @metric_group: Owned metric group name, separated others with ';'. */
-	char *metric_group;
-	const char *metric_name;
-	const char *metric_desc;
-	const char *metric_long_desc;
-	const char *metric_expr;
-	const char *metric_unit;
+	const char *name;
+	struct strlist *metrics;
 };
 
 static int mep_cmp(struct rb_node *rb_node, const void *entry)
 {
 	struct mep *a = container_of(rb_node, struct mep, nd);
 	struct mep *b = (struct mep *)entry;
-	int ret;
 
-	ret = strcmp(a->metric_group, b->metric_group);
-	if (ret)
-		return ret;
-
-	return strcmp(a->metric_name, b->metric_name);
+	return strcmp(a->name, b->name);
 }
 
-static struct rb_node *mep_new(struct rblist *rl __maybe_unused, const void *entry)
+static struct rb_node *mep_new(struct rblist *rl __maybe_unused,
+					const void *entry)
 {
 	struct mep *me = malloc(sizeof(struct mep));
 
 	if (!me)
 		return NULL;
-
 	memcpy(me, entry, sizeof(struct mep));
+	me->name = strdup(me->name);
+	if (!me->name)
+		goto out_me;
+	me->metrics = strlist__new(NULL, NULL);
+	if (!me->metrics)
+		goto out_name;
 	return &me->nd;
-}
-
-static void mep_delete(struct rblist *rl __maybe_unused,
-		       struct rb_node *nd)
-{
-	struct mep *me = container_of(nd, struct mep, nd);
-
-	zfree(&me->metric_group);
+out_name:
+	zfree(&me->name);
+out_me:
 	free(me);
+	return NULL;
 }
 
-static struct mep *mep_lookup(struct rblist *groups, const char *metric_group,
-			      const char *metric_name)
+static struct mep *mep_lookup(struct rblist *groups, const char *name)
 {
 	struct rb_node *nd;
 	struct mep me = {
-		.metric_group = strdup(metric_group),
-		.metric_name = metric_name,
+		.name = name
 	};
 	nd = rblist__find(groups, &me);
-	if (nd) {
-		free(me.metric_group);
+	if (nd)
 		return container_of(nd, struct mep, nd);
-	}
 	rblist__add_node(groups, &me);
 	nd = rblist__find(groups, &me);
 	if (nd)
@@ -420,36 +404,106 @@ static struct mep *mep_lookup(struct rblist *groups, const char *metric_group,
 	return NULL;
 }
 
-static int metricgroup__add_to_mep_groups(const struct pmu_event *pe,
-					struct rblist *groups)
+static void mep_delete(struct rblist *rl __maybe_unused,
+		       struct rb_node *nd)
+{
+	struct mep *me = container_of(nd, struct mep, nd);
+
+	strlist__delete(me->metrics);
+	zfree(&me->name);
+	free(me);
+}
+
+static void metricgroup__print_strlist(struct strlist *metrics, bool raw)
+{
+	struct str_node *sn;
+	int n = 0;
+
+	strlist__for_each_entry (sn, metrics) {
+		if (raw)
+			printf("%s%s", n > 0 ? " " : "", sn->s);
+		else
+			printf("  %s\n", sn->s);
+		n++;
+	}
+	if (raw)
+		putchar('\n');
+}
+
+static int metricgroup__print_pmu_event(const struct pmu_event *pe,
+					bool metricgroups, char *filter,
+					bool raw, bool details,
+					struct rblist *groups,
+					struct strlist *metriclist)
 {
 	const char *g;
 	char *omg, *mg;
 
-	mg = strdup(pe->metric_group ?: "No_group");
+	g = pe->metric_group;
+	if (!g && pe->metric_name) {
+		if (pe->name)
+			return 0;
+		g = "No_group";
+	}
+
+	if (!g)
+		return 0;
+
+	mg = strdup(g);
+
 	if (!mg)
 		return -ENOMEM;
 	omg = mg;
 	while ((g = strsep(&mg, ";")) != NULL) {
 		struct mep *me;
+		char *s;
 
 		g = skip_spaces(g);
-		if (strlen(g))
-			me = mep_lookup(groups, g, pe->metric_name);
-		else
-			me = mep_lookup(groups, "No_group", pe->metric_name);
-
-		if (me) {
-			me->metric_desc = pe->desc;
-			me->metric_long_desc = pe->long_desc;
-			me->metric_expr = pe->metric_expr;
-			me->metric_unit = pe->unit;
+		if (*g == 0)
+			g = "No_group";
+		if (filter && !strstr(g, filter))
+			continue;
+		if (raw)
+			s = (char *)pe->metric_name;
+		else {
+			if (asprintf(&s, "%s\n%*s%s]",
+				     pe->metric_name, 8, "[", pe->desc) < 0)
+				return -1;
+			if (details) {
+				if (asprintf(&s, "%s\n%*s%s]",
+					     s, 8, "[", pe->metric_expr) < 0)
+					return -1;
+			}
 		}
+
+		if (!s)
+			continue;
+
+		if (!metricgroups) {
+			strlist__add(metriclist, s);
+		} else {
+			me = mep_lookup(groups, g);
+			if (!me)
+				continue;
+			strlist__add(me->metrics, s);
+		}
+
+		if (!raw)
+			free(s);
 	}
 	free(omg);
 
 	return 0;
 }
+
+struct metricgroup_print_sys_idata {
+	struct strlist *metriclist;
+	char *filter;
+	struct rblist *groups;
+	bool metricgroups;
+	bool raw;
+	bool details;
+};
 
 struct metricgroup_iter_data {
 	pmu_event_iter_fn fn;
@@ -473,26 +527,60 @@ static int metricgroup__sys_event_iter(const struct pmu_event *pe,
 
 		return d->fn(pe, table, d->data);
 	}
+
 	return 0;
 }
 
-static int metricgroup__add_to_mep_groups_callback(const struct pmu_event *pe,
-						const struct pmu_events_table *table __maybe_unused,
-						void *vdata)
+static int metricgroup__print_sys_event_iter(const struct pmu_event *pe,
+					     const struct pmu_events_table *table __maybe_unused,
+					     void *data)
 {
-	struct rblist *groups = vdata;
+	struct metricgroup_print_sys_idata *d = data;
 
-	if (!pe->metric_name)
-		return 0;
-
-	return metricgroup__add_to_mep_groups(pe, groups);
+	return metricgroup__print_pmu_event(pe, d->metricgroups, d->filter, d->raw,
+				     d->details, d->groups, d->metriclist);
 }
 
-void metricgroup__print(const struct print_callbacks *print_cb, void *print_state)
+struct metricgroup_print_data {
+	const char *pmu_name;
+	struct strlist *metriclist;
+	char *filter;
+	struct rblist *groups;
+	bool metricgroups;
+	bool raw;
+	bool details;
+};
+
+static int metricgroup__print_callback(const struct pmu_event *pe,
+				       const struct pmu_events_table *table __maybe_unused,
+				       void *vdata)
+{
+	struct metricgroup_print_data *data = vdata;
+
+	if (!pe->metric_expr)
+		return 0;
+
+	if (data->pmu_name && perf_pmu__is_hybrid(pe->pmu) && strcmp(data->pmu_name, pe->pmu))
+		return 0;
+
+	return metricgroup__print_pmu_event(pe, data->metricgroups, data->filter,
+					    data->raw, data->details, data->groups,
+					    data->metriclist);
+}
+
+void metricgroup__print(bool metrics, bool metricgroups, char *filter,
+			bool raw, bool details, const char *pmu_name)
 {
 	struct rblist groups;
-	const struct pmu_events_table *table;
 	struct rb_node *node, *next;
+	struct strlist *metriclist = NULL;
+	const struct pmu_events_table *table;
+
+	if (!metricgroups) {
+		metriclist = strlist__new(NULL, NULL);
+		if (!metriclist)
+			return;
+	}
 
 	rblist__init(&groups);
 	groups.node_new = mep_new;
@@ -500,31 +588,56 @@ void metricgroup__print(const struct print_callbacks *print_cb, void *print_stat
 	groups.node_delete = mep_delete;
 	table = pmu_events_table__find();
 	if (table) {
+		struct metricgroup_print_data data = {
+			.pmu_name = pmu_name,
+			.metriclist = metriclist,
+			.metricgroups = metricgroups,
+			.filter = filter,
+			.raw = raw,
+			.details = details,
+			.groups = &groups,
+		};
+
 		pmu_events_table_for_each_event(table,
-						metricgroup__add_to_mep_groups_callback,
-						&groups);
+						metricgroup__print_callback,
+						&data);
 	}
 	{
 		struct metricgroup_iter_data data = {
-			.fn = metricgroup__add_to_mep_groups_callback,
-			.data = &groups,
+			.fn = metricgroup__print_sys_event_iter,
+			.data = (void *) &(struct metricgroup_print_sys_idata){
+				.metriclist = metriclist,
+				.metricgroups = metricgroups,
+				.filter = filter,
+				.raw = raw,
+				.details = details,
+				.groups = &groups,
+			},
 		};
+
 		pmu_for_each_sys_event(metricgroup__sys_event_iter, &data);
+	}
+
+	if (!filter || !rblist__empty(&groups)) {
+		if (metricgroups && !raw)
+			printf("\nMetric Groups:\n\n");
+		else if (metrics && !raw)
+			printf("\nMetrics:\n\n");
 	}
 
 	for (node = rb_first_cached(&groups.entries); node; node = next) {
 		struct mep *me = container_of(node, struct mep, nd);
 
-		print_cb->print_metric(print_state,
-				me->metric_group,
-				me->metric_name,
-				me->metric_desc,
-				me->metric_long_desc,
-				me->metric_expr,
-				me->metric_unit);
+		if (metricgroups)
+			printf("%s%s%s", me->name, metrics && !raw ? ":" : "", raw ? " " : "\n");
+		if (metrics)
+			metricgroup__print_strlist(me->metrics, raw);
 		next = rb_next(node);
 		rblist__remove_node(&groups, node);
 	}
+	if (!metricgroups)
+		metricgroup__print_strlist(metriclist, raw);
+	strlist__delete(metriclist);
 }
 
 static const char *code_characters = ",-=@";
@@ -651,7 +764,7 @@ static int metricgroup__build_event_string(struct strbuf *events,
 #define RETURN_IF_NON_ZERO(x) do { if (x) return x; } while (0)
 
 	hashmap__for_each_entry(ctx->ids, cur, bkt) {
-		const char *sep, *rsep, *id = cur->pkey;
+		const char *sep, *rsep, *id = cur->key;
 		enum perf_tool_event ev;
 
 		pr_debug("found event %s\n", id);
@@ -832,14 +945,14 @@ static int resolve_metric(struct list_head *metric_list,
 	hashmap__for_each_entry(root_metric->pctx->ids, cur, bkt) {
 		struct pmu_event pe;
 
-		if (metricgroup__find_metric(cur->pkey, table, &pe)) {
+		if (metricgroup__find_metric(cur->key, table, &pe)) {
 			pending = realloc(pending,
 					(pending_cnt + 1) * sizeof(struct to_resolve));
 			if (!pending)
 				return -ENOMEM;
 
 			memcpy(&pending[pending_cnt].pe, &pe, sizeof(pe));
-			pending[pending_cnt].key = cur->pkey;
+			pending[pending_cnt].key = cur->key;
 			pending_cnt++;
 		}
 	}
@@ -1320,7 +1433,7 @@ static int build_combined_expr_ctx(const struct list_head *metric_list,
 	list_for_each_entry(m, metric_list, nd) {
 		if (m->has_constraint && !m->modifier) {
 			hashmap__for_each_entry(m->pctx->ids, cur, bkt) {
-				dup = strdup(cur->pkey);
+				dup = strdup(cur->key);
 				if (!dup) {
 					ret = -ENOMEM;
 					goto err_out;

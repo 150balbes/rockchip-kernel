@@ -47,5 +47,3 @@ rm -f arch/riscv/purgatory/kexec-purgatory.c
 rm -f scripts/extract-cert
 
 rm -f arch/x86/purgatory/kexec-purgatory.c
-
-rm -f scripts/kconfig/[gmnq]conf-cfg

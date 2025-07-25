@@ -721,36 +721,33 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 
-			blsp1_uart1_default: blsp1-uart1-default-state {
+			blsp1_uart1_default: blsp1-uart1-default {
 				pins = "gpio0", "gpio1", "gpio2", "gpio3";
-				function = "blsp_uart1";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			blsp1_uart1_sleep: blsp1-uart1-sleep-state {
+			blsp1_uart1_sleep: blsp1-uart1-sleep {
 				pins = "gpio0", "gpio1", "gpio2", "gpio3";
-				function = "gpio";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			blsp1_uart2_default: blsp1-uart2-default-state {
+			blsp1_uart2_default: blsp1-uart2-default {
 				pins = "gpio4", "gpio5";
-				function = "blsp_uart2";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			blsp2_uart1_default: blsp2-uart1-active-state {
-				tx-rts-pins {
+			blsp2_uart1_default: blsp2-uart1-active {
+				tx-rts {
 					pins = "gpio16", "gpio19";
 					function = "blsp_uart5";
 					drive-strength = <2>;
 					bias-disable;
 				};
 
-				rx-pins {
+				rx {
 					/*
 					 * Avoid garbage data while BT module
 					 * is powered off or not driving signal
@@ -761,7 +758,7 @@
 					bias-pull-up;
 				};
 
-				cts-pins {
+				cts {
 					/* Match the pull of the BT module */
 					pins = "gpio18";
 					function = "blsp_uart5";
@@ -770,15 +767,15 @@
 				};
 			};
 
-			blsp2_uart1_sleep: blsp2-uart1-sleep-state {
-				tx-pins {
+			blsp2_uart1_sleep: blsp2-uart1-sleep {
+				tx {
 					pins = "gpio16";
 					function = "gpio";
 					drive-strength = <2>;
 					bias-pull-up;
 				};
 
-				rx-cts-rts-pins {
+				rx-cts-rts {
 					pins = "gpio17", "gpio18", "gpio19";
 					function = "gpio";
 					drive-strength = <2>;
@@ -786,216 +783,228 @@
 				};
 			};
 
-			i2c1_default: i2c1-default-state {
+			i2c1_default: i2c1-default {
 				pins = "gpio2", "gpio3";
 				function = "blsp_i2c1";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c1_sleep: i2c1-sleep-state {
+			i2c1_sleep: i2c1-sleep {
 				pins = "gpio2", "gpio3";
 				function = "blsp_i2c1";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c2_default: i2c2-default-state {
+			i2c2_default: i2c2-default {
 				pins = "gpio6", "gpio7";
 				function = "blsp_i2c2";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c2_sleep: i2c2-sleep-state {
+			i2c2_sleep: i2c2-sleep {
 				pins = "gpio6", "gpio7";
 				function = "blsp_i2c2";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c3_default: i2c3-default-state {
+			i2c3_default: i2c3-default {
 				pins = "gpio10", "gpio11";
 				function = "blsp_i2c3";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c3_sleep: i2c3-sleep-state {
+			i2c3_sleep: i2c3-sleep {
 				pins = "gpio10", "gpio11";
 				function = "blsp_i2c3";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c4_default: i2c4-default-state {
+			i2c4_default: i2c4-default {
 				pins = "gpio14", "gpio15";
 				function = "blsp_i2c4";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c4_sleep: i2c4-sleep-state {
+			i2c4_sleep: i2c4-sleep {
 				pins = "gpio14", "gpio15";
 				function = "blsp_i2c4";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c5_default: i2c5-default-state {
+			i2c5_default: i2c5-default {
 				pins = "gpio18", "gpio19";
 				function = "blsp_i2c5";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c5_sleep: i2c5-sleep-state {
+			i2c5_sleep: i2c5-sleep {
 				pins = "gpio18", "gpio19";
 				function = "blsp_i2c5";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c6_default: i2c6-default-state {
+			i2c6_default: i2c6-default {
 				pins = "gpio22", "gpio23";
 				function = "blsp_i2c6";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c6_sleep: i2c6-sleep-state {
+			i2c6_sleep: i2c6-sleep {
 				pins = "gpio22", "gpio23";
 				function = "blsp_i2c6";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c7_default: i2c7-default-state {
+			i2c7_default: i2c7-default {
 				pins = "gpio26", "gpio27";
 				function = "blsp_i2c7";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c7_sleep: i2c7-sleep-state {
+			i2c7_sleep: i2c7-sleep {
 				pins = "gpio26", "gpio27";
 				function = "blsp_i2c7";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			i2c8_default: i2c8-default-state {
+			i2c8_default: i2c8-default {
 				pins = "gpio30", "gpio31";
-				function = "blsp_i2c8_a";
+				function = "blsp_i2c8";
 				drive-strength = <2>;
 				bias-disable;
 			};
 
-			i2c8_sleep: i2c8-sleep-state {
+			i2c8_sleep: i2c8-sleep {
 				pins = "gpio30", "gpio31";
-				function = "blsp_i2c8_a";
+				function = "blsp_i2c8";
 				drive-strength = <2>;
 				bias-pull-up;
 			};
 
-			cci0_default: cci0-default-state {
-				pins = "gpio36","gpio37";
-				function = "cci_i2c";
-				bias-pull-up;
-				drive-strength = <2>;
+			cci0_default: cci0_default {
+				pinmux {
+					pins = "gpio36","gpio37";
+					function = "cci_i2c";
+				};
+
+				pinconf {
+					pins = "gpio36","gpio37";
+					bias-pull-up;
+					drive-strength = <2>;
+				};
 			};
 
-			cci1_default: cci1-default-state {
-				pins = "gpio38","gpio39";
-				function = "cci_i2c";
-				bias-pull-up;
-				drive-strength = <2>;
+			cci1_default: cci1_default {
+				pinmux {
+					pins = "gpio38","gpio39";
+					function = "cci_i2c";
+				};
+
+				pinconf {
+					pins = "gpio38","gpio39";
+					bias-pull-up;
+					drive-strength = <2>;
+				};
 			};
 
-			sdc1_state_on: sdc1-on-state {
-				clk-pins {
+			sdc1_state_on: sdc1-on {
+				clk {
 					pins = "sdc1_clk";
 					bias-disable;
 					drive-strength = <16>;
 				};
 
-				cmd-pins {
+				cmd {
 					pins = "sdc1_cmd";
 					bias-pull-up;
 					drive-strength = <10>;
 				};
 
-				data-pins {
+				data {
 					pins = "sdc1_data";
 					bias-pull-up;
 					drive-strength = <10>;
 				};
 
-				rclk-pins {
+				rclk {
 					pins = "sdc1_rclk";
 					bias-pull-down;
 				};
 			};
 
-			sdc1_state_off: sdc1-off-state {
-				clk-pins {
+			sdc1_state_off: sdc1-off {
+				clk {
 					pins = "sdc1_clk";
 					bias-disable;
 					drive-strength = <2>;
 				};
 
-				cmd-pins {
+				cmd {
 					pins = "sdc1_cmd";
 					bias-pull-up;
 					drive-strength = <2>;
 				};
 
-				data-pins {
+				data {
 					pins = "sdc1_data";
 					bias-pull-up;
 					drive-strength = <2>;
 				};
 
-				rclk-pins {
+				rclk {
 					pins = "sdc1_rclk";
 					bias-pull-down;
 				};
 			};
 
-			sdc2_state_on: sdc2-on-state {
-				clk-pins {
+			sdc2_state_on: sdc2-on {
+				clk {
 					pins = "sdc2_clk";
 					bias-disable;
 					drive-strength = <16>;
 				};
 
-				cmd-pins {
+				cmd {
 					pins = "sdc2_cmd";
 					bias-pull-up;
 					drive-strength = <10>;
 				};
 
-				data-pins {
+				data {
 					pins = "sdc2_data";
 					bias-pull-up;
 					drive-strength = <10>;
 				};
 			};
 
-			sdc2_state_off: sdc2-off-state {
-				clk-pins {
+			sdc2_state_off: sdc2-off {
+				clk {
 					pins = "sdc2_clk";
 					bias-disable;
 					drive-strength = <2>;
 				};
 
-				cmd-pins {
+				cmd {
 					pins = "sdc2_cmd";
 					bias-pull-up;
 					drive-strength = <2>;
 				};
 
-				data-pins {
+				data {
 					pins = "sdc2_data";
 					bias-pull-up;
 					drive-strength = <2>;
@@ -1607,6 +1616,7 @@
 					      "core";
 
 				phys = <&dsi0_phy>;
+				phy-names = "dsi";
 
 				status = "disabled";
 
@@ -1629,7 +1639,7 @@
 				};
 			};
 
-			dsi0_phy: phy@c994400 {
+			dsi0_phy: dsi-phy@c994400 {
 				compatible = "qcom,dsi-phy-14nm-660";
 				reg = <0x0c994400 0x100>,
 				      <0x0c994500 0x300>,
@@ -1892,7 +1902,7 @@
 			};
 		};
 
-		camss: camss@ca00000 {
+		camss: camss@ca00020 {
 			compatible = "qcom,sdm660-camss";
 			reg = <0x0ca00020 0x10>,
 			      <0x0ca30000 0x100>,
@@ -2214,12 +2224,12 @@
 					#address-cells = <1>;
 					#size-cells = <0>;
 
-					service@3 {
+					q6core {
 						reg = <APR_SVC_ADSP_CORE>;
 						compatible = "qcom,q6core";
 					};
 
-					q6afe: service@4 {
+					q6afe: apr-service@4 {
 						compatible = "qcom,q6afe";
 						reg = <APR_SVC_AFE>;
 						q6afedai: dais {
@@ -2230,7 +2240,7 @@
 						};
 					};
 
-					q6asm: service@7 {
+					q6asm: apr-service@7 {
 						compatible = "qcom,q6asm";
 						reg = <APR_SVC_ASM>;
 						q6asmdai: dais {
@@ -2242,7 +2252,7 @@
 						};
 					};
 
-					q6adm: service@8 {
+					q6adm: apr-service@8 {
 						compatible = "qcom,q6adm";
 						reg = <APR_SVC_ADM>;
 						q6routing: routing {

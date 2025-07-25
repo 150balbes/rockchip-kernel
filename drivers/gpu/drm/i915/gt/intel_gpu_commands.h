@@ -120,6 +120,7 @@
 #define   MI_SEMAPHORE_TARGET(engine)	((engine)<<15)
 #define MI_SEMAPHORE_WAIT	MI_INSTR(0x1c, 2) /* GEN8+ */
 #define MI_SEMAPHORE_WAIT_TOKEN	MI_INSTR(0x1c, 3) /* GEN12+ */
+#define   MI_SEMAPHORE_REGISTER_POLL	(1 << 16)
 #define   MI_SEMAPHORE_POLL		(1 << 15)
 #define   MI_SEMAPHORE_SAD_GT_SDD	(0 << 12)
 #define   MI_SEMAPHORE_SAD_GTE_SDD	(1 << 12)
@@ -186,10 +187,6 @@
 #define MI_BATCH_BUFFER_START_GEN8	MI_INSTR(0x31, 1)
 #define   MI_BATCH_RESOURCE_STREAMER REG_BIT(10)
 #define   MI_BATCH_PREDICATE         REG_BIT(15) /* HSW+ on RCS only*/
-
-#define MI_OPCODE(x)		(((x) >> 23) & 0x3f)
-#define IS_MI_LRI_CMD(x)	(MI_OPCODE(x) == MI_OPCODE(MI_INSTR(0x22, 0)))
-#define MI_LRI_LEN(x)		(((x) & 0xff) + 1)
 
 /*
  * 3D instructions used by the kernel

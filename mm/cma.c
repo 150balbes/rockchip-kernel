@@ -24,6 +24,7 @@
 #include <linux/memblock.h>
 #include <linux/err.h>
 #include <linux/mm.h>
+#include <linux/module.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/log2.h>
@@ -53,6 +54,7 @@ const char *cma_get_name(const struct cma *cma)
 {
 	return cma->name;
 }
+EXPORT_SYMBOL_GPL(cma_get_name);
 
 static unsigned long cma_bitmap_aligned_mask(const struct cma *cma,
 					     unsigned int align_order)
@@ -102,6 +104,8 @@ static void __init cma_activate_area(struct cma *cma)
 	if (!cma->bitmap)
 		goto out_error;
 
+	if (IS_ENABLED(CONFIG_CMA_INACTIVE))
+		goto out;
 	/*
 	 * alloc_contig_range() requires the pfn range specified to be in the
 	 * same zone. Simplify by forcing the entire CMA resv range to be in the
@@ -119,6 +123,7 @@ static void __init cma_activate_area(struct cma *cma)
 	     pfn += pageblock_nr_pages)
 		init_cma_reserved_pageblock(pfn_to_page(pfn));
 
+out:
 	spin_lock_init(&cma->lock);
 
 #ifdef CONFIG_CMA_DEBUGFS
@@ -186,13 +191,11 @@ int __init cma_init_reserved_mem(phys_addr_t base, phys_addr_t size,
 	if (!size || !memblock_is_region_reserved(base, size))
 		return -EINVAL;
 
-	/* alignment should be aligned with order_per_bit */
-	if (!IS_ALIGNED(CMA_MIN_ALIGNMENT_PAGES, 1 << order_per_bit))
-		return -EINVAL;
-
+#if !IS_ENABLED(CONFIG_CMA_INACTIVE)
 	/* ensure minimal alignment required by mm core */
 	if (!IS_ALIGNED(base | size, CMA_MIN_ALIGNMENT_BYTES))
 		return -EINVAL;
+#endif
 
 	/*
 	 * Each reserved area must be initialised later, when more kernel
@@ -266,6 +269,7 @@ int __init cma_declare_contiguous_nid(phys_addr_t base,
 	if (alignment && !is_power_of_2(alignment))
 		return -EINVAL;
 
+#if !IS_ENABLED(CONFIG_CMA_INACTIVE)
 	/* Sanitise input arguments. */
 	alignment = max_t(phys_addr_t, alignment, CMA_MIN_ALIGNMENT_BYTES);
 	if (fixed && base & (alignment - 1)) {
@@ -274,6 +278,7 @@ int __init cma_declare_contiguous_nid(phys_addr_t base,
 			&base, &alignment);
 		goto err;
 	}
+#endif
 	base = ALIGN(base, alignment);
 	size = ALIGN(size, alignment);
 	limit &= ~(alignment - 1);
@@ -371,14 +376,23 @@ int __init cma_declare_contiguous_nid(phys_addr_t base,
 	if (ret)
 		goto free_mem;
 
+#if !IS_ENABLED(CONFIG_CMA_INACTIVE)
 	pr_info("Reserved %ld MiB at %pa\n", (unsigned long)size / SZ_1M,
 		&base);
+#else
+	pr_info("Reserved %ld KiB at %pa\n", (unsigned long)size / SZ_1K,
+		&base);
+#endif
 	return 0;
 
 free_mem:
 	memblock_phys_free(base, size);
 err:
+#if !IS_ENABLED(CONFIG_CMA_INACTIVE)
 	pr_err("Failed to reserve %ld MiB\n", (unsigned long)size / SZ_1M);
+#else
+	pr_err("Failed to reserve %ld KiB\n", (unsigned long)size / SZ_1K);
+#endif
 	return ret;
 }
 
@@ -469,6 +483,10 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 		spin_unlock_irq(&cma->lock);
 
 		pfn = cma->base_pfn + (bitmap_no << cma->order_per_bit);
+		if (IS_ENABLED(CONFIG_CMA_INACTIVE)) {
+			page = pfn_to_page(pfn);
+			goto out;
+		}
 		mutex_lock(&cma_mutex);
 		ret = alloc_contig_range(pfn, pfn + count, MIGRATE_CMA,
 				     GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
@@ -500,7 +518,7 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 	 */
 	if (page) {
 		for (i = 0; i < count; i++)
-			page_kasan_tag_reset(page + i);
+			page_kasan_tag_reset(nth_page(page, i));
 	}
 
 	if (ret && !no_warn) {
@@ -522,6 +540,7 @@ out:
 
 	return page;
 }
+EXPORT_SYMBOL_GPL(cma_alloc);
 
 bool cma_pages_valid(struct cma *cma, const struct page *pages,
 		     unsigned long count)
@@ -565,13 +584,34 @@ bool cma_release(struct cma *cma, const struct page *pages,
 	pfn = page_to_pfn(pages);
 
 	VM_BUG_ON(pfn + count > cma->base_pfn + cma->count);
-
-	free_contig_range(pfn, count);
+	if (!IS_ENABLED(CONFIG_CMA_INACTIVE))
+		free_contig_range(pfn, count);
 	cma_clear_bitmap(cma, pfn, count);
 	trace_cma_release(cma->name, pfn, pages, count);
 
 	return true;
 }
+EXPORT_SYMBOL_GPL(cma_release);
+
+#ifdef CONFIG_NO_GKI
+unsigned long cma_used_pages(void)
+{
+	struct cma *cma;
+	unsigned long used;
+	unsigned long val = 0;
+	int i;
+
+	for (i = 0; i < cma_area_count; i++) {
+		cma = &cma_areas[i];
+		spin_lock_irq(&cma->lock);
+		used = bitmap_weight(cma->bitmap, (int)cma_bitmap_maxno(cma));
+		spin_unlock_irq(&cma->lock);
+		val += used << cma->order_per_bit;
+	}
+	return val;
+}
+EXPORT_SYMBOL_GPL(cma_used_pages);
+#endif
 
 int cma_for_each_area(int (*it)(struct cma *cma, void *data), void *data)
 {
@@ -586,3 +626,4 @@ int cma_for_each_area(int (*it)(struct cma *cma, void *data), void *data)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(cma_for_each_area);

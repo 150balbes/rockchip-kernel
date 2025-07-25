@@ -4229,6 +4229,8 @@ process_skb:
 				 */
 				p = buffer_info->rxbuf.page;
 				if (length <= copybreak) {
+					u8 *vaddr;
+
 					if (likely(!(netdev->features & NETIF_F_RXFCS)))
 						length -= 4;
 					skb = e1000_alloc_rx_skb(adapter,
@@ -4236,9 +4238,10 @@ process_skb:
 					if (!skb)
 						break;
 
-					memcpy(skb_tail_pointer(skb),
-					       page_address(p), length);
-
+					vaddr = kmap_atomic(p);
+					memcpy(skb_tail_pointer(skb), vaddr,
+					       length);
+					kunmap_atomic(vaddr);
 					/* re-use the page, so don't erase
 					 * buffer_info->rxbuf.page
 					 */

@@ -30,12 +30,12 @@
 		.gpio_base = (g),			\
 	}
 
-#define CNL_COMMUNITY(b, s, e, g, v)			\
+#define CNL_COMMUNITY(b, s, e, ho, g)			\
 	{						\
 		.barno = (b),				\
 		.padown_offset = CNL_PAD_OWN,		\
 		.padcfglock_offset = CNL_PADCFGLOCK,	\
-		.hostown_offset = CNL_##v##_HOSTSW_OWN,	\
+		.hostown_offset = (ho),			\
 		.is_offset = CNL_GPI_IS,		\
 		.ie_offset = CNL_GPI_IE,		\
 		.pin_base = (s),			\
@@ -45,10 +45,10 @@
 	}
 
 #define CNL_LP_COMMUNITY(b, s, e, g)			\
-	CNL_COMMUNITY(b, s, e, g, LP)
+	CNL_COMMUNITY(b, s, e, CNL_LP_HOSTSW_OWN, g)
 
 #define CNL_H_COMMUNITY(b, s, e, g)			\
-	CNL_COMMUNITY(b, s, e, g, H)
+	CNL_COMMUNITY(b, s, e, CNL_H_HOSTSW_OWN, g)
 
 /* Cannon Lake-H */
 static const struct pinctrl_pin_desc cnlh_pins[] = {

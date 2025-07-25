@@ -31,7 +31,9 @@ mcp77_sor = {
 	.state = g94_sor_state,
 	.power = nv50_sor_power,
 	.clock = nv50_sor_clock,
-	.hdmi = &g84_sor_hdmi,
+	.hdmi = {
+		.ctrl = g84_sor_hdmi_ctrl,
+	},
 	.dp = &g94_sor_dp,
 };
 

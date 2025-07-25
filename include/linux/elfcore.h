@@ -88,13 +88,22 @@ static inline int elf_core_copy_task_regs(struct task_struct *t, elf_gregset_t* 
 {
 #if defined (ELF_CORE_COPY_TASK_REGS)
 	return ELF_CORE_COPY_TASK_REGS(t, elfregs);
-#else
+#elif defined (task_pt_regs)
 	elf_core_copy_regs(elfregs, task_pt_regs(t));
 #endif
 	return 0;
 }
 
-int elf_core_copy_task_fpregs(struct task_struct *t, elf_fpregset_t *fpu);
+extern int dump_fpu (struct pt_regs *, elf_fpregset_t *);
+
+static inline int elf_core_copy_task_fpregs(struct task_struct *t, struct pt_regs *regs, elf_fpregset_t *fpu)
+{
+#ifdef ELF_CORE_COPY_FPREGS
+	return ELF_CORE_COPY_FPREGS(t, fpu);
+#else
+	return dump_fpu(regs, fpu);
+#endif
+}
 
 #ifdef CONFIG_ARCH_BINFMT_ELF_EXTRA_PHDRS
 /*
@@ -105,14 +114,14 @@ int elf_core_copy_task_fpregs(struct task_struct *t, elf_fpregset_t *fpu);
  * Dumping its extra ELF program headers includes all the other information
  * a debugger needs to easily find how the gate DSO was being used.
  */
-extern Elf_Half elf_core_extra_phdrs(void);
+extern Elf_Half elf_core_extra_phdrs(struct coredump_params *cprm);
 extern int
 elf_core_write_extra_phdrs(struct coredump_params *cprm, loff_t offset);
 extern int
 elf_core_write_extra_data(struct coredump_params *cprm);
-extern size_t elf_core_extra_data_size(void);
+extern size_t elf_core_extra_data_size(struct coredump_params *cprm);
 #else
-static inline Elf_Half elf_core_extra_phdrs(void)
+static inline Elf_Half elf_core_extra_phdrs(struct coredump_params *cprm)
 {
 	return 0;
 }
@@ -127,7 +136,7 @@ static inline int elf_core_write_extra_data(struct coredump_params *cprm)
 	return 1;
 }
 
-static inline size_t elf_core_extra_data_size(void)
+static inline size_t elf_core_extra_data_size(struct coredump_params *cprm)
 {
 	return 0;
 }

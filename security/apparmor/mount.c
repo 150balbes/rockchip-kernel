@@ -134,7 +134,7 @@ static int audit_mount(struct aa_profile *profile, const char *op,
 		       struct aa_perms *perms, const char *info, int error)
 {
 	int audit_type = AUDIT_APPARMOR_AUTO;
-	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_NONE, AA_CLASS_MOUNT, op);
+	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_NONE, op);
 
 	if (likely(!error)) {
 		u32 mask = perms->audit;
@@ -190,7 +190,7 @@ static int audit_mount(struct aa_profile *profile, const char *op,
  *
  * Returns: next state after flags match
  */
-static aa_state_t match_mnt_flags(struct aa_dfa *dfa, aa_state_t state,
+static unsigned int match_mnt_flags(struct aa_dfa *dfa, unsigned int state,
 				    unsigned long flags)
 {
 	unsigned int i;
@@ -201,6 +201,25 @@ static aa_state_t match_mnt_flags(struct aa_dfa *dfa, aa_state_t state,
 	}
 
 	return state;
+}
+
+/**
+ * compute_mnt_perms - compute mount permission associated with @state
+ * @dfa: dfa to match against (NOT NULL)
+ * @state: state match finished in
+ *
+ * Returns: mount permissions
+ */
+static struct aa_perms compute_mnt_perms(struct aa_dfa *dfa,
+					   unsigned int state)
+{
+	struct aa_perms perms = {
+		.allow = dfa_user_allow(dfa, state),
+		.audit = dfa_user_audit(dfa, state),
+		.quiet = dfa_user_quiet(dfa, state),
+	};
+
+	return perms;
 }
 
 static const char * const mnt_info_table[] = {
@@ -217,52 +236,50 @@ static const char * const mnt_info_table[] = {
  * Returns 0 on success else element that match failed in, this is the
  * index into the mnt_info_table above
  */
-static int do_match_mnt(struct aa_policydb *policy, aa_state_t start,
+static int do_match_mnt(struct aa_dfa *dfa, unsigned int start,
 			const char *mntpnt, const char *devname,
 			const char *type, unsigned long flags,
 			void *data, bool binary, struct aa_perms *perms)
 {
-	aa_state_t state;
+	unsigned int state;
 
-	AA_BUG(!policy);
-	AA_BUG(!policy->dfa);
-	AA_BUG(!policy->perms);
+	AA_BUG(!dfa);
 	AA_BUG(!perms);
 
-	state = aa_dfa_match(policy->dfa, start, mntpnt);
-	state = aa_dfa_null_transition(policy->dfa, state);
+	state = aa_dfa_match(dfa, start, mntpnt);
+	state = aa_dfa_null_transition(dfa, state);
 	if (!state)
 		return 1;
 
 	if (devname)
-		state = aa_dfa_match(policy->dfa, state, devname);
-	state = aa_dfa_null_transition(policy->dfa, state);
+		state = aa_dfa_match(dfa, state, devname);
+	state = aa_dfa_null_transition(dfa, state);
 	if (!state)
 		return 2;
 
 	if (type)
-		state = aa_dfa_match(policy->dfa, state, type);
-	state = aa_dfa_null_transition(policy->dfa, state);
+		state = aa_dfa_match(dfa, state, type);
+	state = aa_dfa_null_transition(dfa, state);
 	if (!state)
 		return 3;
 
-	state = match_mnt_flags(policy->dfa, state, flags);
+	state = match_mnt_flags(dfa, state, flags);
 	if (!state)
 		return 4;
-	*perms = *aa_lookup_perms(policy, state);
+	*perms = compute_mnt_perms(dfa, state);
 	if (perms->allow & AA_MAY_MOUNT)
 		return 0;
 
 	/* only match data if not binary and the DFA flags data is expected */
 	if (data && !binary && (perms->allow & AA_MNT_CONT_MATCH)) {
-		state = aa_dfa_null_transition(policy->dfa, state);
+		state = aa_dfa_null_transition(dfa, state);
 		if (!state)
 			return 4;
 
-		state = aa_dfa_match(policy->dfa, state, data);
+		state = aa_dfa_match(dfa, state, data);
 		if (!state)
 			return 5;
-		*perms = *aa_lookup_perms(policy, state);
+		*perms = compute_mnt_perms(dfa, state);
 		if (perms->allow & AA_MAY_MOUNT)
 			return 0;
 	}
@@ -303,15 +320,13 @@ static int match_mnt_path_str(struct aa_profile *profile,
 {
 	struct aa_perms perms = { };
 	const char *mntpnt = NULL, *info = NULL;
-	struct aa_ruleset *rules = list_first_entry(&profile->rules,
-						    typeof(*rules), list);
 	int pos, error;
 
 	AA_BUG(!profile);
 	AA_BUG(!mntpath);
 	AA_BUG(!buffer);
 
-	if (!RULE_MEDIATES(rules, AA_CLASS_MOUNT))
+	if (!PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
 		return 0;
 
 	error = aa_path_name(mntpath, path_flags(profile, mntpath), buffer,
@@ -326,8 +341,8 @@ static int match_mnt_path_str(struct aa_profile *profile,
 	}
 
 	error = -EACCES;
-	pos = do_match_mnt(&rules->policy,
-			   rules->policy.start[AA_CLASS_MOUNT],
+	pos = do_match_mnt(profile->policy.dfa,
+			   profile->policy.start[AA_CLASS_MOUNT],
 			   mntpnt, devname, type, flags, data, binary, &perms);
 	if (pos) {
 		info = mnt_info_table[pos];
@@ -360,14 +375,12 @@ static int match_mnt(struct aa_profile *profile, const struct path *path,
 		     bool binary)
 {
 	const char *devname = NULL, *info = NULL;
-	struct aa_ruleset *rules = list_first_entry(&profile->rules,
-						    typeof(*rules), list);
 	int error = -EACCES;
 
 	AA_BUG(!profile);
 	AA_BUG(devpath && !devbuffer);
 
-	if (!RULE_MEDIATES(rules, AA_CLASS_MOUNT))
+	if (!PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
 		return 0;
 
 	if (devpath) {
@@ -569,17 +582,15 @@ out:
 static int profile_umount(struct aa_profile *profile, const struct path *path,
 			  char *buffer)
 {
-	struct aa_ruleset *rules = list_first_entry(&profile->rules,
-						    typeof(*rules), list);
 	struct aa_perms perms = { };
 	const char *name = NULL, *info = NULL;
-	aa_state_t state;
+	unsigned int state;
 	int error;
 
 	AA_BUG(!profile);
 	AA_BUG(!path);
 
-	if (!RULE_MEDIATES(rules, AA_CLASS_MOUNT))
+	if (!PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
 		return 0;
 
 	error = aa_path_name(path, path_flags(profile, path), buffer, &name,
@@ -587,10 +598,10 @@ static int profile_umount(struct aa_profile *profile, const struct path *path,
 	if (error)
 		goto audit;
 
-	state = aa_dfa_match(rules->policy.dfa,
-			     rules->policy.start[AA_CLASS_MOUNT],
+	state = aa_dfa_match(profile->policy.dfa,
+			     profile->policy.start[AA_CLASS_MOUNT],
 			     name);
-	perms = *aa_lookup_perms(&rules->policy, state);
+	perms = compute_mnt_perms(profile->policy.dfa, state);
 	if (AA_MAY_UMOUNT & ~perms.allow)
 		error = -EACCES;
 
@@ -630,12 +641,10 @@ static struct aa_label *build_pivotroot(struct aa_profile *profile,
 					const struct path *old_path,
 					char *old_buffer)
 {
-	struct aa_ruleset *rules = list_first_entry(&profile->rules,
-						    typeof(*rules), list);
 	const char *old_name, *new_name = NULL, *info = NULL;
 	const char *trans_name = NULL;
 	struct aa_perms perms = { };
-	aa_state_t state;
+	unsigned int state;
 	int error;
 
 	AA_BUG(!profile);
@@ -643,7 +652,7 @@ static struct aa_label *build_pivotroot(struct aa_profile *profile,
 	AA_BUG(!old_path);
 
 	if (profile_unconfined(profile) ||
-	    !RULE_MEDIATES(rules, AA_CLASS_MOUNT))
+	    !PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
 		return aa_get_newest_label(&profile->label);
 
 	error = aa_path_name(old_path, path_flags(profile, old_path),
@@ -658,12 +667,12 @@ static struct aa_label *build_pivotroot(struct aa_profile *profile,
 		goto audit;
 
 	error = -EACCES;
-	state = aa_dfa_match(rules->policy.dfa,
-			     rules->policy.start[AA_CLASS_MOUNT],
+	state = aa_dfa_match(profile->policy.dfa,
+			     profile->policy.start[AA_CLASS_MOUNT],
 			     new_name);
-	state = aa_dfa_null_transition(rules->policy.dfa, state);
-	state = aa_dfa_match(rules->policy.dfa, state, old_name);
-	perms = *aa_lookup_perms(&rules->policy, state);
+	state = aa_dfa_null_transition(profile->policy.dfa, state);
+	state = aa_dfa_match(profile->policy.dfa, state, old_name);
+	perms = compute_mnt_perms(profile->policy.dfa, state);
 
 	if (AA_MAY_PIVOTROOT & perms.allow)
 		error = 0;

@@ -8,7 +8,6 @@
  */
 #include <asm/asm.h>
 #include <asm/asmmacro.h>
-#include <asm/asm-extable.h>
 #include <asm/asm-offsets.h>
 #include <asm/errno.h>
 #include <asm/export.h>
@@ -22,7 +21,9 @@
 
 	.macro	EX insn, reg, src, offs
 .ex\@:	\insn	\reg, \src, \offs
-	_asm_extable .ex\@, fault
+	.section __ex_table,"a"
+	PTR	.ex\@, fault
+	.previous
 	.endm
 
 	.macro sc_save_fp base

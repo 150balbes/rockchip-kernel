@@ -35,8 +35,6 @@
  * @cdev: char dev core object for ioctl operations
  * @cxlds: The device state backing this device
  * @detach_work: active memdev lost a port in its ancestry
- * @cxl_nvb: coordinate removal of @cxl_nvd if present
- * @cxl_nvd: optional bridge to an nvdimm if the device supports pmem
  * @id: id number of this memdev instance.
  */
 struct cxl_memdev {
@@ -44,8 +42,6 @@ struct cxl_memdev {
 	struct cdev cdev;
 	struct cxl_dev_state *cxlds;
 	struct work_struct detach_work;
-	struct cxl_nvdimm_bridge *cxl_nvb;
-	struct cxl_nvdimm *cxl_nvd;
 	int id;
 };
 
@@ -79,6 +75,9 @@ static inline bool is_cxl_endpoint(struct cxl_port *port)
 }
 
 struct cxl_memdev *devm_cxl_add_memdev(struct cxl_dev_state *cxlds);
+int devm_cxl_dpa_reserve(struct cxl_endpoint_decoder *cxled,
+			 resource_size_t base, resource_size_t len,
+			 resource_size_t skipped);
 
 static inline struct cxl_ep *cxl_ep_load(struct cxl_port *port,
 					 struct cxl_memdev *cxlmd)
@@ -101,7 +100,6 @@ static inline struct cxl_ep *cxl_ep_load(struct cxl_port *port,
  *            outputs commands this is always expected to be deterministic. For
  *            variable sized output commands, it tells the exact number of bytes
  *            written.
- * @min_out: (input) internal command output payload size validation
  * @return_code: (output) Error code returned from hardware.
  *
  * This is the primary mechanism used to send commands to the hardware.
@@ -116,7 +114,6 @@ struct cxl_mbox_cmd {
 	void *payload_out;
 	size_t size_in;
 	size_t size_out;
-	size_t min_out;
 	u16 return_code;
 };
 
@@ -201,10 +198,8 @@ struct cxl_endpoint_dvsec_info {
  * Currently only memory devices are represented.
  *
  * @dev: The device associated with this CXL state
- * @cxlmd: The device representing the CXL.mem capabilities of @dev
  * @regs: Parsed register blocks
  * @cxl_dvsec: Offset to the PCIe device DVSEC
- * @rcd: operating in RCD mode (CXL 3.0 9.11.8 CXL Devices Attached to an RCH)
  * @payload_size: Size of space for payload
  *                (CXL 2.0 8.2.8.4.3 Mailbox Capabilities Register)
  * @lsa_size: Size of Label Storage Area
@@ -235,12 +230,10 @@ struct cxl_endpoint_dvsec_info {
  */
 struct cxl_dev_state {
 	struct device *dev;
-	struct cxl_memdev *cxlmd;
 
 	struct cxl_regs regs;
 	int cxl_dvsec;
 
-	bool rcd;
 	size_t payload_size;
 	size_t lsa_size;
 	struct mutex mbox_mutex; /* Protects device mailbox and firmware */
@@ -292,12 +285,6 @@ enum cxl_opcode {
 	CXL_MBOX_OP_GET_SCAN_MEDIA_CAPS	= 0x4303,
 	CXL_MBOX_OP_SCAN_MEDIA		= 0x4304,
 	CXL_MBOX_OP_GET_SCAN_MEDIA	= 0x4305,
-	CXL_MBOX_OP_GET_SECURITY_STATE	= 0x4500,
-	CXL_MBOX_OP_SET_PASSPHRASE	= 0x4501,
-	CXL_MBOX_OP_DISABLE_PASSPHRASE	= 0x4502,
-	CXL_MBOX_OP_UNLOCK		= 0x4503,
-	CXL_MBOX_OP_FREEZE_SECURITY	= 0x4504,
-	CXL_MBOX_OP_PASSPHRASE_SECURE_ERASE	= 0x4505,
 	CXL_MBOX_OP_MAX			= 0x10000
 };
 
@@ -397,43 +384,8 @@ struct cxl_mem_command {
 #define CXL_CMD_FLAG_FORCE_ENABLE BIT(0)
 };
 
-#define CXL_PMEM_SEC_STATE_USER_PASS_SET	0x01
-#define CXL_PMEM_SEC_STATE_MASTER_PASS_SET	0x02
-#define CXL_PMEM_SEC_STATE_LOCKED		0x04
-#define CXL_PMEM_SEC_STATE_FROZEN		0x08
-#define CXL_PMEM_SEC_STATE_USER_PLIMIT		0x10
-#define CXL_PMEM_SEC_STATE_MASTER_PLIMIT	0x20
-
-/* set passphrase input payload */
-struct cxl_set_pass {
-	u8 type;
-	u8 reserved[31];
-	/* CXL field using NVDIMM define, same length */
-	u8 old_pass[NVDIMM_PASSPHRASE_LEN];
-	u8 new_pass[NVDIMM_PASSPHRASE_LEN];
-} __packed;
-
-/* disable passphrase input payload */
-struct cxl_disable_pass {
-	u8 type;
-	u8 reserved[31];
-	u8 pass[NVDIMM_PASSPHRASE_LEN];
-} __packed;
-
-/* passphrase secure erase payload */
-struct cxl_pass_erase {
-	u8 type;
-	u8 reserved[31];
-	u8 pass[NVDIMM_PASSPHRASE_LEN];
-} __packed;
-
-enum {
-	CXL_PMEM_SEC_PASS_MASTER = 0,
-	CXL_PMEM_SEC_PASS_USER,
-};
-
-int cxl_internal_send_cmd(struct cxl_dev_state *cxlds,
-			  struct cxl_mbox_cmd *cmd);
+int cxl_mbox_send_cmd(struct cxl_dev_state *cxlds, u16 opcode, void *in,
+		      size_t in_size, void *out, size_t out_size);
 int cxl_dev_state_identify(struct cxl_dev_state *cxlds);
 int cxl_await_media_ready(struct cxl_dev_state *cxlds);
 int cxl_enumerate_cmds(struct cxl_dev_state *cxlds);

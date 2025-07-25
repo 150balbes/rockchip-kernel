@@ -376,10 +376,18 @@ struct msm_file_private {
 	 */
 	int sysprof;
 
-	/** comm: Overridden task comm, see MSM_PARAM_COMM */
+	/**
+	 * comm: Overridden task comm, see MSM_PARAM_COMM
+	 *
+	 * Accessed under msm_gpu::lock
+	 */
 	char *comm;
 
-	/** cmdline: Overridden task cmdline, see MSM_PARAM_CMDLINE */
+	/**
+	 * cmdline: Overridden task cmdline, see MSM_PARAM_CMDLINE
+	 *
+	 * Accessed under msm_gpu::lock
+	 */
 	char *cmdline;
 
 	/**
@@ -492,7 +500,7 @@ struct msm_gpu_submitqueue {
 	struct msm_file_private *ctx;
 	struct list_head node;
 	struct idr fence_idr;
-	struct mutex idr_lock;
+	struct spinlock idr_lock;
 	struct mutex lock;
 	struct kref ref;
 	struct drm_sched_entity *entity;

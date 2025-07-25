@@ -21,7 +21,6 @@ struct regulator_userspace_consumer_data {
 	struct regulator_bulk_data *supplies;
 
 	bool init_on;
-	bool no_autoswitch;
 };
 
 #endif /* __REGULATOR_PLATFORM_CONSUMER_H_ */

@@ -37,10 +37,9 @@ extern void ftrace_boot_snapshot(void);
 static inline void ftrace_boot_snapshot(void) { }
 #endif
 
+#ifdef CONFIG_FUNCTION_TRACER
 struct ftrace_ops;
 struct ftrace_regs;
-
-#ifdef CONFIG_FUNCTION_TRACER
 /*
  * If the arch's mcount caller does not support all of ftrace's
  * features, then it must call an indirect function that
@@ -111,11 +110,12 @@ struct ftrace_regs {
 #define arch_ftrace_get_regs(fregs) (&(fregs)->regs)
 
 /*
- * ftrace_regs_set_instruction_pointer() is to be defined by the architecture
- * if to allow setting of the instruction pointer from the ftrace_regs when
- * HAVE_DYNAMIC_FTRACE_WITH_ARGS is set and it supports live kernel patching.
+ * ftrace_instruction_pointer_set() is to be defined by the architecture
+ * if to allow setting of the instruction pointer from the ftrace_regs
+ * when HAVE_DYNAMIC_FTRACE_WITH_ARGS is set and it supports
+ * live kernel patching.
  */
-#define ftrace_regs_set_instruction_pointer(fregs, ip) do { } while (0)
+#define ftrace_instruction_pointer_set(fregs, ip) do { } while (0)
 #endif /* CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS */
 
 static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs)
@@ -125,35 +125,6 @@ static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs
 
 	return arch_ftrace_get_regs(fregs);
 }
-
-/*
- * When true, the ftrace_regs_{get,set}_*() functions may be used on fregs.
- * Note: this can be true even when ftrace_get_regs() cannot provide a pt_regs.
- */
-static __always_inline bool ftrace_regs_has_args(struct ftrace_regs *fregs)
-{
-	if (IS_ENABLED(CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS))
-		return true;
-
-	return ftrace_get_regs(fregs) != NULL;
-}
-
-#ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
-#define ftrace_regs_get_instruction_pointer(fregs) \
-	instruction_pointer(ftrace_get_regs(fregs))
-#define ftrace_regs_get_argument(fregs, n) \
-	regs_get_kernel_argument(ftrace_get_regs(fregs), n)
-#define ftrace_regs_get_stack_pointer(fregs) \
-	kernel_stack_pointer(ftrace_get_regs(fregs))
-#define ftrace_regs_return_value(fregs) \
-	regs_return_value(ftrace_get_regs(fregs))
-#define ftrace_regs_set_return_value(fregs, ret) \
-	regs_set_return_value(ftrace_get_regs(fregs), ret)
-#define ftrace_override_function_with_return(fregs) \
-	override_function_with_return(ftrace_get_regs(fregs))
-#define ftrace_regs_query_register_offset(name) \
-	regs_query_register_offset(name)
-#endif
 
 typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
 			      struct ftrace_ops *op, struct ftrace_regs *fregs);
@@ -456,7 +427,9 @@ static inline int modify_ftrace_direct_multi_nolock(struct ftrace_ops *ops, unsi
 {
 	return -ENODEV;
 }
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
+#ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 /*
  * This must be implemented by the architecture.
  * It is the way the ftrace direct_ops helper, when called
@@ -470,9 +443,9 @@ static inline int modify_ftrace_direct_multi_nolock(struct ftrace_ops *ops, unsi
  * the return from the trampoline jump to the direct caller
  * instead of going back to the function it just traced.
  */
-static inline void arch_ftrace_set_direct_caller(struct ftrace_regs *fregs,
+static inline void arch_ftrace_set_direct_caller(struct pt_regs *regs,
 						 unsigned long addr) { }
-#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
+#endif /* CONFIG_HAVE_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
 #ifdef CONFIG_STACK_TRACER
 
@@ -970,7 +943,7 @@ static inline void __ftrace_enabled_restore(int enabled)
 #define CALLER_ADDR5 ((unsigned long)ftrace_return_address(5))
 #define CALLER_ADDR6 ((unsigned long)ftrace_return_address(6))
 
-static inline unsigned long get_lock_parent_ip(void)
+static __always_inline unsigned long get_lock_parent_ip(void)
 {
 	unsigned long addr = CALLER_ADDR0;
 

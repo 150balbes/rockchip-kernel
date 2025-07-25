@@ -182,8 +182,7 @@ static int __pnp_bus_suspend(struct device *dev, pm_message_t state)
 			return error;
 	}
 
-	/* can_write is necessary to be able to re-start the device on resume */
-	if (pnp_can_disable(pnp_dev) && pnp_can_write(pnp_dev)) {
+	if (pnp_can_disable(pnp_dev)) {
 		error = pnp_stop_dev(pnp_dev);
 		if (error)
 			return error;

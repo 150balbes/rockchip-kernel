@@ -179,20 +179,22 @@ static int intel_menlow_memory_add(struct acpi_device *device)
 
 }
 
-static void intel_menlow_memory_remove(struct acpi_device *device)
+static int intel_menlow_memory_remove(struct acpi_device *device)
 {
 	struct thermal_cooling_device *cdev;
 
 	if (!device)
-		return;
+		return -EINVAL;
 
 	cdev = acpi_driver_data(device);
 	if (!cdev)
-		return;
+		return -EINVAL;
 
 	sysfs_remove_link(&device->dev.kobj, "thermal_cooling");
 	sysfs_remove_link(&cdev->device.kobj, "device");
 	thermal_cooling_device_unregister(cdev);
+
+	return 0;
 }
 
 static const struct acpi_device_id intel_menlow_memory_ids[] = {

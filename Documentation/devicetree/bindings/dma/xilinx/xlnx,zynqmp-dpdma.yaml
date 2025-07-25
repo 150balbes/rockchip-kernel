@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/dma/xilinx/xlnx,zynqmp-dpdma.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Xilinx ZynqMP DisplayPort DMA Controller
+title: Xilinx ZynqMP DisplayPort DMA Controller Device Tree Bindings
 
 description: |
   These bindings describe the DMA engine included in the Xilinx ZynqMP

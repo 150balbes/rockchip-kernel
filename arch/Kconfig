@@ -9,6 +9,14 @@
 #
 source "arch/$(SRCARCH)/Kconfig"
 
+config ARCH_CONFIGURES_CPU_MITIGATIONS
+	bool
+
+if !ARCH_CONFIGURES_CPU_MITIGATIONS
+config CPU_MITIGATIONS
+	def_bool y
+endif
+
 menu "General architecture-dependent options"
 
 config CRASH_CORE
@@ -32,6 +40,9 @@ config ARCH_HAS_SUBPAGE_FAULTS
 	  must be implemented.
 
 config HOTPLUG_SMT
+	bool
+
+config SMT_NUM_THREADS_DYNAMIC
 	bool
 
 config GENERIC_ENTRY
@@ -285,6 +296,9 @@ config ARCH_HAS_DMA_SET_UNCACHED
 config ARCH_HAS_DMA_CLEAR_UNCACHED
 	bool
 
+config ARCH_HAS_CPU_FINALIZE_INIT
+	bool
+
 # Select if arch init_task must go in the __init_task_data section
 config ARCH_TASK_STRUCT_ON_STACK
 	bool
@@ -468,9 +482,6 @@ config ARCH_WANT_IRQS_OFF_ACTIVATE_MM
 config ARCH_HAVE_NMI_SAFE_CMPXCHG
 	bool
 
-config ARCH_HAS_NMI_SAFE_THIS_CPU_OPS
-	bool
-
 config HAVE_ALIGNED_STRUCT_PAGE
 	bool
 	help
@@ -639,6 +650,7 @@ config SHADOW_CALL_STACK
 	bool "Shadow Call Stack"
 	depends on ARCH_SUPPORTS_SHADOW_CALL_STACK
 	depends on DYNAMIC_FTRACE_WITH_ARGS || DYNAMIC_FTRACE_WITH_REGS || !FUNCTION_GRAPH_TRACER
+	depends on MMU
 	help
 	  This option enables the compiler's Shadow Call Stack, which
 	  uses a shadow stack to protect function return addresses from
@@ -653,13 +665,6 @@ config SHADOW_CALL_STACK
 	  of shadow stacks in memory, which means an attacker capable of
 	  reading and writing arbitrary memory may be able to locate them
 	  and hijack control flow by modifying the stacks.
-
-config DYNAMIC_SCS
-	bool
-	help
-	  Set by the arch code if it relies on code patching to insert the
-	  shadow call stack push and pop instructions rather than on the
-	  compiler.
 
 config LTO
 	bool
@@ -1437,29 +1442,5 @@ config ARCH_HAS_NONLEAF_PMD_YOUNG
 source "kernel/gcov/Kconfig"
 
 source "scripts/gcc-plugins/Kconfig"
-
-config FUNCTION_ALIGNMENT_4B
-	bool
-
-config FUNCTION_ALIGNMENT_8B
-	bool
-
-config FUNCTION_ALIGNMENT_16B
-	bool
-
-config FUNCTION_ALIGNMENT_32B
-	bool
-
-config FUNCTION_ALIGNMENT_64B
-	bool
-
-config FUNCTION_ALIGNMENT
-	int
-	default 64 if FUNCTION_ALIGNMENT_64B
-	default 32 if FUNCTION_ALIGNMENT_32B
-	default 16 if FUNCTION_ALIGNMENT_16B
-	default 8 if FUNCTION_ALIGNMENT_8B
-	default 4 if FUNCTION_ALIGNMENT_4B
-	default 0
 
 endmenu

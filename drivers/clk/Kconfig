@@ -34,6 +34,13 @@ menuconfig COMMON_CLK
 
 if COMMON_CLK
 
+config COMMON_CLK_PROCFS
+	bool "Common Clock PROCFS interface"
+	depends on COMMON_CLK && PROC_FS && ARCH_ROCKCHIP
+	default n
+	help
+	  Turns on the PROCFS interface for clock.
+
 config COMMON_CLK_WM831X
 	tristate "Clock driver for WM831x/2x PMICs"
 	depends on MFD_WM831X
@@ -83,7 +90,7 @@ config COMMON_CLK_MAX9485
 
 config COMMON_CLK_RK808
 	tristate "Clock driver for RK805/RK808/RK809/RK817/RK818"
-	depends on MFD_RK8XX
+	depends on MFD_RK808
 	help
 	  This driver supports RK805, RK809 and RK817, RK808 and RK818 crystal oscillator clock.
 	  These multi-function devices have two fixed-rate oscillators, clocked at 32KHz each.
@@ -92,7 +99,7 @@ config COMMON_CLK_RK808
 config COMMON_CLK_HI655X
 	tristate "Clock driver for Hi655x" if EXPERT
 	depends on (MFD_HI655X_PMIC || COMPILE_TEST)
-	depends on REGMAP
+	select REGMAP
 	default MFD_HI655X_PMIC
 	help
 	  This driver supports the hi655x PMIC clock. This
@@ -427,6 +434,7 @@ config COMMON_CLK_BD718XX
 config COMMON_CLK_FIXED_MMIO
 	bool "Clock driver for Memory Mapped Fixed values"
 	depends on COMMON_CLK && OF
+	depends on HAS_IOMEM
 	help
 	  Support for Memory Mapped IO Fixed clocks
 

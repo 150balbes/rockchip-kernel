@@ -23,7 +23,6 @@ struct fwnode_handle;
 struct device;
 
 struct usb_power_delivery;
-struct usb_power_delivery_desc;
 
 enum typec_port_type {
 	TYPEC_PORT_SRC,
@@ -327,9 +326,6 @@ int typec_find_port_data_role(const char *name);
 void typec_partner_set_svdm_version(struct typec_partner *partner,
 				    enum usb_pd_svdm_ver svdm_version);
 int typec_get_negotiated_svdm_version(struct typec_port *port);
-
-struct usb_power_delivery *typec_partner_usb_power_delivery_register(struct typec_partner *partner,
-							struct usb_power_delivery_desc *desc);
 
 int typec_port_set_usb_power_delivery(struct typec_port *port, struct usb_power_delivery *pd);
 int typec_partner_set_usb_power_delivery(struct typec_partner *partner,

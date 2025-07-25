@@ -10,7 +10,7 @@ maintainers:
   - Mark Brown <broonie@kernel.org>
 
 allOf:
-  - $ref: dai-common.yaml#
+  - $ref: name-prefix.yaml#
 
 properties:
   compatible:

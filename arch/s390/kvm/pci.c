@@ -434,7 +434,6 @@ static void kvm_s390_pci_dev_release(struct zpci_dev *zdev)
 static int kvm_s390_pci_register_kvm(void *opaque, struct kvm *kvm)
 {
 	struct zpci_dev *zdev = opaque;
-	u8 status;
 	int rc;
 
 	if (!zdev)
@@ -487,7 +486,7 @@ static int kvm_s390_pci_register_kvm(void *opaque, struct kvm *kvm)
 
 	/* Re-register the IOMMU that was already created */
 	rc = zpci_register_ioat(zdev, 0, zdev->start_dma, zdev->end_dma,
-				virt_to_phys(zdev->dma_table), &status);
+				virt_to_phys(zdev->dma_table));
 	if (rc)
 		goto clear_gisa;
 
@@ -517,7 +516,6 @@ static void kvm_s390_pci_unregister_kvm(void *opaque)
 {
 	struct zpci_dev *zdev = opaque;
 	struct kvm *kvm;
-	u8 status;
 
 	if (!zdev)
 		return;
@@ -556,7 +554,7 @@ static void kvm_s390_pci_unregister_kvm(void *opaque)
 
 	/* Re-register the IOMMU that was already created */
 	zpci_register_ioat(zdev, 0, zdev->start_dma, zdev->end_dma,
-			   virt_to_phys(zdev->dma_table), &status);
+			   virt_to_phys(zdev->dma_table));
 
 out:
 	spin_lock(&kvm->arch.kzdev_list_lock);

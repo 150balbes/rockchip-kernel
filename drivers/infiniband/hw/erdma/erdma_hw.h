@@ -11,8 +11,6 @@
 #include <linux/types.h>
 
 /* PCIe device related definition. */
-#define PCI_VENDOR_ID_ALIBABA 0x1ded
-
 #define ERDMA_PCI_WIDTH 64
 #define ERDMA_FUNC_BAR 0
 #define ERDMA_MISX_BAR 2
@@ -112,6 +110,10 @@
 
 #define ERDMA_PAGE_SIZE_SUPPORT 0x7FFFF000
 
+/* Hardware page size definition */
+#define ERDMA_HW_PAGE_SHIFT 12
+#define ERDMA_HW_PAGE_SIZE 4096
+
 /* WQE related. */
 #define EQE_SIZE 16
 #define EQE_SHIFT 4
@@ -145,7 +147,6 @@ enum CMDQ_RDMA_OPCODE {
 	CMDQ_OPCODE_MODIFY_QP = 3,
 	CMDQ_OPCODE_CREATE_CQ = 4,
 	CMDQ_OPCODE_DESTROY_CQ = 5,
-	CMDQ_OPCODE_REFLUSH = 6,
 	CMDQ_OPCODE_REG_MR = 8,
 	CMDQ_OPCODE_DEREG_MR = 9
 };
@@ -225,7 +226,8 @@ struct erdma_cmdq_create_cq_req {
 /* regmr cfg1 */
 #define ERDMA_CMD_REGMR_PD_MASK GENMASK(31, 12)
 #define ERDMA_CMD_REGMR_TYPE_MASK GENMASK(7, 6)
-#define ERDMA_CMD_REGMR_RIGHT_MASK GENMASK(5, 1)
+#define ERDMA_CMD_REGMR_RIGHT_MASK GENMASK(5, 2)
+#define ERDMA_CMD_REGMR_ACC_MODE_MASK GENMASK(1, 0)
 
 /* regmr cfg2 */
 #define ERDMA_CMD_REGMR_PAGESIZE_MASK GENMASK(31, 27)
@@ -302,16 +304,8 @@ struct erdma_cmdq_destroy_qp_req {
 	u32 qpn;
 };
 
-struct erdma_cmdq_reflush_req {
-	u64 hdr;
-	u32 qpn;
-	u32 sq_pi;
-	u32 rq_pi;
-};
-
 /* cap qword 0 definition */
 #define ERDMA_CMD_DEV_CAP_MAX_CQE_MASK GENMASK_ULL(47, 40)
-#define ERDMA_CMD_DEV_CAP_FLAGS_MASK GENMASK_ULL(31, 24)
 #define ERDMA_CMD_DEV_CAP_MAX_RECV_WR_MASK GENMASK_ULL(23, 16)
 #define ERDMA_CMD_DEV_CAP_MAX_MR_SIZE_MASK GENMASK_ULL(7, 0)
 
@@ -322,10 +316,6 @@ struct erdma_cmdq_reflush_req {
 #define ERDMA_CMD_DEV_CAP_MAX_MW_MASK GENMASK_ULL(7, 0)
 
 #define ERDMA_NQP_PER_QBLOCK 1024
-
-enum {
-	ERDMA_DEV_CAP_FLAGS_ATOMIC = 1 << 7,
-};
 
 #define ERDMA_CMD_INFO0_FW_VER_MASK GENMASK_ULL(31, 0)
 
@@ -352,9 +342,9 @@ struct erdma_cqe {
 };
 
 struct erdma_sge {
-	__aligned_le64 addr;
+	__aligned_le64 laddr;
 	__le32 length;
-	__le32 key;
+	__le32 lkey;
 };
 
 /* Receive Queue Element */
@@ -382,7 +372,8 @@ struct erdma_rqe {
 #define ERDMA_SQE_HDR_WQEBB_INDEX_MASK GENMASK_ULL(15, 0)
 
 /* REG MR attrs */
-#define ERDMA_SQE_MR_ACCESS_MASK GENMASK(5, 1)
+#define ERDMA_SQE_MR_MODE_MASK GENMASK(1, 0)
+#define ERDMA_SQE_MR_ACCESS_MASK GENMASK(5, 2)
 #define ERDMA_SQE_MR_MTT_TYPE_MASK GENMASK(7, 6)
 #define ERDMA_SQE_MR_MTT_CNT_MASK GENMASK(31, 12)
 
@@ -421,16 +412,6 @@ struct erdma_readreq_sqe {
 	__le32 rsvd;
 };
 
-struct erdma_atomic_sqe {
-	__le64 hdr;
-	__le64 rsvd;
-	__le64 fetchadd_swap_data;
-	__le64 cmp_data;
-
-	struct erdma_sge remote;
-	struct erdma_sge sgl;
-};
-
 struct erdma_reg_mr_sqe {
 	__le64 hdr;
 	__le64 addr;
@@ -441,7 +422,7 @@ struct erdma_reg_mr_sqe {
 };
 
 /* EQ related. */
-#define ERDMA_DEFAULT_EQ_DEPTH 256
+#define ERDMA_DEFAULT_EQ_DEPTH 4096
 
 /* ceqe */
 #define ERDMA_CEQE_HDR_DB_MASK BIT_ULL(63)
@@ -490,9 +471,7 @@ enum erdma_opcode {
 	ERDMA_OP_REG_MR = 14,
 	ERDMA_OP_LOCAL_INV = 15,
 	ERDMA_OP_READ_WITH_INV = 16,
-	ERDMA_OP_ATOMIC_CAS = 17,
-	ERDMA_OP_ATOMIC_FAD = 18,
-	ERDMA_NUM_OPCODES = 19,
+	ERDMA_NUM_OPCODES = 17,
 	ERDMA_OP_INVALID = ERDMA_NUM_OPCODES + 1
 };
 

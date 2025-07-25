@@ -467,8 +467,9 @@ static int dump_btf_c(const struct btf *btf,
 	int err = 0, i;
 
 	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
-	if (!d)
-		return -errno;
+	err = libbpf_get_error(d);
+	if (err)
+		return err;
 
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
@@ -511,9 +512,11 @@ static struct btf *get_vmlinux_btf_from_sysfs(void)
 	struct btf *base;
 
 	base = btf__parse(sysfs_vmlinux, NULL);
-	if (!base)
-		p_err("failed to parse vmlinux BTF at '%s': %d\n",
-		      sysfs_vmlinux, -errno);
+	if (libbpf_get_error(base)) {
+		p_err("failed to parse vmlinux BTF at '%s': %ld\n",
+		      sysfs_vmlinux, libbpf_get_error(base));
+		base = NULL;
+	}
 
 	return base;
 }
@@ -556,7 +559,7 @@ static int do_dump(int argc, char **argv)
 	__u32 btf_id = -1;
 	const char *src;
 	int fd = -1;
-	int err = 0;
+	int err;
 
 	if (!REQ_ARGS(2)) {
 		usage();
@@ -631,8 +634,8 @@ static int do_dump(int argc, char **argv)
 			base = get_vmlinux_btf_from_sysfs();
 
 		btf = btf__parse_split(*argv, base ?: base_btf);
+		err = libbpf_get_error(btf);
 		if (!btf) {
-			err = -errno;
 			p_err("failed to load BTF from %s: %s",
 			      *argv, strerror(errno));
 			goto done;
@@ -678,8 +681,8 @@ static int do_dump(int argc, char **argv)
 		}
 
 		btf = btf__load_from_kernel_by_id_split(btf_id, base_btf);
+		err = libbpf_get_error(btf);
 		if (!btf) {
-			err = -errno;
 			p_err("get btf by id (%u): %s", btf_id, strerror(errno));
 			goto done;
 		}
@@ -812,7 +815,8 @@ build_btf_type_table(struct hashmap *tab, enum bpf_obj_type type,
 		if (!btf_id)
 			continue;
 
-		err = hashmap__append(tab, btf_id, id);
+		err = hashmap__append(tab, u32_as_hash_field(btf_id),
+				      u32_as_hash_field(id));
 		if (err) {
 			p_err("failed to append entry to hashmap for BTF ID %u, object ID %u: %s",
 			      btf_id, id, strerror(-err));
@@ -871,13 +875,17 @@ show_btf_plain(struct bpf_btf_info *info, int fd,
 	printf("size %uB", info->btf_size);
 
 	n = 0;
-	hashmap__for_each_key_entry(btf_prog_table, entry, info->id) {
-		printf("%s%lu", n++ == 0 ? "  prog_ids " : ",", entry->value);
+	hashmap__for_each_key_entry(btf_prog_table, entry,
+				    u32_as_hash_field(info->id)) {
+		printf("%s%u", n++ == 0 ? "  prog_ids " : ",",
+		       hash_field_as_u32(entry->value));
 	}
 
 	n = 0;
-	hashmap__for_each_key_entry(btf_map_table, entry, info->id) {
-		printf("%s%lu", n++ == 0 ? "  map_ids " : ",", entry->value);
+	hashmap__for_each_key_entry(btf_map_table, entry,
+				    u32_as_hash_field(info->id)) {
+		printf("%s%u", n++ == 0 ? "  map_ids " : ",",
+		       hash_field_as_u32(entry->value));
 	}
 
 	emit_obj_refs_plain(refs_table, info->id, "\n\tpids ");
@@ -899,15 +907,17 @@ show_btf_json(struct bpf_btf_info *info, int fd,
 
 	jsonw_name(json_wtr, "prog_ids");
 	jsonw_start_array(json_wtr);	/* prog_ids */
-	hashmap__for_each_key_entry(btf_prog_table, entry, info->id) {
-		jsonw_uint(json_wtr, entry->value);
+	hashmap__for_each_key_entry(btf_prog_table, entry,
+				    u32_as_hash_field(info->id)) {
+		jsonw_uint(json_wtr, hash_field_as_u32(entry->value));
 	}
 	jsonw_end_array(json_wtr);	/* prog_ids */
 
 	jsonw_name(json_wtr, "map_ids");
 	jsonw_start_array(json_wtr);	/* map_ids */
-	hashmap__for_each_key_entry(btf_map_table, entry, info->id) {
-		jsonw_uint(json_wtr, entry->value);
+	hashmap__for_each_key_entry(btf_map_table, entry,
+				    u32_as_hash_field(info->id)) {
+		jsonw_uint(json_wtr, hash_field_as_u32(entry->value));
 	}
 	jsonw_end_array(json_wtr);	/* map_ids */
 

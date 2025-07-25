@@ -12,10 +12,6 @@
 #include <linux/vmalloc.h>
 #include <linux/vmstat.h>
 
-#ifdef CONFIG_DYNAMIC_SCS
-DEFINE_STATIC_KEY_FALSE(dynamic_scs_enabled);
-#endif
-
 static void __scs_account(void *s, int account)
 {
 	struct page *scs_page = vmalloc_to_page(s);
@@ -105,20 +101,14 @@ static int scs_cleanup(unsigned int cpu)
 
 void __init scs_init(void)
 {
-	if (!scs_is_enabled())
-		return;
 	cpuhp_setup_state(CPUHP_BP_PREPARE_DYN, "scs:scs_cache", NULL,
 			  scs_cleanup);
 }
 
 int scs_prepare(struct task_struct *tsk, int node)
 {
-	void *s;
+	void *s = scs_alloc(node);
 
-	if (!scs_is_enabled())
-		return 0;
-
-	s = scs_alloc(node);
 	if (!s)
 		return -ENOMEM;
 
@@ -158,7 +148,7 @@ void scs_release(struct task_struct *tsk)
 {
 	void *s = task_scs(tsk);
 
-	if (!scs_is_enabled() || !s)
+	if (!s)
 		return;
 
 	WARN(task_scs_end_corrupted(tsk),

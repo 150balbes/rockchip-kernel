@@ -79,9 +79,10 @@ void fscrypt_put_master_key(struct fscrypt_master_key *mk)
 	call_rcu(&mk->mk_rcu_head, fscrypt_free_master_key);
 }
 
-void fscrypt_put_master_key_activeref(struct super_block *sb,
-				      struct fscrypt_master_key *mk)
+void fscrypt_put_master_key_activeref(struct fscrypt_master_key *mk)
 {
+	struct super_block *sb = mk->mk_sb;
+	struct fscrypt_keyring *keyring = sb->s_master_keys;
 	size_t i;
 
 	if (!refcount_dec_and_test(&mk->mk_active_refs))
@@ -92,9 +93,9 @@ void fscrypt_put_master_key_activeref(struct super_block *sb,
 	 * destroying any subkeys embedded in it.
 	 */
 
-	spin_lock(&sb->s_master_keys->lock);
+	spin_lock(&keyring->lock);
 	hlist_del_rcu(&mk->mk_node);
-	spin_unlock(&sb->s_master_keys->lock);
+	spin_unlock(&keyring->lock);
 
 	/*
 	 * ->mk_active_refs == 0 implies that ->mk_secret is not present and
@@ -242,7 +243,7 @@ void fscrypt_destroy_keyring(struct super_block *sb)
 			WARN_ON(refcount_read(&mk->mk_struct_refs) != 1);
 			WARN_ON(!is_master_key_secret_present(&mk->mk_secret));
 			wipe_master_key_secret(&mk->mk_secret);
-			fscrypt_put_master_key_activeref(sb, mk);
+			fscrypt_put_master_key_activeref(mk);
 		}
 	}
 	kfree_sensitive(keyring);
@@ -423,6 +424,7 @@ static int add_new_master_key(struct super_block *sb,
 	if (!mk)
 		return -ENOMEM;
 
+	mk->mk_sb = sb;
 	init_rwsem(&mk->mk_sem);
 	refcount_set(&mk->mk_struct_refs, 1);
 	mk->mk_spec = *mk_spec;
@@ -1066,7 +1068,7 @@ static int do_remove_key(struct file *filp, void __user *_uarg, bool all_users)
 	err = -ENOKEY;
 	if (is_master_key_secret_present(&mk->mk_secret)) {
 		wipe_master_key_secret(&mk->mk_secret);
-		fscrypt_put_master_key_activeref(sb, mk);
+		fscrypt_put_master_key_activeref(mk);
 		err = 0;
 	}
 	inodes_remain = refcount_read(&mk->mk_active_refs) > 0;

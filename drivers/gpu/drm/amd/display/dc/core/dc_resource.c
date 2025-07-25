@@ -1446,6 +1446,26 @@ static int acquire_first_split_pipe(
 
 			split_pipe->stream = stream;
 			return i;
+		} else if (split_pipe->prev_odm_pipe &&
+				split_pipe->prev_odm_pipe->plane_state == split_pipe->plane_state) {
+			split_pipe->prev_odm_pipe->next_odm_pipe = split_pipe->next_odm_pipe;
+			if (split_pipe->next_odm_pipe)
+				split_pipe->next_odm_pipe->prev_odm_pipe = split_pipe->prev_odm_pipe;
+
+			if (split_pipe->prev_odm_pipe->plane_state)
+				resource_build_scaling_params(split_pipe->prev_odm_pipe);
+
+			memset(split_pipe, 0, sizeof(*split_pipe));
+			split_pipe->stream_res.tg = pool->timing_generators[i];
+			split_pipe->plane_res.hubp = pool->hubps[i];
+			split_pipe->plane_res.ipp = pool->ipps[i];
+			split_pipe->plane_res.dpp = pool->dpps[i];
+			split_pipe->stream_res.opp = pool->opps[i];
+			split_pipe->plane_res.mpcc_inst = pool->dpps[i]->inst;
+			split_pipe->pipe_idx = i;
+
+			split_pipe->stream = stream;
+			return i;
 		}
 	}
 	return -1;
@@ -1707,6 +1727,9 @@ bool dc_remove_plane_from_context(
 	struct dc_stream_status *stream_status = NULL;
 	struct resource_pool *pool = dc->res_pool;
 
+	if (!plane_state)
+		return true;
+
 	for (i = 0; i < context->stream_count; i++)
 		if (context->streams[i] == stream) {
 			stream_status = &context->stream_status[i];
@@ -1768,17 +1791,6 @@ bool dc_remove_plane_from_context(
 	return true;
 }
 
-/**
- * dc_rem_all_planes_for_stream - Remove planes attached to the target stream.
- *
- * @dc: Current dc state.
- * @stream: Target stream, which we want to remove the attached plans.
- * @context: New context.
- *
- * Return:
- * Return true if DC was able to remove all planes from the target
- * stream, otherwise, return false.
- */
 bool dc_rem_all_planes_for_stream(
 		const struct dc *dc,
 		struct dc_stream_state *stream,
@@ -2133,6 +2145,9 @@ static struct audio *find_first_free_audio(
 		enum dce_version dc_version)
 {
 	int i, available_audio_count;
+
+	if (id == ENGINE_ID_UNKNOWN)
+		return NULL;
 
 	available_audio_count = pool->audio_count;
 
@@ -2573,12 +2588,9 @@ enum dc_status resource_map_pool_resources(
 
 /**
  * dc_resource_state_copy_construct_current() - Creates a new dc_state from existing state
- *
+ * Is a shallow copy.  Increments refcounts on existing streams and planes.
  * @dc: copy out of dc->current_state
  * @dst_ctx: copy into this
- *
- * This function makes a shallow copy of the current DC state and increments
- * refcounts on existing streams and planes.
  */
 void dc_resource_state_copy_construct_current(
 		const struct dc *dc,

@@ -113,10 +113,12 @@ static int irst_add(struct acpi_device *acpi)
 	return error;
 }
 
-static void irst_remove(struct acpi_device *acpi)
+static int irst_remove(struct acpi_device *acpi)
 {
 	device_remove_file(&acpi->dev, &irst_wakeup_attr);
 	device_remove_file(&acpi->dev, &irst_timeout_attr);
+
+	return 0;
 }
 
 static const struct acpi_device_id irst_ids[] = {

@@ -49,7 +49,7 @@ static void nfcon_write(struct console *con, const char *str,
 static struct tty_driver *nfcon_device(struct console *con, int *index)
 {
 	*index = 0;
-	return console_is_registered(con) ? nfcon_tty_driver : NULL;
+	return (con->flags & CON_ENABLED) ? nfcon_tty_driver : NULL;
 }
 
 static struct console nf_console = {
@@ -107,11 +107,6 @@ static int __init nf_debug_setup(char *arg)
 
 	stderr_id = nf_get_id("NF_STDERR");
 	if (stderr_id) {
-		/*
-		 * The console will be enabled when debug=nfcon is specified
-		 * as a kernel parameter. Since this is a non-standard way
-		 * of enabling consoles, it must be explicitly enabled.
-		 */
 		nf_console.flags |= CON_ENABLED;
 		register_console(&nf_console);
 	}
@@ -156,7 +151,7 @@ static int __init nfcon_init(void)
 
 	nfcon_tty_driver = driver;
 
-	if (!console_is_registered(&nf_console))
+	if (!(nf_console.flags & CON_ENABLED))
 		register_console(&nf_console);
 
 	return 0;

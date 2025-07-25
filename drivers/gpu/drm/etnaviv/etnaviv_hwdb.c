@@ -70,37 +70,6 @@ static const struct etnaviv_chip_identity etnaviv_chip_identities[] = {
 	},
 	{
 		.model = 0x7000,
-		.revision = 0x6203,
-		.product_id = 0x70003,
-		.customer_id = 0x4,
-		.eco_id = 0,
-		.stream_count = 16,
-		.register_max = 64,
-		.thread_count = 512,
-		.shader_core_count = 2,
-		.vertex_cache_size = 16,
-		.vertex_output_buffer_size = 1024,
-		.pixel_pipes = 1,
-		.instruction_count = 512,
-		.num_constants = 320,
-		.buffer_size = 0,
-		.varyings_count = 16,
-		.features = 0xe0287c8d,
-		.minor_features0 = 0xc1589eff,
-		.minor_features1 = 0xfefbfad9,
-		.minor_features2 = 0xeb9d4fbf,
-		.minor_features3 = 0xedfffced,
-		.minor_features4 = 0xdb0dafc7,
-		.minor_features5 = 0x3b5ac333,
-		.minor_features6 = 0xfcce6000,
-		.minor_features7 = 0xfffbfa6f,
-		.minor_features8 = 0x00e10ef3,
-		.minor_features9 = 0x00c8003c,
-		.minor_features10 = 0x00004040,
-		.minor_features11 = 0x00000024,
-	},
-	{
-		.model = 0x7000,
 		.revision = 0x6204,
 		.product_id = ~0U,
 		.customer_id = ~0U,
@@ -166,6 +135,9 @@ static const struct etnaviv_chip_identity etnaviv_chip_identities[] = {
 bool etnaviv_fill_identity_from_hwdb(struct etnaviv_gpu *gpu)
 {
 	struct etnaviv_chip_identity *ident = &gpu->identity;
+	const u32 product_id = ident->product_id;
+	const u32 customer_id = ident->customer_id;
+	const u32 eco_id = ident->eco_id;
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(etnaviv_chip_identities); i++) {
@@ -179,6 +151,12 @@ bool etnaviv_fill_identity_from_hwdb(struct etnaviv_gpu *gpu)
 			 etnaviv_chip_identities[i].eco_id == ~0U)) {
 			memcpy(ident, &etnaviv_chip_identities[i],
 			       sizeof(*ident));
+
+			/* Restore some id values as ~0U aka 'don't care' might been used. */
+			ident->product_id = product_id;
+			ident->customer_id = customer_id;
+			ident->eco_id = eco_id;
+
 			return true;
 		}
 	}

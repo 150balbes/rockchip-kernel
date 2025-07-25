@@ -61,6 +61,12 @@ struct netdev_name_node {
 int netdev_get_name(struct net *net, char *name, int ifindex);
 int dev_change_name(struct net_device *dev, const char *newname);
 
+#define netdev_for_each_altname(dev, namenode)				\
+	list_for_each_entry((namenode), &(dev)->name_node->list, list)
+#define netdev_for_each_altname_safe(dev, namenode, next)		\
+	list_for_each_entry_safe((namenode), (next), &(dev)->name_node->list, \
+				 list)
+
 int netdev_name_node_alt_create(struct net_device *dev, const char *name);
 int netdev_name_node_alt_destroy(struct net_device *dev, const char *name);
 
@@ -87,13 +93,6 @@ void dev_set_group(struct net_device *dev, int new_group);
 int dev_change_carrier(struct net_device *dev, bool new_carrier);
 
 void __dev_set_rx_mode(struct net_device *dev);
-
-void __dev_notify_flags(struct net_device *dev, unsigned int old_flags,
-			unsigned int gchanges, u32 portid,
-			const struct nlmsghdr *nlh);
-
-void unregister_netdevice_many_notify(struct list_head *head,
-				      u32 portid, const struct nlmsghdr *nlh);
 
 static inline void netif_set_gso_max_size(struct net_device *dev,
 					  unsigned int size)

@@ -203,12 +203,10 @@
 
 		A53_L2: l2-cache0 {
 			compatible = "cache";
-			cache-level = <2>;
 		};
 
 		A73_L2: l2-cache1 {
 			compatible = "cache";
-			cache-level = <2>;
 		};
 	};
 

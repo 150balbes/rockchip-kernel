@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
-#include <signal.h>
 #include <inttypes.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -314,9 +313,7 @@ void perf_session__delete(struct perf_session *session)
 			evlist__delete(session->evlist);
 		perf_data__close(session->data);
 	}
-#ifdef HAVE_LIBTRACEEVENT
 	trace_event__cleanup(&session->tevent);
-#endif
 	free(session);
 }
 
@@ -2025,7 +2022,7 @@ static int perf_session__flush_thread_stacks(struct perf_session *session)
 					 NULL);
 }
 
-volatile sig_atomic_t session_done;
+volatile int session_done;
 
 static int __perf_session__process_decomp_events(struct perf_session *session);
 
@@ -2751,7 +2748,7 @@ int perf_session__cpu_bitmap(struct perf_session *session,
 			goto out_delete_map;
 		}
 
-		__set_bit(cpu.cpu, cpu_bitmap);
+		set_bit(cpu.cpu, cpu_bitmap);
 	}
 
 	err = 0;

@@ -31,6 +31,7 @@
 #define POWER_METER_CAN_NOTIFY	(1 << 3)
 #define POWER_METER_IS_BATTERY	(1 << 8)
 #define UNKNOWN_HYSTERESIS	0xFFFFFFFF
+#define UNKNOWN_POWER		0xFFFFFFFF
 
 #define METER_NOTIFY_CONFIG	0x80
 #define METER_NOTIFY_TRIP	0x81
@@ -347,6 +348,9 @@ static ssize_t show_power(struct device *dev,
 	mutex_lock(&resource->lock);
 	update_meter(resource);
 	mutex_unlock(&resource->lock);
+
+	if (resource->power == UNKNOWN_POWER)
+		return -ENODATA;
 
 	return sprintf(buf, "%llu\n", resource->power * 1000);
 }
@@ -910,12 +914,12 @@ exit:
 	return res;
 }
 
-static void acpi_power_meter_remove(struct acpi_device *device)
+static int acpi_power_meter_remove(struct acpi_device *device)
 {
 	struct acpi_power_meter_resource *resource;
 
 	if (!device || !acpi_driver_data(device))
-		return;
+		return -EINVAL;
 
 	resource = acpi_driver_data(device);
 	hwmon_device_unregister(resource->hwmon_dev);
@@ -924,6 +928,7 @@ static void acpi_power_meter_remove(struct acpi_device *device)
 	free_capabilities(resource);
 
 	kfree(resource);
+	return 0;
 }
 
 static int acpi_power_meter_resume(struct device *dev)

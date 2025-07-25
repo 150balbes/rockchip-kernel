@@ -318,20 +318,6 @@ static int call_get_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
 	       sd->ops->pad->get_mbus_config(sd, pad, config);
 }
 
-static int call_s_stream(struct v4l2_subdev *sd, int enable)
-{
-	int ret;
-
-	ret = sd->ops->video->s_stream(sd, enable);
-
-	if (!enable && ret < 0) {
-		dev_warn(sd->dev, "disabling streaming failed (%d)\n", ret);
-		return 0;
-	}
-
-	return ret;
-}
-
 #ifdef CONFIG_MEDIA_CONTROLLER
 /*
  * Create state-management wrapper for pad ops dealing with subdev state. The
@@ -391,7 +377,6 @@ static const struct v4l2_subdev_pad_ops v4l2_subdev_call_pad_wrappers = {
 static const struct v4l2_subdev_video_ops v4l2_subdev_call_video_wrappers = {
 	.g_frame_interval	= call_g_frame_interval,
 	.s_frame_interval	= call_s_frame_interval,
-	.s_stream		= call_s_stream,
 };
 
 const struct v4l2_subdev_ops v4l2_subdev_call_wrappers = {
@@ -860,7 +845,7 @@ int v4l2_subdev_get_fwnode_pad_1_to_1(struct media_entity *entity,
 	fwnode = fwnode_graph_get_port_parent(endpoint->local_fwnode);
 	fwnode_handle_put(fwnode);
 
-	if (device_match_fwnode(sd->dev, fwnode))
+	if (dev_fwnode(sd->dev) == fwnode)
 		return endpoint->port;
 
 	return -ENXIO;

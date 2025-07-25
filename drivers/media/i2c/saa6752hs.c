@@ -659,7 +659,8 @@ static const struct v4l2_subdev_ops saa6752hs_ops = {
 	.pad = &saa6752hs_pad_ops,
 };
 
-static int saa6752hs_probe(struct i2c_client *client)
+static int saa6752hs_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct saa6752hs_state *h;
 	struct v4l2_subdev *sd;
@@ -781,7 +782,7 @@ static struct i2c_driver saa6752hs_driver = {
 	.driver = {
 		.name	= "saa6752hs",
 	},
-	.probe_new	= saa6752hs_probe,
+	.probe		= saa6752hs_probe,
 	.remove		= saa6752hs_remove,
 	.id_table	= saa6752hs_id,
 };

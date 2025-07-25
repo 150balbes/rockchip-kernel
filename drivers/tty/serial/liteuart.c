@@ -136,7 +136,8 @@ static void liteuart_start_tx(struct uart_port *port)
 	} else if (!uart_circ_empty(xmit)) {
 		while (xmit->head != xmit->tail) {
 			ch = xmit->buf[xmit->tail];
-			uart_xmit_advance(port, 1);
+			xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+			port->icount.tx++;
 			liteuart_putchar(port, ch);
 		}
 	}

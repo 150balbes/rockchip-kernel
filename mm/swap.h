@@ -39,10 +39,10 @@ void __delete_from_swap_cache(struct folio *folio,
 void delete_from_swap_cache(struct folio *folio);
 void clear_shadow_from_swap_cache(int type, unsigned long begin,
 				  unsigned long end);
+void swapcache_clear(struct swap_info_struct *si, swp_entry_t entry);
 struct folio *swap_cache_get_folio(swp_entry_t entry,
 		struct vm_area_struct *vma, unsigned long addr);
-struct folio *filemap_get_incore_folio(struct address_space *mapping,
-		pgoff_t index);
+struct page *find_get_incore_page(struct address_space *mapping, pgoff_t index);
 
 struct page *read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 				   struct vm_area_struct *vma,
@@ -99,6 +99,10 @@ static inline int swap_writepage(struct page *p, struct writeback_control *wbc)
 	return 0;
 }
 
+static inline void swapcache_clear(struct swap_info_struct *si, swp_entry_t entry)
+{
+}
+
 static inline struct folio *swap_cache_get_folio(swp_entry_t entry,
 		struct vm_area_struct *vma, unsigned long addr)
 {
@@ -106,10 +110,9 @@ static inline struct folio *swap_cache_get_folio(swp_entry_t entry,
 }
 
 static inline
-struct folio *filemap_get_incore_folio(struct address_space *mapping,
-		pgoff_t index)
+struct page *find_get_incore_page(struct address_space *mapping, pgoff_t index)
 {
-	return filemap_get_folio(mapping, index);
+	return find_get_page(mapping, index);
 }
 
 static inline bool add_to_swap(struct folio *folio)

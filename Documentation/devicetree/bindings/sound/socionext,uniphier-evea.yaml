@@ -9,9 +9,6 @@ title: UniPhier EVEA SoC-internal sound codec
 maintainers:
   - <alsa-devel@alsa-project.org>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     const: socionext,uniphier-evea
@@ -51,7 +48,7 @@ patternProperties:
     $ref: audio-graph-port.yaml#
     unevaluatedProperties: false
 
-unevaluatedProperties: false
+additionalProperties: false
 
 required:
   - compatible

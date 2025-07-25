@@ -385,7 +385,8 @@ out:
 	return retval;
 }
 
-static int kxtj9_probe(struct i2c_client *client)
+static int kxtj9_probe(struct i2c_client *client,
+		       const struct i2c_device_id *id)
 {
 	const struct kxtj9_platform_data *pdata =
 			dev_get_platdata(&client->dev);
@@ -538,7 +539,7 @@ static struct i2c_driver kxtj9_driver = {
 		.name	= NAME,
 		.pm	= &kxtj9_pm_ops,
 	},
-	.probe_new	= kxtj9_probe,
+	.probe		= kxtj9_probe,
 	.id_table	= kxtj9_id,
 };
 

@@ -37,7 +37,7 @@ properties:
   cpus:
     description:
       phandle of the first cpu in the LMh cluster
-    maxItems: 1
+    $ref: /schemas/types.yaml#/definitions/phandle
 
   qcom,lmh-temp-arm-millicelsius:
     description:

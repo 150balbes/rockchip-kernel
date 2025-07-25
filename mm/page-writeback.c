@@ -13,7 +13,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/math64.h>
 #include <linux/export.h>
 #include <linux/spinlock.h>
 #include <linux/fs.h>
@@ -198,7 +197,7 @@ static void wb_min_max_ratio(struct bdi_writeback *wb,
 			min *= this_bw;
 			min = div64_ul(min, tot_bw);
 		}
-		if (max < 100 * BDI_RATIO_SCALE) {
+		if (max < 100) {
 			max *= this_bw;
 			max = div64_ul(max, tot_bw);
 		}
@@ -415,13 +414,20 @@ static void domain_dirty_limits(struct dirty_throttle_control *dtc)
 	else
 		bg_thresh = (bg_ratio * available_memory) / PAGE_SIZE;
 
-	if (bg_thresh >= thresh)
-		bg_thresh = thresh / 2;
 	tsk = current;
 	if (rt_task(tsk)) {
 		bg_thresh += bg_thresh / 4 + global_wb_domain.dirty_limit / 32;
 		thresh += thresh / 4 + global_wb_domain.dirty_limit / 32;
 	}
+	/*
+	 * Dirty throttling logic assumes the limits in page units fit into
+	 * 32-bits. This gives 16TB dirty limits max which is hopefully enough.
+	 */
+	if (thresh > UINT_MAX)
+		thresh = UINT_MAX;
+	/* This makes sure bg_thresh is within 32-bits as well */
+	if (bg_thresh >= thresh)
+		bg_thresh = thresh / 2;
 	dtc->thresh = thresh;
 	dtc->bg_thresh = bg_thresh;
 
@@ -471,7 +477,11 @@ static unsigned long node_dirty_limit(struct pglist_data *pgdat)
 	if (rt_task(tsk))
 		dirty += dirty / 4;
 
-	return dirty;
+	/*
+	 * Dirty throttling logic assumes the limits in page units fit into
+	 * 32-bits. This gives 16TB dirty limits max which is hopefully enough.
+	 */
+	return min_t(unsigned long, dirty, UINT_MAX);
 }
 
 /**
@@ -508,10 +518,17 @@ static int dirty_background_bytes_handler(struct ctl_table *table, int write,
 		void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret;
+	unsigned long old_bytes = dirty_background_bytes;
 
 	ret = proc_doulongvec_minmax(table, write, buffer, lenp, ppos);
-	if (ret == 0 && write)
+	if (ret == 0 && write) {
+		if (DIV_ROUND_UP(dirty_background_bytes, PAGE_SIZE) >
+								UINT_MAX) {
+			dirty_background_bytes = old_bytes;
+			return -ERANGE;
+		}
 		dirty_background_ratio = 0;
+	}
 	return ret;
 }
 
@@ -537,6 +554,10 @@ static int dirty_bytes_handler(struct ctl_table *table, int write,
 
 	ret = proc_doulongvec_minmax(table, write, buffer, lenp, ppos);
 	if (ret == 0 && write && vm_dirty_bytes != old_bytes) {
+		if (DIV_ROUND_UP(vm_dirty_bytes, PAGE_SIZE) > UINT_MAX) {
+			vm_dirty_bytes = old_bytes;
+			return -ERANGE;
+		}
 		writeback_set_ratelimit();
 		vm_dirty_ratio = 0;
 	}
@@ -651,48 +672,10 @@ void wb_domain_exit(struct wb_domain *dom)
  */
 static unsigned int bdi_min_ratio;
 
-static int bdi_check_pages_limit(unsigned long pages)
-{
-	unsigned long max_dirty_pages = global_dirtyable_memory();
-
-	if (pages > max_dirty_pages)
-		return -EINVAL;
-
-	return 0;
-}
-
-static unsigned long bdi_ratio_from_pages(unsigned long pages)
-{
-	unsigned long background_thresh;
-	unsigned long dirty_thresh;
-	unsigned long ratio;
-
-	global_dirty_limits(&background_thresh, &dirty_thresh);
-	ratio = div64_u64(pages * 100ULL * BDI_RATIO_SCALE, dirty_thresh);
-
-	return ratio;
-}
-
-static u64 bdi_get_bytes(unsigned int ratio)
-{
-	unsigned long background_thresh;
-	unsigned long dirty_thresh;
-	u64 bytes;
-
-	global_dirty_limits(&background_thresh, &dirty_thresh);
-	bytes = (dirty_thresh * PAGE_SIZE * ratio) / BDI_RATIO_SCALE / 100;
-
-	return bytes;
-}
-
-static int __bdi_set_min_ratio(struct backing_dev_info *bdi, unsigned int min_ratio)
+int bdi_set_min_ratio(struct backing_dev_info *bdi, unsigned int min_ratio)
 {
 	unsigned int delta;
 	int ret = 0;
-
-	if (min_ratio > 100 * BDI_RATIO_SCALE)
-		return -EINVAL;
-	min_ratio *= BDI_RATIO_SCALE;
 
 	spin_lock_bh(&bdi_lock);
 	if (min_ratio > bdi->max_ratio) {
@@ -704,7 +687,7 @@ static int __bdi_set_min_ratio(struct backing_dev_info *bdi, unsigned int min_ra
 			bdi->min_ratio = min_ratio;
 		} else {
 			delta = min_ratio - bdi->min_ratio;
-			if (bdi_min_ratio + delta < 100 * BDI_RATIO_SCALE) {
+			if (bdi_min_ratio + delta < 100) {
 				bdi_min_ratio += delta;
 				bdi->min_ratio = min_ratio;
 			} else {
@@ -717,11 +700,11 @@ static int __bdi_set_min_ratio(struct backing_dev_info *bdi, unsigned int min_ra
 	return ret;
 }
 
-static int __bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned int max_ratio)
+int bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned max_ratio)
 {
 	int ret = 0;
 
-	if (max_ratio > 100 * BDI_RATIO_SCALE)
+	if (max_ratio > 100)
 		return -EINVAL;
 
 	spin_lock_bh(&bdi_lock);
@@ -735,80 +718,7 @@ static int __bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned int max_ra
 
 	return ret;
 }
-
-int bdi_set_min_ratio_no_scale(struct backing_dev_info *bdi, unsigned int min_ratio)
-{
-	return __bdi_set_min_ratio(bdi, min_ratio);
-}
-
-int bdi_set_max_ratio_no_scale(struct backing_dev_info *bdi, unsigned int max_ratio)
-{
-	return __bdi_set_max_ratio(bdi, max_ratio);
-}
-
-int bdi_set_min_ratio(struct backing_dev_info *bdi, unsigned int min_ratio)
-{
-	return __bdi_set_min_ratio(bdi, min_ratio * BDI_RATIO_SCALE);
-}
-
-int bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned int max_ratio)
-{
-	return __bdi_set_max_ratio(bdi, max_ratio * BDI_RATIO_SCALE);
-}
 EXPORT_SYMBOL(bdi_set_max_ratio);
-
-u64 bdi_get_min_bytes(struct backing_dev_info *bdi)
-{
-	return bdi_get_bytes(bdi->min_ratio);
-}
-
-int bdi_set_min_bytes(struct backing_dev_info *bdi, u64 min_bytes)
-{
-	int ret;
-	unsigned long pages = min_bytes >> PAGE_SHIFT;
-	unsigned long min_ratio;
-
-	ret = bdi_check_pages_limit(pages);
-	if (ret)
-		return ret;
-
-	min_ratio = bdi_ratio_from_pages(pages);
-	return __bdi_set_min_ratio(bdi, min_ratio);
-}
-
-u64 bdi_get_max_bytes(struct backing_dev_info *bdi)
-{
-	return bdi_get_bytes(bdi->max_ratio);
-}
-
-int bdi_set_max_bytes(struct backing_dev_info *bdi, u64 max_bytes)
-{
-	int ret;
-	unsigned long pages = max_bytes >> PAGE_SHIFT;
-	unsigned long max_ratio;
-
-	ret = bdi_check_pages_limit(pages);
-	if (ret)
-		return ret;
-
-	max_ratio = bdi_ratio_from_pages(pages);
-	return __bdi_set_max_ratio(bdi, max_ratio);
-}
-
-int bdi_set_strict_limit(struct backing_dev_info *bdi, unsigned int strict_limit)
-{
-	if (strict_limit > 1)
-		return -EINVAL;
-
-	spin_lock_bh(&bdi_lock);
-	if (strict_limit)
-		bdi->capabilities |= BDI_CAP_STRICTLIMIT;
-	else
-		bdi->capabilities &= ~BDI_CAP_STRICTLIMIT;
-	spin_unlock_bh(&bdi_lock);
-
-	return 0;
-}
 
 static unsigned long dirty_freerun_ceiling(unsigned long thresh,
 					   unsigned long bg_thresh)
@@ -872,15 +782,15 @@ static unsigned long __wb_calc_thresh(struct dirty_throttle_control *dtc)
 	fprop_fraction_percpu(&dom->completions, dtc->wb_completions,
 			      &numerator, &denominator);
 
-	wb_thresh = (thresh * (100 * BDI_RATIO_SCALE - bdi_min_ratio)) / (100 * BDI_RATIO_SCALE);
+	wb_thresh = (thresh * (100 - bdi_min_ratio)) / 100;
 	wb_thresh *= numerator;
 	wb_thresh = div64_ul(wb_thresh, denominator);
 
 	wb_min_max_ratio(dtc->wb, &wb_min_ratio, &wb_max_ratio);
 
-	wb_thresh += (thresh * wb_min_ratio) / (100 * BDI_RATIO_SCALE);
-	if (wb_thresh > (thresh * wb_max_ratio) / (100 * BDI_RATIO_SCALE))
-		wb_thresh = thresh * wb_max_ratio / (100 * BDI_RATIO_SCALE);
+	wb_thresh += (thresh * wb_min_ratio) / 100;
+	if (wb_thresh > (thresh * wb_max_ratio) / 100)
+		wb_thresh = thresh * wb_max_ratio / 100;
 
 	return wb_thresh;
 }
@@ -3190,7 +3100,7 @@ EXPORT_SYMBOL_GPL(folio_wait_writeback_killable);
  */
 void folio_wait_stable(struct folio *folio)
 {
-	if (folio_inode(folio)->i_sb->s_iflags & SB_I_STABLE_WRITES)
+	if (mapping_stable_writes(folio_mapping(folio)))
 		folio_wait_writeback(folio);
 }
 EXPORT_SYMBOL_GPL(folio_wait_stable);

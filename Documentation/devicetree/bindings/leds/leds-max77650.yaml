@@ -30,8 +30,9 @@ properties:
 
 patternProperties:
   "^led@[0-2]$":
-    $ref: common.yaml#
-    unevaluatedProperties: false
+    type: object
+    description: |
+      Properties for a single LED.
 
     properties:
       reg:
@@ -39,6 +40,10 @@ patternProperties:
           Index of the LED.
         minimum: 0
         maximum: 2
+
+      label: true
+
+      linux,default-trigger: true
 
 required:
   - compatible

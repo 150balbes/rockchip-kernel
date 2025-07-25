@@ -74,7 +74,7 @@
 		  ##__VA_ARGS__)
 
 #define WARN_ENTRY(insn, flags, label, ...)		\
-	asm_volatile_goto(				\
+	asm goto(					\
 		"1:	" insn "\n"			\
 		EX_TABLE(1b, %l[label])			\
 		_EMIT_BUG_ENTRY				\
@@ -99,8 +99,7 @@
 	__label__ __label_warn_on;				\
 								\
 	WARN_ENTRY("twi 31, 0, 0", BUGFLAG_WARNING | (flags), __label_warn_on); \
-	barrier_before_unreachable();				\
-	__builtin_unreachable();				\
+	unreachable();						\
 								\
 __label_warn_on:						\
 	break;							\

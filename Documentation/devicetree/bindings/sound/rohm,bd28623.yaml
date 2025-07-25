@@ -14,9 +14,6 @@ description:
 maintainers:
   - Katsuhiro Suzuki <katsuhiro@katsuster.net>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     const: rohm,bd28623
@@ -53,7 +50,7 @@ required:
   - VCCP2-supply
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

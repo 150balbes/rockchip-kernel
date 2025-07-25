@@ -62,7 +62,7 @@ static inline void amdgpu_res_first(struct ttm_resource *res,
 	if (!res)
 		goto fallback;
 
-	BUG_ON(start + size > res->size);
+	BUG_ON(start + size > res->num_pages << PAGE_SHIFT);
 
 	cur->mem_type = res->mem_type;
 
@@ -110,7 +110,7 @@ fallback:
 	cur->size = size;
 	cur->remaining = size;
 	cur->node = NULL;
-	WARN_ON(res && start + size > res->size);
+	WARN_ON(res && start + size > res->num_pages << PAGE_SHIFT);
 	return;
 }
 

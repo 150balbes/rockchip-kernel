@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
 
-sec=$(date +%s)
+. "$(dirname "${0}")/mptcp_lib.sh"
+
 rndh=$(printf %x $sec)-$(mktemp -u XXXXXX)
 ns1="ns1-$rndh"
 ns2="ns2-$rndh"
@@ -33,6 +34,8 @@ cleanup()
 		ip netns del $netns
 	done
 }
+
+mptcp_lib_check_mptcp
 
 ip -Version > /dev/null 2>&1
 if [ $? -ne 0 ];then
@@ -149,6 +152,9 @@ do_transfer()
 	:> "$sout"
 	:> "$capout"
 
+	local addr_port
+	addr_port=$(printf "%s:%d" ${connect_addr} ${port})
+
 	if $capture; then
 		local capuser
 		if [ -z $SUDO_USER ] ; then
@@ -171,7 +177,7 @@ do_transfer()
 
 	timeout ${timeout_test} \
 		ip netns exec ${ns3} \
-			./mptcp_connect -jt ${timeout_poll} -l -p $port -T $max_time \
+			./mptcp_connect -jt ${timeout_poll} -l -p $port -T $time \
 				0.0.0.0 < "$sin" > "$sout" &
 	local spid=$!
 
@@ -179,7 +185,7 @@ do_transfer()
 
 	timeout ${timeout_test} \
 		ip netns exec ${ns1} \
-			./mptcp_connect -jt ${timeout_poll} -p $port -T $max_time \
+			./mptcp_connect -jt ${timeout_poll} -p $port -T $time \
 				10.0.3.3 < "$cin" > "$cout" &
 	local cpid=$!
 
@@ -295,10 +301,10 @@ done
 
 setup
 run_test 10 10 0 0 "balanced bwidth"
-run_test 10 10 1 50 "balanced bwidth with unbalanced delay"
+run_test 10 10 1 25 "balanced bwidth with unbalanced delay"
 
 # we still need some additional infrastructure to pass the following test-cases
-run_test 30 10 0 0 "unbalanced bwidth"
-run_test 30 10 1 50 "unbalanced bwidth with unbalanced delay"
-run_test 30 10 50 1 "unbalanced bwidth with opposed, unbalanced delay"
+run_test 10 3 0 0 "unbalanced bwidth"
+run_test 10 3 1 25 "unbalanced bwidth with unbalanced delay"
+run_test 10 3 25 1 "unbalanced bwidth with opposed, unbalanced delay"
 exit $ret

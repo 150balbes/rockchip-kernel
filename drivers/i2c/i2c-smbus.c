@@ -112,7 +112,8 @@ static void smbalert_work(struct work_struct *work)
 }
 
 /* Setup SMBALERT# infrastructure */
-static int smbalert_probe(struct i2c_client *ara)
+static int smbalert_probe(struct i2c_client *ara,
+			  const struct i2c_device_id *id)
 {
 	struct i2c_smbus_alert_setup *setup = dev_get_platdata(&ara->dev);
 	struct i2c_smbus_alert *alert;
@@ -169,7 +170,7 @@ static struct i2c_driver smbalert_driver = {
 	.driver = {
 		.name	= "smbus_alert",
 	},
-	.probe_new	= smbalert_probe,
+	.probe		= smbalert_probe,
 	.remove		= smbalert_remove,
 	.id_table	= smbalert_ids,
 };
@@ -360,15 +361,9 @@ void i2c_register_spd(struct i2c_adapter *adap)
 		return;
 	}
 
-	/*
-	 * Memory types could be found at section 7.18.2 (Memory Device — Type), table 78
-	 * https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.6.0.pdf
-	 */
 	switch (common_mem_type) {
-	case 0x12:	/* DDR */
 	case 0x13:	/* DDR2 */
 	case 0x18:	/* DDR3 */
-	case 0x1B:	/* LPDDR */
 	case 0x1C:	/* LPDDR2 */
 	case 0x1D:	/* LPDDR3 */
 		name = "spd";

@@ -42,9 +42,6 @@
 		trace_print_bitmask_seq(p, __bitmask, __bitmask_size);	\
 	})
 
-#undef __get_cpumask
-#define __get_cpumask(field) __get_bitmask(field)
-
 #undef __get_rel_bitmask
 #define __get_rel_bitmask(field)						\
 	({								\
@@ -53,9 +50,6 @@
 		__bitmask_size = __get_rel_dynamic_array_len(field);	\
 		trace_print_bitmask_seq(p, __bitmask, __bitmask_size);	\
 	})
-
-#undef __get_rel_cpumask
-#define __get_rel_cpumask(field) __get_rel_bitmask(field)
 
 #undef __get_sockaddr
 #define __get_sockaddr(field)	((struct sockaddr *)__get_dynamic_array(field))

@@ -332,8 +332,8 @@ static int genregs64_set(struct task_struct *target,
 	}
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  36 * sizeof(u64), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						36 * sizeof(u64), -1);
 
 	return ret;
 }
@@ -406,8 +406,8 @@ static int fpregs64_set(struct task_struct *target,
 	task_thread_info(target)->fpsaved[0] = fprs;
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  35 * sizeof(u64), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						35 * sizeof(u64), -1);
 	return ret;
 }
 
@@ -473,8 +473,10 @@ static int setregs64_set(struct task_struct *target,
 				 15 * sizeof(u64));
 	if (ret)
 		return ret;
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  15 * sizeof(u64), 16 * sizeof(u64));
+	ret =user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+				 15 * sizeof(u64), 16 * sizeof(u64));
+	if (ret)
+		return ret;
 	/* TSTATE */
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 				 &tstate,
@@ -668,9 +670,8 @@ finish:
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
 
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  38 * sizeof(reg), -1);
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 38 * sizeof(reg), -1);
 }
 
 static int fpregs32_get(struct task_struct *target,
@@ -736,8 +737,8 @@ static int fpregs32_set(struct task_struct *target,
 	task_thread_info(target)->fpsaved[0] = fprs;
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  34 * sizeof(u32), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						34 * sizeof(u32), -1);
 	return ret;
 }
 

@@ -7,6 +7,7 @@
  *  Chunfeng Yun <chunfeng.yun@mediatek.com>
  */
 
+#include <linux/bitfield.h>
 #include <linux/dma-mapping.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
@@ -73,6 +74,9 @@
 #define FRMCNT_LEV1_RANG	(0x12b << 8)
 #define FRMCNT_LEV1_RANG_MASK	GENMASK(19, 8)
 
+#define HSCH_CFG1		0x960
+#define SCH3_RXFIFO_DEPTH_MASK	GENMASK(21, 20)
+
 #define SS_GEN2_EOF_CFG		0x990
 #define SSG2EOF_OFFSET		0x3c
 
@@ -113,6 +117,8 @@
 #define PERI_SSUSB_SPM_CTRL	0x0
 #define SSC_IP_SLEEP_EN	BIT(4)
 #define SSC_SPM_INT_EN		BIT(1)
+
+#define SCH_FIFO_TO_KB(x)	((x) >> 10)
 
 enum ssusb_uwk_vers {
 	SSUSB_UWK_V1 = 1,
@@ -163,6 +169,35 @@ static void xhci_mtk_set_frame_interval(struct xhci_hcd_mtk *mtk)
 	value &= ~XSEOF_OFFSET_MASK;
 	value |= SSG2EOF_OFFSET;
 	writel(value, hcd->regs + SS_GEN2_EOF_CFG);
+}
+
+/*
+ * workaround: usb3.2 gen1 isoc rx hw issue
+ * host send out unexpected ACK afer device fininsh a burst transfer with
+ * a short packet.
+ */
+static void xhci_mtk_rxfifo_depth_set(struct xhci_hcd_mtk *mtk)
+{
+	struct usb_hcd *hcd = mtk->hcd;
+	u32 value;
+
+	if (!mtk->rxfifo_depth)
+		return;
+
+	value = readl(hcd->regs + HSCH_CFG1);
+	value &= ~SCH3_RXFIFO_DEPTH_MASK;
+	value |= FIELD_PREP(SCH3_RXFIFO_DEPTH_MASK,
+			    SCH_FIFO_TO_KB(mtk->rxfifo_depth) - 1);
+	writel(value, hcd->regs + HSCH_CFG1);
+}
+
+static void xhci_mtk_init_quirk(struct xhci_hcd_mtk *mtk)
+{
+	/* workaround only for mt8195 */
+	xhci_mtk_set_frame_interval(mtk);
+
+	/* workaround for SoCs using SSUSB about before IPM v1.6.0 */
+	xhci_mtk_rxfifo_depth_set(mtk);
 }
 
 static int xhci_mtk_host_enable(struct xhci_hcd_mtk *mtk)
@@ -453,8 +488,7 @@ static int xhci_mtk_setup(struct usb_hcd *hcd)
 		if (ret)
 			return ret;
 
-		/* workaround only for mt8195 */
-		xhci_mtk_set_frame_interval(mtk);
+		xhci_mtk_init_quirk(mtk);
 	}
 
 	ret = xhci_gen_setup(hcd, xhci_mtk_quirks);
@@ -485,7 +519,6 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 	const struct hc_driver *driver;
 	struct xhci_hcd *xhci;
 	struct resource *res;
-	struct usb_hcd *usb3_hcd;
 	struct usb_hcd *hcd;
 	int ret = -ENODEV;
 	int wakeup_irq;
@@ -531,6 +564,8 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 			     &mtk->u3p_dis_msk);
 	of_property_read_u32(node, "mediatek,u2p-dis-msk",
 			     &mtk->u2p_dis_msk);
+
+	of_property_read_u32(node, "rx-fifo-depth", &mtk->rxfifo_depth);
 
 	ret = usb_wakeup_of_property_parse(mtk, node);
 	if (ret) {
@@ -591,10 +626,10 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 	}
 
 	device_init_wakeup(dev, true);
+	dma_set_max_seg_size(dev, UINT_MAX);
 
 	xhci = hcd_to_xhci(hcd);
 	xhci->main_hcd = hcd;
-	xhci->allow_single_roothub = 1;
 
 	/*
 	 * imod_interval is the interrupt moderation value in nanoseconds.
@@ -604,29 +639,24 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 	xhci->imod_interval = 5000;
 	device_property_read_u32(dev, "imod-interval-ns", &xhci->imod_interval);
 
+	xhci->shared_hcd = usb_create_shared_hcd(driver, dev,
+			dev_name(dev), hcd);
+	if (!xhci->shared_hcd) {
+		ret = -ENOMEM;
+		goto disable_device_wakeup;
+	}
+
 	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (ret)
-		goto disable_device_wakeup;
+		goto put_usb3_hcd;
 
-	if (!xhci_has_one_roothub(xhci)) {
-		xhci->shared_hcd = usb_create_shared_hcd(driver, dev,
-							 dev_name(dev), hcd);
-		if (!xhci->shared_hcd) {
-			ret = -ENOMEM;
-			goto dealloc_usb2_hcd;
-		}
-	}
-
-	usb3_hcd = xhci_get_usb3_hcd(xhci);
-	if (usb3_hcd && HCC_MAX_PSA(xhci->hcc_params) >= 4 &&
+	if (HCC_MAX_PSA(xhci->hcc_params) >= 4 &&
 	    !(xhci->quirks & XHCI_BROKEN_STREAMS))
-		usb3_hcd->can_do_streams = 1;
+		xhci->shared_hcd->can_do_streams = 1;
 
-	if (xhci->shared_hcd) {
-		ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
-		if (ret)
-			goto put_usb3_hcd;
-	}
+	ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
+	if (ret)
+		goto dealloc_usb2_hcd;
 
 	if (wakeup_irq > 0) {
 		ret = dev_pm_set_dedicated_wake_irq_reverse(dev, wakeup_irq);
@@ -647,12 +677,12 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 dealloc_usb3_hcd:
 	usb_remove_hcd(xhci->shared_hcd);
 
-put_usb3_hcd:
-	usb_put_hcd(xhci->shared_hcd);
-
 dealloc_usb2_hcd:
-	xhci_mtk_sch_exit(mtk);
 	usb_remove_hcd(hcd);
+
+put_usb3_hcd:
+	xhci_mtk_sch_exit(mtk);
+	usb_put_hcd(xhci->shared_hcd);
 
 disable_device_wakeup:
 	device_init_wakeup(dev, false);
@@ -685,15 +715,10 @@ static int xhci_mtk_remove(struct platform_device *pdev)
 	dev_pm_clear_wake_irq(dev);
 	device_init_wakeup(dev, false);
 
-	if (shared_hcd) {
-		usb_remove_hcd(shared_hcd);
-		xhci->shared_hcd = NULL;
-	}
+	usb_remove_hcd(shared_hcd);
+	xhci->shared_hcd = NULL;
 	usb_remove_hcd(hcd);
-
-	if (shared_hcd)
-		usb_put_hcd(shared_hcd);
-
+	usb_put_hcd(shared_hcd);
 	usb_put_hcd(hcd);
 	xhci_mtk_sch_exit(mtk);
 	clk_bulk_disable_unprepare(BULK_CLKS_NUM, mtk->clks);
@@ -711,16 +736,13 @@ static int __maybe_unused xhci_mtk_suspend(struct device *dev)
 	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
 	struct usb_hcd *hcd = mtk->hcd;
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-	struct usb_hcd *shared_hcd = xhci->shared_hcd;
 	int ret;
 
 	xhci_dbg(xhci, "%s: stop port polling\n", __func__);
 	clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 	del_timer_sync(&hcd->rh_timer);
-	if (shared_hcd) {
-		clear_bit(HCD_FLAG_POLL_RH, &shared_hcd->flags);
-		del_timer_sync(&shared_hcd->rh_timer);
-	}
+	clear_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
+	del_timer_sync(&xhci->shared_hcd->rh_timer);
 
 	ret = xhci_mtk_host_disable(mtk);
 	if (ret)
@@ -732,10 +754,8 @@ static int __maybe_unused xhci_mtk_suspend(struct device *dev)
 
 restart_poll_rh:
 	xhci_dbg(xhci, "%s: restart port polling\n", __func__);
-	if (shared_hcd) {
-		set_bit(HCD_FLAG_POLL_RH, &shared_hcd->flags);
-		usb_hcd_poll_rh_status(shared_hcd);
-	}
+	set_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
+	usb_hcd_poll_rh_status(xhci->shared_hcd);
 	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 	usb_hcd_poll_rh_status(hcd);
 	return ret;
@@ -746,7 +766,6 @@ static int __maybe_unused xhci_mtk_resume(struct device *dev)
 	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
 	struct usb_hcd *hcd = mtk->hcd;
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-	struct usb_hcd *shared_hcd = xhci->shared_hcd;
 	int ret;
 
 	usb_wakeup_set(mtk, false);
@@ -759,10 +778,8 @@ static int __maybe_unused xhci_mtk_resume(struct device *dev)
 		goto disable_clks;
 
 	xhci_dbg(xhci, "%s: restart port polling\n", __func__);
-	if (shared_hcd) {
-		set_bit(HCD_FLAG_POLL_RH, &shared_hcd->flags);
-		usb_hcd_poll_rh_status(shared_hcd);
-	}
+	set_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
+	usb_hcd_poll_rh_status(xhci->shared_hcd);
 	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 	usb_hcd_poll_rh_status(hcd);
 	return 0;

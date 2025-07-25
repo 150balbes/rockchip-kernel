@@ -19,9 +19,7 @@ properties:
       - const: rockchip,rk2928-nfc
       - const: rockchip,rv1108-nfc
       - items:
-          - enum:
-              - rockchip,rk3036-nfc
-              - rockchip,rk3128-nfc
+          - const: rockchip,rk3036-nfc
           - const: rockchip,rk2928-nfc
       - items:
           - const: rockchip,rk3308-nfc

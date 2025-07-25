@@ -6,7 +6,7 @@
  *
  * Author: Kamil Debski <k.debski@samsung.com>
  */
-
+#include "linux/gpio/consumer.h"
 #include <linux/hwmon.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -18,6 +18,7 @@
 #include <linux/sysfs.h>
 #include <linux/thermal.h>
 #include <linux/timer.h>
+#include <soc/rockchip/rockchip_system_monitor.h>
 
 #define MAX_PWM 255
 
@@ -35,6 +36,11 @@ enum pwm_fan_enable_mode {
 	pwm_disable_reg_disable,
 };
 
+struct thermal_trips {
+	int temp;
+	int state;
+};
+
 struct pwm_fan_ctx {
 	struct device *dev;
 
@@ -45,7 +51,7 @@ struct pwm_fan_ctx {
 	enum pwm_fan_enable_mode enable_mode;
 	bool regulator_enabled;
 	bool enabled;
-
+	struct gpio_desc *enable_gpio;
 	int tach_count;
 	struct pwm_fan_tach *tachs;
 	ktime_t sample_start;
@@ -56,6 +62,9 @@ struct pwm_fan_ctx {
 	unsigned int pwm_fan_max_state;
 	unsigned int *pwm_fan_cooling_levels;
 	struct thermal_cooling_device *cdev;
+	struct notifier_block thermal_nb;
+	struct thermal_trips *thermal_trips;
+	bool thermal_notifier_is_ok;
 
 	struct hwmon_chip_info info;
 	struct hwmon_channel_info fan_channel;
@@ -412,6 +421,11 @@ pwm_fan_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 
 	ctx->pwm_fan_state = state;
 
+	if(ctx->pwm_fan_state == 0)
+		gpiod_direction_output(ctx->enable_gpio, 0);	
+	else
+		gpiod_direction_output(ctx->enable_gpio, 1);
+
 	return ret;
 }
 
@@ -472,13 +486,106 @@ static void pwm_fan_cleanup(void *__ctx)
 	pwm_fan_power_off(ctx);
 }
 
+static int pwm_fan_get_thermal_trips(struct device *dev, char *porp_name,
+				     struct thermal_trips **trips)
+{
+	struct device_node *np = dev->of_node;
+	struct thermal_trips *thermal_trips;
+	const struct property *prop;
+	int count, i;
+
+	prop = of_find_property(np, porp_name, NULL);
+	if (!prop)
+		return -EINVAL;
+	if (!prop->value)
+		return -ENODATA;
+	count = of_property_count_u32_elems(np, porp_name);
+	if (count < 0)
+		return -EINVAL;
+	if (count % 2)
+		return -EINVAL;
+	thermal_trips = devm_kzalloc(dev,
+				     sizeof(*thermal_trips) * (count / 2 + 1),
+				     GFP_KERNEL);
+	if (!thermal_trips)
+		return -ENOMEM;
+
+	for (i = 0; i < count / 2; i++) {
+		of_property_read_u32_index(np, porp_name, 2 * i,
+					   &thermal_trips[i].temp);
+		of_property_read_u32_index(np, porp_name, 2 * i + 1,
+					   &thermal_trips[i].state);
+	}
+	thermal_trips[i].temp = 0;
+	thermal_trips[i].state = INT_MAX;
+
+	*trips = thermal_trips;
+
+	return 0;
+}
+
+static int pwm_fan_temp_to_state(struct pwm_fan_ctx *ctx, int temp)
+{
+	struct thermal_trips *trips = ctx->thermal_trips;
+	int i, state = 0;
+
+	for (i = 0; trips[i].state != INT_MAX; i++) {
+		if (temp >= trips[i].temp)
+			state = trips[i].state;
+	}
+
+	return state;
+}
+
+static int pwm_fan_thermal_notifier_call(struct notifier_block *nb,
+					 unsigned long event, void *data)
+{
+	struct pwm_fan_ctx *ctx = container_of(nb, struct pwm_fan_ctx, thermal_nb);
+	struct system_monitor_event_data *event_data = data;
+	int state, ret;
+
+	if (event != SYSTEM_MONITOR_CHANGE_TEMP)
+		return NOTIFY_OK;
+
+	state = pwm_fan_temp_to_state(ctx, event_data->temp);
+	if (state > ctx->pwm_fan_max_state)
+		return NOTIFY_BAD;
+	if (state == ctx->pwm_fan_state)
+		return NOTIFY_OK;
+
+	ret = set_pwm(ctx, ctx->pwm_fan_cooling_levels[state]);
+	if (ret)
+		return NOTIFY_BAD;
+
+	ctx->pwm_fan_state = state;
+
+	if(ctx->pwm_fan_state == 0)
+		gpiod_direction_output(ctx->enable_gpio, 0);	
+	else
+		gpiod_direction_output(ctx->enable_gpio, 1);
+
+	return NOTIFY_OK;
+}
+
+static int pwm_fan_register_thermal_notifier(struct device *dev,
+					     struct pwm_fan_ctx *ctx)
+{
+	if (pwm_fan_get_thermal_trips(dev, "rockchip,temp-trips",
+				      &ctx->thermal_trips))
+		return -EINVAL;
+
+	ctx->thermal_nb.notifier_call = pwm_fan_thermal_notifier_call;
+
+	return rockchip_system_monitor_register_notifier(&ctx->thermal_nb);
+}
+
 static int pwm_fan_probe(struct platform_device *pdev)
 {
 	struct thermal_cooling_device *cdev;
 	struct device *dev = &pdev->dev;
 	struct pwm_fan_ctx *ctx;
 	struct device *hwmon;
-	int ret;
+	int ret = 0;
 	const struct hwmon_channel_info **channels;
 	u32 *fan_channel_config;
 	int channel_count = 1;	/* We always have a PWM channel. */
@@ -496,6 +603,12 @@ static int pwm_fan_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(ctx->pwm), "Could not get PWM\n");
 
 	platform_set_drvdata(pdev, ctx);
+
+	ctx->enable_gpio = devm_gpiod_get_optional(dev, "enable",GPIOD_ASIS);
+	if (IS_ERR(ctx->enable_gpio)) {
+		ret = PTR_ERR(ctx->enable_gpio);
+		dev_err(dev, "Failed to get fan enable gpio: %d\n", ret);
+	}
 
 	ctx->reg_en = devm_regulator_get_optional(dev, "fan");
 	if (IS_ERR(ctx->reg_en)) {
@@ -619,6 +732,15 @@ static int pwm_fan_probe(struct platform_device *pdev)
 		return ret;
 
 	ctx->pwm_fan_state = ctx->pwm_fan_max_state;
+	if (IS_REACHABLE(CONFIG_ROCKCHIP_SYSTEM_MONITOR) &&
+	    of_find_property(dev->of_node, "rockchip,temp-trips", NULL)) {
+		ret = pwm_fan_register_thermal_notifier(dev, ctx);
+		if (ret)
+			dev_err(dev, "Failed to register thermal notifier: %d\n", ret);
+		else
+			ctx->thermal_notifier_is_ok = true;
+		//return 0;
+	}
 	if (IS_ENABLED(CONFIG_THERMAL)) {
 		cdev = devm_thermal_of_cooling_device_register(dev,
 			dev->of_node, "pwm-fan", ctx, &pwm_fan_cooling_ops);

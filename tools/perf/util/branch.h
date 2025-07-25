@@ -7,10 +7,12 @@
  * detected in at least musl libc, used in Alpine Linux. -acme
  */
 #include <stdio.h>
+#include <stdint.h>
+#include <linux/compiler.h>
+#include <linux/stddef.h>
 #include <linux/perf_event.h>
 #include <linux/types.h>
-#include "util/map_symbol.h"
-#include "util/sample.h"
+#include "event.h"
 
 struct branch_flags {
 	union {

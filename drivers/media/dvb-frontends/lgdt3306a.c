@@ -1859,7 +1859,7 @@ fail:
 	kfree(state);
 	return NULL;
 }
-EXPORT_SYMBOL(lgdt3306a_attach);
+EXPORT_SYMBOL_GPL(lgdt3306a_attach);
 
 #ifdef DBG_DUMP
 
@@ -2169,12 +2169,18 @@ static int lgdt3306a_deselect(struct i2c_mux_core *muxc, u32 chan)
 	return lgdt3306a_i2c_gate_ctrl(&state->frontend, 0);
 }
 
-static int lgdt3306a_probe(struct i2c_client *client)
+static int lgdt3306a_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct lgdt3306a_config *config;
 	struct lgdt3306a_state *state;
 	struct dvb_frontend *fe;
 	int ret;
+
+	if (!client->dev.platform_data) {
+		dev_err(&client->dev, "platform data is mandatory\n");
+		return -EINVAL;
+	}
 
 	config = kmemdup(client->dev.platform_data,
 			 sizeof(struct lgdt3306a_config), GFP_KERNEL);
@@ -2249,7 +2255,7 @@ static struct i2c_driver lgdt3306a_driver = {
 		.name                = "lgdt3306a",
 		.suppress_bind_attrs = true,
 	},
-	.probe_new	= lgdt3306a_probe,
+	.probe		= lgdt3306a_probe,
 	.remove		= lgdt3306a_remove,
 	.id_table	= lgdt3306a_id_table,
 };

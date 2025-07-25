@@ -198,7 +198,8 @@ static void cy8ctma140_power_off_action(void *d)
 	cy8ctma140_power_down(ts);
 }
 
-static int cy8ctma140_probe(struct i2c_client *client)
+static int cy8ctma140_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	struct cy8ctma140 *ts;
 	struct input_dev *input;
@@ -343,7 +344,7 @@ static struct i2c_driver cy8ctma140_driver = {
 		.of_match_table = cy8ctma140_of_match,
 	},
 	.id_table	= cy8ctma140_idtable,
-	.probe_new	= cy8ctma140_probe,
+	.probe		= cy8ctma140_probe,
 };
 module_i2c_driver(cy8ctma140_driver);
 

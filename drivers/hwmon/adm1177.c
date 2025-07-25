@@ -26,12 +26,14 @@
 /**
  * struct adm1177_state - driver instance specific data
  * @client:		pointer to i2c client
+ * @reg:		regulator info for the power supply of the device
  * @r_sense_uohm:	current sense resistor value
  * @alert_threshold_ua:	current limit for shutdown
  * @vrange_high:	internal voltage divider
  */
 struct adm1177_state {
 	struct i2c_client	*client;
+	struct regulator	*reg;
 	u32			r_sense_uohm;
 	u32			alert_threshold_ua;
 	bool			vrange_high;
@@ -187,6 +189,13 @@ static const struct hwmon_chip_info adm1177_chip_info = {
 	.info = adm1177_info,
 };
 
+static void adm1177_remove(void *data)
+{
+	struct adm1177_state *st = data;
+
+	regulator_disable(st->reg);
+}
+
 static int adm1177_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -201,9 +210,21 @@ static int adm1177_probe(struct i2c_client *client)
 
 	st->client = client;
 
-	ret = devm_regulator_get_enable_optional(&client->dev, "vref");
-	if (ret == -EPROBE_DEFER)
-		return -EPROBE_DEFER;
+	st->reg = devm_regulator_get_optional(&client->dev, "vref");
+	if (IS_ERR(st->reg)) {
+		if (PTR_ERR(st->reg) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
+		st->reg = NULL;
+	} else {
+		ret = regulator_enable(st->reg);
+		if (ret)
+			return ret;
+		ret = devm_add_action_or_reset(&client->dev, adm1177_remove,
+					       st);
+		if (ret)
+			return ret;
+	}
 
 	if (device_property_read_u32(dev, "shunt-resistor-micro-ohms",
 				     &st->r_sense_uohm))

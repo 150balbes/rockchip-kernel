@@ -10,23 +10,15 @@
 
 #include "i915_reg_defs.h"
 
-struct intel_gt;
-
 struct i915_wa {
-	union {
-		i915_reg_t	reg;
-		i915_mcr_reg_t	mcr_reg;
-	};
+	i915_reg_t	reg;
 	u32		clr;
 	u32		set;
 	u32		read;
-
-	u32		masked_reg:1;
-	u32		is_mcr:1;
+	bool		masked_reg;
 };
 
 struct i915_wa_list {
-	struct intel_gt	*gt;
 	const char	*name;
 	const char	*engine_name;
 	struct i915_wa	*list;

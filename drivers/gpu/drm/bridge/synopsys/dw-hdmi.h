@@ -158,8 +158,17 @@
 #define HDMI_FC_SPDDEVICEINF                    0x1062
 #define HDMI_FC_AUDSCONF                        0x1063
 #define HDMI_FC_AUDSSTAT                        0x1064
-#define HDMI_FC_AUDSCHNLS7                      0x106e
-#define HDMI_FC_AUDSCHNLS8                      0x106f
+#define HDMI_FC_AUDSV                           0x1065
+#define HDMI_FC_AUDSU                           0x1066
+#define HDMI_FC_AUDSCHNLS0                       0x1067
+#define HDMI_FC_AUDSCHNLS1                       0x1068
+#define HDMI_FC_AUDSCHNLS2                       0x1069
+#define HDMI_FC_AUDSCHNLS3                       0x106A
+#define HDMI_FC_AUDSCHNLS4                       0x106B
+#define HDMI_FC_AUDSCHNLS5                       0x106C
+#define HDMI_FC_AUDSCHNLS6                       0x106D
+#define HDMI_FC_AUDSCHNLS7                       0x106E
+#define HDMI_FC_AUDSCHNLS8                       0x106F
 #define HDMI_FC_DATACH0FILL                     0x1070
 #define HDMI_FC_DATACH1FILL                     0x1071
 #define HDMI_FC_DATACH2FILL                     0x1072
@@ -575,6 +584,16 @@
 #define HDMI_I2CM_FS_SCL_LCNT_1_ADDR            0x7E11
 #define HDMI_I2CM_FS_SCL_LCNT_0_ADDR            0x7E12
 #define HDMI_I2CM_SDA_HOLD                      0x7E13
+#define HDMI_I2CM_SCDC_READ_UPDATE              0x7E14
+#define HDMI_I2CM_READ_REQ_EN_MSK               BIT(4)
+#define HDMI_I2CM_READ_REQ_EN_OFFSET            4
+#define HDMI_I2CM_READ_UPDATE_MSK               BIT(0)
+#define HDMI_I2CM_READ_UPDATE_OFFSET            0
+#define HDMI_I2CM_I2CM_UPRD_VSYNC_EN_MSK        BIT(5)
+#define HDMI_I2CM_I2CM_UPRD_VSYNC_EN_OFFSET     5
+#define	HDMI_I2CM_READ_BUFF0                    0x7E20
+#define	HDMI_I2CM_SCDC_UPDATE0                  0x7E30
+#define	HDMI_I2CM_SCDC_UPDATE1                  0x7E31
 
 enum {
 /* PRODUCT_ID0 field values */
@@ -900,6 +919,9 @@ enum {
 	HDMI_FC_DATAUTO0_VSD_MASK = 0x08,
 	HDMI_FC_DATAUTO0_VSD_OFFSET = 3,
 
+/* FC_DATAUTO3 field values */
+	HDMI_FC_DATAUTO3_GCP_AUTO = 0x04,
+
 /* PHY_CONF0 field values */
 	HDMI_PHY_CONF0_PDZ_MASK = 0x80,
 	HDMI_PHY_CONF0_PDZ_OFFSET = 7,
@@ -967,7 +989,13 @@ enum {
 	HDMI_AUD_CONF1_MODE_BURST_1 = 0x60,
 	HDMI_AUD_CONF1_MODE_BURST_2 = 0x80,
 	HDMI_AUD_CONF1_WIDTH_16 = 0x10,
+	HDMI_AUD_CONF1_WIDTH_21 = 0x15,
 	HDMI_AUD_CONF1_WIDTH_24 = 0x18,
+
+/* AUD_CONF2 filed values */
+	HDMI_AUD_CONF2_HBR = 0x1,
+	HDMI_AUD_CONF2_NLPCM = 0x2,
+	HDMI_AUD_CONF2_INSERT_PCUV = 0x04,
 
 /* AUD_CTS3 field values */
 	HDMI_AUD_CTS3_N_SHIFT_OFFSET = 5,
@@ -1122,7 +1150,10 @@ enum {
 	HDMI_A_VIDPOLCFG_HSYNCPOL_ACTIVE_LOW = 0x0,
 
 /* I2CM_OPERATION field values */
+	HDMI_I2CM_OPERATION_BUS_CLEAR = 0x20,
 	HDMI_I2CM_OPERATION_WRITE = 0x10,
+	HDMI_I2CM_OPERATION_READ8_EXT = 0x8,
+	HDMI_I2CM_OPERATION_READ8 = 0x4,
 	HDMI_I2CM_OPERATION_READ_EXT = 0x2,
 	HDMI_I2CM_OPERATION_READ = 0x1,
 

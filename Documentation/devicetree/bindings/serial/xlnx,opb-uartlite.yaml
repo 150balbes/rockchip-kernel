@@ -67,7 +67,8 @@ allOf:
   - if:
       properties:
         xlnx,use-parity:
-          const: 1
+          contains:
+            const: 1
     then:
       required:
         - xlnx,odd-parity

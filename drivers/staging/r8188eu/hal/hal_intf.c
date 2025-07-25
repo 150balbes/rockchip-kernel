@@ -6,19 +6,24 @@
 #include "../include/drv_types.h"
 #include "../include/hal_intf.h"
 
-uint rtw_hal_init(struct adapter *adapt)
+uint	 rtw_hal_init(struct adapter *adapt)
 {
+	uint	status = _SUCCESS;
+
 	adapt->hw_init_completed = false;
 
-	if (rtl8188eu_hal_init(adapt) != _SUCCESS)
-		return _FAIL;
+	status = rtl8188eu_hal_init(adapt);
 
-	adapt->hw_init_completed = true;
+	if (status == _SUCCESS) {
+		adapt->hw_init_completed = true;
 
-	if (adapt->registrypriv.notch_filter == 1)
-		hal_notch_filter_8188e(adapt, 1);
+		if (adapt->registrypriv.notch_filter == 1)
+			hal_notch_filter_8188e(adapt, 1);
+	} else {
+		adapt->hw_init_completed = false;
+	}
 
-	return _SUCCESS;
+	return status;
 }
 
 uint rtw_hal_deinit(struct adapter *adapt)

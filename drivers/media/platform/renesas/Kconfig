@@ -41,7 +41,6 @@ config VIDEO_SH_VOU
 	  Support for the Video Output Unit (VOU) on SuperH SoCs.
 
 source "drivers/media/platform/renesas/rcar-vin/Kconfig"
-source "drivers/media/platform/renesas/rzg2l-cru/Kconfig"
 
 # Mem2mem drivers
 

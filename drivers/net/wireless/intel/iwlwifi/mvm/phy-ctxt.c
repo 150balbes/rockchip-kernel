@@ -14,18 +14,16 @@ u8 iwl_mvm_get_channel_width(struct cfg80211_chan_def *chandef)
 	switch (chandef->width) {
 	case NL80211_CHAN_WIDTH_20_NOHT:
 	case NL80211_CHAN_WIDTH_20:
-		return IWL_PHY_CHANNEL_MODE20;
+		return PHY_VHT_CHANNEL_MODE20;
 	case NL80211_CHAN_WIDTH_40:
-		return IWL_PHY_CHANNEL_MODE40;
+		return PHY_VHT_CHANNEL_MODE40;
 	case NL80211_CHAN_WIDTH_80:
-		return IWL_PHY_CHANNEL_MODE80;
+		return PHY_VHT_CHANNEL_MODE80;
 	case NL80211_CHAN_WIDTH_160:
-		return IWL_PHY_CHANNEL_MODE160;
-	case NL80211_CHAN_WIDTH_320:
-		return IWL_PHY_CHANNEL_MODE320;
+		return PHY_VHT_CHANNEL_MODE160;
 	default:
 		WARN(1, "Invalid channel width=%u", chandef->width);
-		return IWL_PHY_CHANNEL_MODE20;
+		return PHY_VHT_CHANNEL_MODE20;
 	}
 }
 
@@ -35,32 +33,34 @@ u8 iwl_mvm_get_channel_width(struct cfg80211_chan_def *chandef)
  */
 u8 iwl_mvm_get_ctrl_pos(struct cfg80211_chan_def *chandef)
 {
-	int offs = chandef->chan->center_freq - chandef->center_freq1;
-	int abs_offs = abs(offs);
-	u8 ret;
-
-	if (offs == 0) {
+	switch (chandef->chan->center_freq - chandef->center_freq1) {
+	case -70:
+		return PHY_VHT_CTRL_POS_4_BELOW;
+	case -50:
+		return PHY_VHT_CTRL_POS_3_BELOW;
+	case -30:
+		return PHY_VHT_CTRL_POS_2_BELOW;
+	case -10:
+		return PHY_VHT_CTRL_POS_1_BELOW;
+	case  10:
+		return PHY_VHT_CTRL_POS_1_ABOVE;
+	case  30:
+		return PHY_VHT_CTRL_POS_2_ABOVE;
+	case  50:
+		return PHY_VHT_CTRL_POS_3_ABOVE;
+	case  70:
+		return PHY_VHT_CTRL_POS_4_ABOVE;
+	default:
+		WARN(1, "Invalid channel definition");
+		fallthrough;
+	case 0:
 		/*
 		 * The FW is expected to check the control channel position only
 		 * when in HT/VHT and the channel width is not 20MHz. Return
 		 * this value as the default one.
 		 */
-		return 0;
+		return PHY_VHT_CTRL_POS_1_BELOW;
 	}
-
-	/* this results in a value 0-7, i.e. fitting into 0b0111 */
-	ret = (abs_offs - 10) / 20;
-	/*
-	 * But we need the value to be in 0b1011 because 0b0100 is
-	 * IWL_PHY_CTRL_POS_ABOVE, so shift bit 2 up to land in
-	 * IWL_PHY_CTRL_POS_OFFS_EXT (0b1000)
-	 */
-	ret = (ret & IWL_PHY_CTRL_POS_OFFS_MSK) |
-	      ((ret & BIT(2)) << 1);
-	/* and add the above bit */
-	ret |= (offs > 0) * IWL_PHY_CTRL_POS_ABOVE;
-
-	return ret;
 }
 
 /*
@@ -97,17 +97,6 @@ static void iwl_mvm_phy_ctxt_set_rxchain(struct iwl_mvm *mvm,
 	if (active_cnt == 1 && iwl_mvm_rx_diversity_allowed(mvm, ctxt)) {
 		idle_cnt = 2;
 		active_cnt = 2;
-	}
-
-	/*
-	 * If the firmware requested it, then we know that it supports
-	 * getting zero for the values to indicate "use one, but pick
-	 * which one yourself", which means it can dynamically pick one
-	 * that e.g. has better RSSI.
-	 */
-	if (mvm->fw_static_smps_request && active_cnt == 1 && idle_cnt == 1) {
-		idle_cnt = 0;
-		active_cnt = 0;
 	}
 
 	*rxchain_info = cpu_to_le32(iwl_mvm_get_valid_rx_ant(mvm) <<

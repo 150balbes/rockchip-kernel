@@ -216,7 +216,7 @@
 };
 
 &blsp1_uart3_on {
-	rx-pins {
+	rx {
 		/delete-property/ bias-disable;
 		/*
 		 * Configure a pull-up on 45 (RX). This is needed to
@@ -227,7 +227,7 @@
 		bias-pull-up;
 	};
 
-	cts-pins {
+	cts {
 		/delete-property/ bias-disable;
 		/*
 		 * Configure a pull-down on 47 (CTS) to match the pull
@@ -310,11 +310,15 @@
 };
 
 &funnel4 {
-	/* FIXME: Figure out why clock late_initcall crashes the board with this enabled. */
+	// FIXME: Figure out why clock late_initcall crashes the board with
+	// this enabled.
+	// status = "okay";
 };
 
 &funnel5 {
-	/* FIXME: Figure out why clock late_initcall crashes the board with this enabled. */
+	// FIXME: Figure out why clock late_initcall crashes the board with
+	// this enabled.
+	// status = "okay";
 };
 
 &pcie0 {
@@ -386,7 +390,7 @@
 };
 
 &rpm_requests {
-	regulators-0 {
+	pm8998-regulators {
 		compatible = "qcom,rpm-pm8998-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -584,7 +588,7 @@
 
 	};
 
-	regulators-1 {
+	pmi8998-regulators {
 		compatible = "qcom,rpm-pmi8998-regulators";
 
 		vdd_bob-supply = <&vph_pwr>;
@@ -611,14 +615,14 @@
 &tlmm {
 	gpio-reserved-ranges = <0 4>;
 
-	mdp_vsync_n: mdp-vsync-n-state {
+	mdp_vsync_n: mdp-vsync-n {
 		pins = "gpio10";
 		function = "mdp_vsync_a";
 		bias-pull-down;
 		drive-strength = <2>;
 	};
 
-	gpio_kb_pins_extra: gpio-kb-pins-extra-state {
+	gpio_kb_pins_extra: gpio-kb-pins-extra {
 		pins = "gpio21", "gpio32", "gpio33", "gpio114",
 		       "gpio128", "gpio129";
 		function = "gpio";
@@ -626,21 +630,21 @@
 		bias-pull-up;
 	};
 
-	ts_vio_default: ts-vio-def-state {
+	ts_vio_default: ts-vio-def {
 		pins = "gpio81";
 		function = "gpio";
 		bias-disable;
 		drive-strength = <2>;
 	};
 
-	ts_rst_n: ts-rst-n-state {
+	ts_rst_n: ts-rst-n {
 		pins = "gpio89";
 		function = "gpio";
 		bias-pull-up;
 		drive-strength = <8>;
 	};
 
-	hall_sensor1_default: hall-sensor1-def-state {
+	hall_sensor1_default: hall-sensor1-def {
 		pins = "gpio124";
 		function = "gpio";
 		bias-disable;
@@ -648,7 +652,7 @@
 		input-enable;
 	};
 
-	ts_int_n: ts-int-n-state {
+	ts_int_n: ts-int-n {
 		pins = "gpio125";
 		function = "gpio";
 		bias-disable;

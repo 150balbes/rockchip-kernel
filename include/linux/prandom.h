@@ -9,7 +9,6 @@
 #define _LINUX_PRANDOM_H
 
 #include <linux/types.h>
-#include <linux/once.h>
 #include <linux/percpu.h>
 #include <linux/random.h>
 
@@ -23,6 +22,12 @@ void prandom_seed_full_state(struct rnd_state __percpu *pcpu_state);
 
 #define prandom_init_once(pcpu_state)			\
 	DO_ONCE(prandom_seed_full_state, (pcpu_state))
+
+/* Deprecated: use get_random_u32_below() instead. */
+static inline u32 prandom_u32_max(u32 ep_ro)
+{
+	return get_random_u32_below(ep_ro);
+}
 
 /*
  * Handle minimum values for seeds

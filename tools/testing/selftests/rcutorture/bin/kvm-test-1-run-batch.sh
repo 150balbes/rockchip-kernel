@@ -13,8 +13,9 @@
 #
 # Authors: Paul E. McKenney <paulmck@kernel.org>
 
-T="`mktemp -d ${TMPDIR-/tmp}/kvm-test-1-run-batch.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/kvm-test-1-run-batch.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
 echo ---- Running batch $*
 # Check arguments

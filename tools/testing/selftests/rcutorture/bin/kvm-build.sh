@@ -23,8 +23,9 @@ then
 fi
 resdir=${2}
 
-T="`mktemp -d ${TMPDIR-/tmp}/kvm-build.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/test-linux.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
 cp ${config_template} $T/config
 cat << ___EOF___ >> $T/config

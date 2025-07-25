@@ -80,7 +80,8 @@ static const struct regmap_irq_chip rc5t619_irq_chip = {
 	.num_irqs = ARRAY_SIZE(rc5t619_irqs),
 	.num_regs = 1,
 	.status_base = RN5T618_INTMON,
-	.unmask_base = RN5T618_INTEN,
+	.mask_base = RN5T618_INTEN,
+	.mask_invert = true,
 };
 
 static struct i2c_client *rn5t618_pm_power_off;

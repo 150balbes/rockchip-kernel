@@ -7,9 +7,7 @@
 
 #include <linux/bitops.h>
 
-#include "tag.h"
-
-#define XRS700X_NAME "xrs700x"
+#include "dsa_priv.h"
 
 static struct sk_buff *xrs700x_xmit(struct sk_buff *skb, struct net_device *dev)
 {
@@ -53,7 +51,7 @@ static struct sk_buff *xrs700x_rcv(struct sk_buff *skb, struct net_device *dev)
 }
 
 static const struct dsa_device_ops xrs700x_netdev_ops = {
-	.name	= XRS700X_NAME,
+	.name	= "xrs700x",
 	.proto	= DSA_TAG_PROTO_XRS700X,
 	.xmit	= xrs700x_xmit,
 	.rcv	= xrs700x_rcv,
@@ -61,6 +59,6 @@ static const struct dsa_device_ops xrs700x_netdev_ops = {
 };
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_XRS700X, XRS700X_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_XRS700X);
 
 module_dsa_tag_driver(xrs700x_netdev_ops);

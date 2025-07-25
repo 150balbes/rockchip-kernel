@@ -293,7 +293,7 @@ int sbi_remote_hfence_vvma_asid(const struct cpumask *cpu_mask,
 				unsigned long start,
 				unsigned long size,
 				unsigned long asid);
-int sbi_probe_extension(int ext);
+long sbi_probe_extension(int ext);
 
 /* Check if current SBI specification version is 0.1 or not */
 static inline int sbi_spec_is_0_1(void)
@@ -327,9 +327,4 @@ int sbi_err_map_linux_errno(int err);
 static inline int sbi_remote_fence_i(const struct cpumask *cpu_mask) { return -1; }
 static inline void sbi_init(void) {}
 #endif /* CONFIG_RISCV_SBI */
-
-unsigned long riscv_cached_mvendorid(unsigned int cpu_id);
-unsigned long riscv_cached_marchid(unsigned int cpu_id);
-unsigned long riscv_cached_mimpid(unsigned int cpu_id);
-
 #endif /* _ASM_RISCV_SBI_H */

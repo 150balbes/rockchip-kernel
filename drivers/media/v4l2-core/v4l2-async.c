@@ -414,7 +414,8 @@ static void v4l2_async_cleanup(struct v4l2_subdev *sd)
 
 /* Unbind all sub-devices in the notifier tree. */
 static void
-v4l2_async_nf_unbind_all_subdevs(struct v4l2_async_notifier *notifier)
+v4l2_async_nf_unbind_all_subdevs(struct v4l2_async_notifier *notifier,
+				 bool readd)
 {
 	struct v4l2_subdev *sd, *tmp;
 
@@ -423,9 +424,11 @@ v4l2_async_nf_unbind_all_subdevs(struct v4l2_async_notifier *notifier)
 			v4l2_async_find_subdev_notifier(sd);
 
 		if (subdev_notifier)
-			v4l2_async_nf_unbind_all_subdevs(subdev_notifier);
+			v4l2_async_nf_unbind_all_subdevs(subdev_notifier, true);
 
 		v4l2_async_nf_call_unbind(notifier, sd, sd->asd);
+		if (readd)
+			list_add_tail(&sd->asd->list, &notifier->waiting);
 		v4l2_async_cleanup(sd);
 
 		list_move(&sd->async_list, &subdev_list);
@@ -557,7 +560,7 @@ err_unbind:
 	/*
 	 * On failure, unbind all sub-devices registered through this notifier.
 	 */
-	v4l2_async_nf_unbind_all_subdevs(notifier);
+	v4l2_async_nf_unbind_all_subdevs(notifier, false);
 
 err_unlock:
 	mutex_unlock(&list_lock);
@@ -583,6 +586,60 @@ int v4l2_async_nf_register(struct v4l2_device *v4l2_dev,
 }
 EXPORT_SYMBOL(v4l2_async_nf_register);
 
+#if IS_ENABLED(CONFIG_NO_GKI)
+static int __v4l2_async_notifier_clr_unready_dev(
+	struct v4l2_async_notifier *notifier)
+{
+	struct v4l2_subdev *sd, *tmp;
+	int clr_num = 0;
+
+	list_for_each_entry_safe(sd, tmp, &notifier->done, async_list) {
+		struct v4l2_async_notifier *subdev_notifier =
+			v4l2_async_find_subdev_notifier(sd);
+
+		if (subdev_notifier)
+			clr_num += __v4l2_async_notifier_clr_unready_dev(
+					subdev_notifier);
+	}
+
+	list_for_each_entry_safe(sd, tmp, &notifier->waiting, async_list) {
+		list_del_init(&sd->async_list);
+		sd->asd = NULL;
+		sd->dev = NULL;
+		clr_num++;
+	}
+
+	return clr_num;
+}
+
+int v4l2_async_notifier_clr_unready_dev(struct v4l2_async_notifier *notifier)
+{
+	int ret = 0;
+	int clr_num = 0;
+
+	mutex_lock(&list_lock);
+
+	while (notifier->parent)
+		notifier = notifier->parent;
+
+	if (!notifier->v4l2_dev)
+		goto out;
+
+	clr_num = __v4l2_async_notifier_clr_unready_dev(notifier);
+	dev_info(notifier->v4l2_dev->dev,
+		 "clear unready subdev num: %d\n", clr_num);
+
+	if (clr_num > 0)
+		ret = v4l2_async_nf_try_complete(notifier);
+
+out:
+	mutex_unlock(&list_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL(v4l2_async_notifier_clr_unready_dev);
+#endif
+
 int v4l2_async_subdev_nf_register(struct v4l2_subdev *sd,
 				  struct v4l2_async_notifier *notifier)
 {
@@ -607,7 +664,7 @@ __v4l2_async_nf_unregister(struct v4l2_async_notifier *notifier)
 	if (!notifier || (!notifier->v4l2_dev && !notifier->sd))
 		return;
 
-	v4l2_async_nf_unbind_all_subdevs(notifier);
+	v4l2_async_nf_unbind_all_subdevs(notifier, false);
 
 	notifier->sd = NULL;
 	notifier->v4l2_dev = NULL;
@@ -805,7 +862,7 @@ err_unbind:
 	 */
 	subdev_notifier = v4l2_async_find_subdev_notifier(sd);
 	if (subdev_notifier)
-		v4l2_async_nf_unbind_all_subdevs(subdev_notifier);
+		v4l2_async_nf_unbind_all_subdevs(subdev_notifier, false);
 
 	if (sd->asd)
 		v4l2_async_nf_call_unbind(notifier, sd, sd->asd);

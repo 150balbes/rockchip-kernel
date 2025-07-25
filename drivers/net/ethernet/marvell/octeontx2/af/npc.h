@@ -185,10 +185,8 @@ enum key_fields {
 	NPC_VLAN_ETYPE_STAG, /* 0x88A8 */
 	NPC_OUTER_VID,
 	NPC_TOS,
-	NPC_IPFRAG_IPV4,
 	NPC_SIP_IPV4,
 	NPC_DIP_IPV4,
-	NPC_IPFRAG_IPV6,
 	NPC_SIP_IPV6,
 	NPC_DIP_IPV6,
 	NPC_IPPROTO_TCP,
@@ -516,7 +514,7 @@ struct npc_lt_def {
 	u8	ltype_mask;
 	u8	ltype_match;
 	u8	lid;
-};
+} __packed;
 
 struct npc_lt_def_ipsec {
 	u8	ltype_mask;
@@ -524,7 +522,7 @@ struct npc_lt_def_ipsec {
 	u8	lid;
 	u8	spi_offset;
 	u8	spi_nz;
-};
+} __packed;
 
 struct npc_lt_def_apad {
 	u8	ltype_mask;

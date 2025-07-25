@@ -9,7 +9,6 @@
 #define pr_fmt(fmt)		"habanalabs: " fmt
 
 #include "habanalabs.h"
-#include "../include/hw_ip/pci/pci_general.h"
 
 #include <linux/pci.h>
 #include <linux/aer.h>
@@ -55,8 +54,6 @@ module_param(boot_error_status_mask, ulong, 0444);
 MODULE_PARM_DESC(boot_error_status_mask,
 	"Mask of the error status during device CPU boot (If bitX is cleared then error X is masked. Default all 1's)");
 
-#define PCI_VENDOR_ID_HABANALABS	0x1da3
-
 #define PCI_IDS_GOYA			0x0001
 #define PCI_IDS_GAUDI			0x1000
 #define PCI_IDS_GAUDI_SEC		0x1010
@@ -75,17 +72,16 @@ MODULE_DEVICE_TABLE(pci, ids);
 /*
  * get_asic_type - translate device id to asic type
  *
- * @hdev: pointer to habanalabs device structure.
+ * @device: id of the PCI device
  *
- * Translate device id and revision id to asic type.
+ * Translate device id to asic type.
  * In case of unidentified device, return -1
  */
-static enum hl_asic_type get_asic_type(struct hl_device *hdev)
+static enum hl_asic_type get_asic_type(u16 device)
 {
-	struct pci_dev *pdev = hdev->pdev;
-	enum hl_asic_type asic_type = ASIC_INVALID;
+	enum hl_asic_type asic_type;
 
-	switch (pdev->device) {
+	switch (device) {
 	case PCI_IDS_GOYA:
 		asic_type = ASIC_GOYA;
 		break;
@@ -96,18 +92,10 @@ static enum hl_asic_type get_asic_type(struct hl_device *hdev)
 		asic_type = ASIC_GAUDI_SEC;
 		break;
 	case PCI_IDS_GAUDI2:
-		switch (pdev->revision) {
-		case REV_ID_A:
-			asic_type = ASIC_GAUDI2;
-			break;
-		case REV_ID_B:
-			asic_type = ASIC_GAUDI2B;
-			break;
-		default:
-			break;
-		}
+		asic_type = ASIC_GAUDI2;
 		break;
 	default:
+		asic_type = ASIC_INVALID;
 		break;
 	}
 
@@ -222,8 +210,7 @@ int hl_device_open(struct inode *inode, struct file *filp)
 	hl_debugfs_add_file(hpriv);
 
 	atomic_set(&hdev->captured_err_info.cs_timeout.write_enable, 1);
-	atomic_set(&hdev->captured_err_info.razwi_info_recorded, 0);
-	atomic_set(&hdev->captured_err_info.pgf_info_recorded, 0);
+	atomic_set(&hdev->captured_err_info.razwi.write_enable, 1);
 	hdev->captured_err_info.undef_opcode.write_enable = true;
 
 	hdev->open_counter++;
@@ -281,9 +268,9 @@ int hl_device_open_ctrl(struct inode *inode, struct file *filp)
 
 	mutex_lock(&hdev->fpriv_ctrl_list_lock);
 
-	if (!hl_ctrl_device_operational(hdev, NULL)) {
+	if (!hl_device_operational(hdev, NULL)) {
 		dev_dbg_ratelimited(hdev->dev_ctrl,
-			"Can't open %s because it is disabled\n",
+			"Can't open %s because it is disabled or in reset\n",
 			dev_name(hdev->dev_ctrl));
 		rc = -EPERM;
 		goto out_err;
@@ -426,7 +413,7 @@ static int create_hdev(struct hl_device **dev, struct pci_dev *pdev)
 	/* First, we must find out which ASIC are we handling. This is needed
 	 * to configure the behavior of the driver (kernel parameters)
 	 */
-	hdev->asic_type = get_asic_type(hdev);
+	hdev->asic_type = get_asic_type(pdev->device);
 	if (hdev->asic_type == ASIC_INVALID) {
 		dev_err(&pdev->dev, "Unsupported ASIC\n");
 		rc = -ENODEV;
@@ -605,16 +592,15 @@ hl_pci_err_detected(struct pci_dev *pdev, pci_channel_state_t state)
 
 	switch (state) {
 	case pci_channel_io_normal:
-		dev_warn(hdev->dev, "PCI normal state error detected\n");
 		return PCI_ERS_RESULT_CAN_RECOVER;
 
 	case pci_channel_io_frozen:
-		dev_warn(hdev->dev, "PCI frozen state error detected\n");
+		dev_warn(hdev->dev, "frozen state error detected\n");
 		result = PCI_ERS_RESULT_NEED_RESET;
 		break;
 
 	case pci_channel_io_perm_failure:
-		dev_warn(hdev->dev, "PCI failure state error detected\n");
+		dev_warn(hdev->dev, "failure state error detected\n");
 		result = PCI_ERS_RESULT_DISCONNECT;
 		break;
 
@@ -650,10 +636,6 @@ static void hl_pci_err_resume(struct pci_dev *pdev)
  */
 static pci_ers_result_t hl_pci_err_slot_reset(struct pci_dev *pdev)
 {
-	struct hl_device *hdev = pci_get_drvdata(pdev);
-
-	dev_warn(hdev->dev, "PCI slot reset detected\n");
-
 	return PCI_ERS_RESULT_RECOVERED;
 }
 

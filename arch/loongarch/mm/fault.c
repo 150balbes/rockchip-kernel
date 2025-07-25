@@ -166,22 +166,18 @@ static void __kprobes __do_page_fault(struct pt_regs *regs,
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
 retry:
-	mmap_read_lock(mm);
-	vma = find_vma(mm, address);
-	if (!vma)
-		goto bad_area;
-	if (vma->vm_start <= address)
-		goto good_area;
-	if (!(vma->vm_flags & VM_GROWSDOWN))
-		goto bad_area;
-	if (!expand_stack(vma, address))
-		goto good_area;
+	vma = lock_mm_and_find_vma(mm, address, regs);
+	if (unlikely(!vma))
+		goto bad_area_nosemaphore;
+	goto good_area;
+
 /*
  * Something tried to access memory that isn't in our memory map..
  * Fix it, but check if it's kernel or user first..
  */
 bad_area:
 	mmap_read_unlock(mm);
+bad_area_nosemaphore:
 	do_sigsegv(regs, write, address, si_code);
 	return;
 
@@ -197,9 +193,9 @@ good_area:
 		if (!(vma->vm_flags & VM_WRITE))
 			goto bad_area;
 	} else {
-		if (!(vma->vm_flags & VM_READ) && address != exception_era(regs))
-			goto bad_area;
 		if (!(vma->vm_flags & VM_EXEC) && address == exception_era(regs))
+			goto bad_area;
+		if (!(vma->vm_flags & (VM_READ | VM_WRITE)) && address != exception_era(regs))
 			goto bad_area;
 	}
 

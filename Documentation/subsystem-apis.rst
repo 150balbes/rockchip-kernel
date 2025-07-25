@@ -43,7 +43,6 @@ needed).
    input/index
    hwmon/index
    gpu/index
-   accel/index
    security/index
    sound/index
    crypto/index

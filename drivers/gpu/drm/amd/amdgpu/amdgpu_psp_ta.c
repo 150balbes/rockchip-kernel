@@ -41,46 +41,30 @@ static uint32_t get_bin_version(const uint8_t *bin)
 	return hdr->ucode_version;
 }
 
-static int prep_ta_mem_context(struct ta_mem_context *mem_context,
+static void prep_ta_mem_context(struct psp_context *psp,
+					     struct ta_context *context,
 					     uint8_t *shared_buf,
 					     uint32_t shared_buf_len)
 {
-	if (mem_context->shared_mem_size < shared_buf_len)
-		return -EINVAL;
-	memset(mem_context->shared_buf, 0, mem_context->shared_mem_size);
-	memcpy((void *)mem_context->shared_buf, shared_buf, shared_buf_len);
+	context->mem_context.shared_mem_size = PAGE_ALIGN(shared_buf_len);
+	psp_ta_init_shared_buf(psp, &context->mem_context);
 
-	return 0;
+	memcpy((void *)context->mem_context.shared_buf, shared_buf, shared_buf_len);
 }
 
 static bool is_ta_type_valid(enum ta_type_id ta_type)
 {
+	bool ret = false;
+
 	switch (ta_type) {
 	case TA_TYPE_RAS:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static const struct ta_funcs ras_ta_funcs = {
-	.fn_ta_initialize = psp_ras_initialize,
-	.fn_ta_invoke    = psp_ras_invoke,
-	.fn_ta_terminate = psp_ras_terminate
-};
-
-static void set_ta_context_funcs(struct psp_context *psp,
-						      enum ta_type_id ta_type,
-						      struct ta_context **pcontext)
-{
-	switch (ta_type) {
-	case TA_TYPE_RAS:
-		*pcontext = &psp->ras_context.context;
-		psp->ta_funcs = &ras_ta_funcs;
+		ret = true;
 		break;
 	default:
 		break;
 	}
+
+	return ret;
 }
 
 static const struct file_operations ta_load_debugfs_fops = {
@@ -101,7 +85,8 @@ static const struct file_operations ta_invoke_debugfs_fops = {
 	.owner  = THIS_MODULE
 };
 
-/*
+
+/**
  * DOC: AMDGPU TA debugfs interfaces
  *
  * Three debugfs interfaces can be opened by a program to
@@ -126,18 +111,15 @@ static const struct file_operations ta_invoke_debugfs_fops = {
  *
  * - For TA invoke debugfs interface:
  *   Transmit buffer:
- *    - TA type (4bytes)
  *    - TA ID (4bytes)
  *    - TA CMD ID (4bytes)
- *    - TA shard buf length
- *      (4bytes, value not beyond TA shared memory size)
+ *    - TA shard buf length (4bytes)
  *    - TA shared buf
  *   Receive buffer:
  *    - TA shared buf
  *
  * - For TA unload debugfs interface:
  *   Transmit buffer:
- *    - TA type (4bytes)
  *    - TA ID (4bytes)
  */
 
@@ -149,92 +131,59 @@ static ssize_t ta_if_load_debugfs_write(struct file *fp, const char *buf, size_t
 	uint32_t copy_pos   = 0;
 	int      ret        = 0;
 
-	struct amdgpu_device *adev    = (struct amdgpu_device *)file_inode(fp)->i_private;
-	struct psp_context   *psp     = &adev->psp;
-	struct ta_context    *context = NULL;
+	struct amdgpu_device *adev   = (struct amdgpu_device *)file_inode(fp)->i_private;
+	struct psp_context   *psp    = &adev->psp;
+	struct ta_context    context = {0};
 
 	if (!buf)
 		return -EINVAL;
 
 	ret = copy_from_user((void *)&ta_type, &buf[copy_pos], sizeof(uint32_t));
 	if (ret || (!is_ta_type_valid(ta_type)))
-		return -EFAULT;
+		return -EINVAL;
 
 	copy_pos += sizeof(uint32_t);
 
 	ret = copy_from_user((void *)&ta_bin_len, &buf[copy_pos], sizeof(uint32_t));
 	if (ret)
-		return -EFAULT;
+		return -EINVAL;
 
 	copy_pos += sizeof(uint32_t);
 
 	ta_bin = kzalloc(ta_bin_len, GFP_KERNEL);
 	if (!ta_bin)
-		return -ENOMEM;
+		ret = -ENOMEM;
 	if (copy_from_user((void *)ta_bin, &buf[copy_pos], ta_bin_len)) {
 		ret = -EFAULT;
 		goto err_free_bin;
 	}
 
-	/* Set TA context and functions */
-	set_ta_context_funcs(psp, ta_type, &context);
-
-	if (!psp->ta_funcs || !psp->ta_funcs->fn_ta_terminate) {
-		dev_err(adev->dev, "Unsupported function to terminate TA\n");
-		ret = -EOPNOTSUPP;
+	ret = psp_ras_terminate(psp);
+	if (ret) {
+		dev_err(adev->dev, "Failed to unload embedded RAS TA\n");
 		goto err_free_bin;
 	}
 
-	/*
-	 * Allocate TA shared buf in case shared buf was freed
-	 * due to loading TA failed before.
-	 */
-	if (!context->mem_context.shared_buf) {
-		ret = psp_ta_init_shared_buf(psp, &context->mem_context);
-		if (ret) {
-			ret = -ENOMEM;
-			goto err_free_bin;
-		}
-	}
+	context.ta_type             = ta_type;
+	context.ta_load_type        = GFX_CMD_ID_LOAD_TA;
+	context.bin_desc.fw_version = get_bin_version(ta_bin);
+	context.bin_desc.size_bytes = ta_bin_len;
+	context.bin_desc.start_addr = ta_bin;
 
-	ret = psp_fn_ta_terminate(psp);
-	if (ret || context->resp_status) {
-		dev_err(adev->dev,
-			"Failed to unload embedded TA (%d) and status (0x%X)\n",
-			ret, context->resp_status);
+	ret = psp_ta_load(psp, &context);
+
+	if (ret || context.resp_status) {
+		dev_err(adev->dev, "TA load via debugfs failed (%d) status %d\n",
+			 ret, context.resp_status);
 		if (!ret)
 			ret = -EINVAL;
-		goto err_free_ta_shared_buf;
+		goto err_free_bin;
 	}
 
-	/* Prepare TA context for TA initialization */
-	context->ta_type                     = ta_type;
-	context->bin_desc.fw_version         = get_bin_version(ta_bin);
-	context->bin_desc.size_bytes         = ta_bin_len;
-	context->bin_desc.start_addr         = ta_bin;
-
-	if (!psp->ta_funcs->fn_ta_initialize) {
-		dev_err(adev->dev, "Unsupported function to initialize TA\n");
-		ret = -EOPNOTSUPP;
-		goto err_free_ta_shared_buf;
-	}
-
-	ret = psp_fn_ta_initialize(psp);
-	if (ret || context->resp_status) {
-		dev_err(adev->dev, "Failed to load TA via debugfs (%d) and status (0x%X)\n",
-			ret, context->resp_status);
-		if (!ret)
-			ret = -EINVAL;
-		goto err_free_ta_shared_buf;
-	}
-
-	if (copy_to_user((char *)buf, (void *)&context->session_id, sizeof(uint32_t)))
+	context.initialized = true;
+	if (copy_to_user((char *)buf, (void *)&context.session_id, sizeof(uint32_t)))
 		ret = -EFAULT;
 
-err_free_ta_shared_buf:
-	/* Only free TA shared buf when returns error code */
-	if (ret && context->mem_context.shared_buf)
-		psp_ta_free_shared_buf(&context->mem_context);
 err_free_bin:
 	kfree(ta_bin);
 
@@ -243,85 +192,58 @@ err_free_bin:
 
 static ssize_t ta_if_unload_debugfs_write(struct file *fp, const char *buf, size_t len, loff_t *off)
 {
-	uint32_t ta_type    = 0;
-	uint32_t ta_id      = 0;
-	uint32_t copy_pos   = 0;
-	int      ret        = 0;
+	uint32_t ta_id  = 0;
+	int      ret    = 0;
 
-	struct amdgpu_device *adev    = (struct amdgpu_device *)file_inode(fp)->i_private;
-	struct psp_context   *psp     = &adev->psp;
-	struct ta_context    *context = NULL;
+	struct amdgpu_device *adev   = (struct amdgpu_device *)file_inode(fp)->i_private;
+	struct psp_context   *psp    = &adev->psp;
+	struct ta_context    context = {0};
 
 	if (!buf)
 		return -EINVAL;
 
-	ret = copy_from_user((void *)&ta_type, &buf[copy_pos], sizeof(uint32_t));
-	if (ret || (!is_ta_type_valid(ta_type)))
-		return -EFAULT;
-
-	copy_pos += sizeof(uint32_t);
-
-	ret = copy_from_user((void *)&ta_id, &buf[copy_pos], sizeof(uint32_t));
+	ret = copy_from_user((void *)&ta_id, buf, sizeof(uint32_t));
 	if (ret)
-		return -EFAULT;
+		return -EINVAL;
 
-	set_ta_context_funcs(psp, ta_type, &context);
-	context->session_id = ta_id;
+	context.session_id = ta_id;
 
-	if (!psp->ta_funcs || !psp->ta_funcs->fn_ta_terminate) {
-		dev_err(adev->dev, "Unsupported function to terminate TA\n");
-		return -EOPNOTSUPP;
-	}
-
-	ret = psp_fn_ta_terminate(psp);
-	if (ret || context->resp_status) {
-		dev_err(adev->dev, "Failed to unload TA via debugfs (%d) and status (0x%X)\n",
-			ret, context->resp_status);
-		if (!ret)
-			ret = -EINVAL;
-	}
-
-	if (context->mem_context.shared_buf)
-		psp_ta_free_shared_buf(&context->mem_context);
+	ret = psp_ta_unload(psp, &context);
+	if (!ret)
+		context.initialized = false;
 
 	return ret;
 }
 
 static ssize_t ta_if_invoke_debugfs_write(struct file *fp, const char *buf, size_t len, loff_t *off)
 {
-	uint32_t ta_type        = 0;
 	uint32_t ta_id          = 0;
 	uint32_t cmd_id         = 0;
 	uint32_t shared_buf_len = 0;
-	uint8_t *shared_buf     = NULL;
+	uint8_t	 *shared_buf    = NULL;
 	uint32_t copy_pos       = 0;
 	int      ret            = 0;
 
-	struct amdgpu_device *adev    = (struct amdgpu_device *)file_inode(fp)->i_private;
-	struct psp_context   *psp     = &adev->psp;
-	struct ta_context    *context = NULL;
+	struct amdgpu_device *adev   = (struct amdgpu_device *)file_inode(fp)->i_private;
+	struct psp_context   *psp    = &adev->psp;
+	struct ta_context    context = {0};
 
 	if (!buf)
 		return -EINVAL;
 
-	ret = copy_from_user((void *)&ta_type, &buf[copy_pos], sizeof(uint32_t));
-	if (ret)
-		return -EFAULT;
-	copy_pos += sizeof(uint32_t);
-
 	ret = copy_from_user((void *)&ta_id, &buf[copy_pos], sizeof(uint32_t));
 	if (ret)
-		return -EFAULT;
+		return -EINVAL;
 	copy_pos += sizeof(uint32_t);
 
 	ret = copy_from_user((void *)&cmd_id, &buf[copy_pos], sizeof(uint32_t));
 	if (ret)
-		return -EFAULT;
+		return -EINVAL;
 	copy_pos += sizeof(uint32_t);
 
 	ret = copy_from_user((void *)&shared_buf_len, &buf[copy_pos], sizeof(uint32_t));
 	if (ret)
-		return -EFAULT;
+		return -EINVAL;
 	copy_pos += sizeof(uint32_t);
 
 	shared_buf = kzalloc(shared_buf_len, GFP_KERNEL);
@@ -332,38 +254,25 @@ static ssize_t ta_if_invoke_debugfs_write(struct file *fp, const char *buf, size
 		goto err_free_shared_buf;
 	}
 
-	set_ta_context_funcs(psp, ta_type, &context);
+	context.session_id = ta_id;
 
-	if (!context->initialized) {
-		dev_err(adev->dev, "TA is not initialized\n");
-		ret = -EINVAL;
-		goto err_free_shared_buf;
-	}
+	prep_ta_mem_context(psp, &context, shared_buf, shared_buf_len);
 
-	if (!psp->ta_funcs || !psp->ta_funcs->fn_ta_invoke) {
-		dev_err(adev->dev, "Unsupported function to invoke TA\n");
-		ret = -EOPNOTSUPP;
-		goto err_free_shared_buf;
-	}
+	ret = psp_ta_invoke_indirect(psp, cmd_id, &context);
 
-	context->session_id = ta_id;
-
-	ret = prep_ta_mem_context(&context->mem_context, shared_buf, shared_buf_len);
-	if (ret)
-		goto err_free_shared_buf;
-
-	ret = psp_fn_ta_invoke(psp, cmd_id);
-	if (ret || context->resp_status) {
-		dev_err(adev->dev, "Failed to invoke TA via debugfs (%d) and status (0x%X)\n",
-			ret, context->resp_status);
-		if (!ret) {
+	if (ret || context.resp_status) {
+		dev_err(adev->dev, "TA invoke via debugfs failed (%d) status %d\n",
+			 ret, context.resp_status);
+		if (!ret)
 			ret = -EINVAL;
-			goto err_free_shared_buf;
-		}
+		goto err_free_ta_shared_buf;
 	}
 
-	if (copy_to_user((char *)buf, context->mem_context.shared_buf, shared_buf_len))
+	if (copy_to_user((char *)buf, context.mem_context.shared_buf, shared_buf_len))
 		ret = -EFAULT;
+
+err_free_ta_shared_buf:
+	psp_ta_free_shared_buf(&context.mem_context);
 
 err_free_shared_buf:
 	kfree(shared_buf);

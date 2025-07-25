@@ -16,7 +16,7 @@
 / {
 	aliases {
 		bluetooth0 = &bluetooth;
-		serial1 = &uart6;
+		hsuart0 = &uart6;
 		serial0 = &uart9;
 		wifi0 = &wifi;
 	};
@@ -145,16 +145,20 @@
 	};
 };
 
+&cpufreq_hw {
+	/delete-property/ interrupts-extended; /* reference to lmh_cluster[01] */
+};
+
 &psci {
-	/delete-node/ cpu0;
-	/delete-node/ cpu1;
-	/delete-node/ cpu2;
-	/delete-node/ cpu3;
-	/delete-node/ cpu4;
-	/delete-node/ cpu5;
-	/delete-node/ cpu6;
-	/delete-node/ cpu7;
-	/delete-node/ cpu-cluster0;
+	/delete-node/ power-domain-cpu0;
+	/delete-node/ power-domain-cpu1;
+	/delete-node/ power-domain-cpu2;
+	/delete-node/ power-domain-cpu3;
+	/delete-node/ power-domain-cpu4;
+	/delete-node/ power-domain-cpu5;
+	/delete-node/ power-domain-cpu6;
+	/delete-node/ power-domain-cpu7;
+	/delete-node/ power-domain-cluster;
 };
 
 &cpus {
@@ -277,6 +281,14 @@
 			   &CLUSTER_SLEEP_0>;
 };
 
+&lmh_cluster0 {
+	status = "disabled";
+};
+
+&lmh_cluster1 {
+	status = "disabled";
+};
+
 /*
  * Reserved memory changes
  *
@@ -339,7 +351,9 @@
 
 
 &apps_rsc {
-	pm8998-rpmh-regulators {
+	/delete-property/ power-domains;
+
+	regulators-0 {
 		compatible = "qcom,pm8998-rpmh-regulators";
 		qcom,pmic-id = "a";
 
@@ -621,7 +635,7 @@
 		};
 	};
 
-	pm8005-rpmh-regulators {
+	regulators-1 {
 		compatible = "qcom,pm8005-rpmh-regulators";
 		qcom,pmic-id = "c";
 
@@ -860,8 +874,6 @@ ap_ts_i2c: &i2c14 {
 &uart6 {
 	status = "okay";
 
-	pinctrl-0 = <&qup_uart6_4pin>;
-
 	bluetooth: wcn3990-bt {
 		compatible = "qcom,wcn3990-bt";
 		vddio-supply = <&src_pp1800_s4a>;
@@ -1078,6 +1090,41 @@ ap_ts_i2c: &i2c14 {
 		pins = "gpio53", "gpio54", "gpio55", "gpio56";
 		drive-strength = <2>;
 		bias-disable;
+	};
+};
+
+&qup_uart6_default {
+	/* Change pinmux to all 4 pins since CTS and RTS are connected */
+	pinmux {
+		pins = "gpio45", "gpio46",
+		       "gpio47", "gpio48";
+	};
+
+	pinconf-cts {
+		/*
+		 * Configure a pull-down on 45 (CTS) to match the pull of
+		 * the Bluetooth module.
+		 */
+		pins = "gpio45";
+		bias-pull-down;
+	};
+
+	pinconf-rts-tx {
+		/* We'll drive 46 (RTS) and 47 (TX), so no pull */
+		pins = "gpio46", "gpio47";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	pinconf-rx {
+		/*
+		 * Configure a pull-up on 48 (RX). This is needed to avoid
+		 * garbage data when the TX pin of the Bluetooth module is
+		 * in tri-state (module powered off or not driving the
+		 * signal yet).
+		 */
+		pins = "gpio48";
+		bias-pull-up;
 	};
 };
 
@@ -1308,7 +1355,7 @@ ap_ts_i2c: &i2c14 {
 	};
 
 	pen_rst_l: pen-rst-l {
-		pinmux {
+		pinmux  {
 			pins = "gpio23";
 			function = "gpio";
 		};
@@ -1375,7 +1422,7 @@ ap_ts_i2c: &i2c14 {
 	};
 
 	ts_int_l: ts-int-l {
-		pinmux {
+		pinmux  {
 			pins = "gpio125";
 			function = "gpio";
 		};
@@ -1387,7 +1434,7 @@ ap_ts_i2c: &i2c14 {
 	};
 
 	ts_reset_l: ts-reset-l {
-		pinmux {
+		pinmux  {
 			pins = "gpio118";
 			function = "gpio";
 		};

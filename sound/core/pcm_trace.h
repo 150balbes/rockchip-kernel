@@ -88,19 +88,19 @@ TRACE_EVENT(hw_ptr_error,
 		__field( unsigned int, device )
 		__field( unsigned int, number )
 		__field( unsigned int, stream )
-		__string( reason, why )
+		__field( const char *, reason )
 	),
 	TP_fast_assign(
 		__entry->card = (substream)->pcm->card->number;
 		__entry->device = (substream)->pcm->device;
 		__entry->number = (substream)->number;
 		__entry->stream = (substream)->stream;
-		__assign_str(reason, why);
+		__entry->reason = (why);
 	),
 	TP_printk("pcmC%dD%d%s/sub%d: ERROR: %s",
 		  __entry->card, __entry->device,
 		  __entry->stream == SNDRV_PCM_STREAM_PLAYBACK ? "p" : "c",
-		  __entry->number, __get_str(reason))
+		  __entry->number, __entry->reason)
 );
 
 TRACE_EVENT(applptr,
@@ -138,6 +138,32 @@ TRACE_EVENT(applptr,
 		__entry->avail,
 		__entry->period_size,
 		__entry->buffer_size
+	)
+);
+
+TRACE_EVENT(applptr_start,
+	TP_PROTO(struct snd_pcm_substream *substream, snd_pcm_uframes_t size),
+	TP_ARGS(substream, size),
+	TP_STRUCT__entry(
+		__field( unsigned int, card )
+		__field( unsigned int, device )
+		__field( unsigned int, number )
+		__field( unsigned int, stream )
+		__field( snd_pcm_uframes_t, size )
+	),
+	TP_fast_assign(
+		__entry->card = (substream)->pcm->card->number;
+		__entry->device = (substream)->pcm->device;
+		__entry->number = (substream)->number;
+		__entry->stream = (substream)->stream;
+		__entry->size = (size);
+	),
+	TP_printk("pcmC%dD%d%s/sub%d: size=%lu",
+		__entry->card,
+		__entry->device,
+		__entry->stream ? "c" : "p",
+		__entry->number,
+		__entry->size
 	)
 );
 

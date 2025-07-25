@@ -10,7 +10,7 @@ maintainers:
   - Jerome Brunet <jbrunet@baylibre.com>
 
 allOf:
-  - $ref: dai-common.yaml#
+  - $ref: name-prefix.yaml#
 
 properties:
   compatible:

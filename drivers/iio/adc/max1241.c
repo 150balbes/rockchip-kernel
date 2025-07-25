@@ -22,6 +22,7 @@ enum max1241_id {
 struct max1241 {
 	struct spi_device *spi;
 	struct mutex lock;
+	struct regulator *vdd;
 	struct regulator *vref;
 	struct gpio_desc *shutdown;
 
@@ -109,6 +110,17 @@ static const struct iio_info max1241_info = {
 	.read_raw = max1241_read_raw,
 };
 
+static void max1241_disable_vdd_action(void *data)
+{
+	struct max1241 *adc = data;
+	struct device *dev = &adc->spi->dev;
+	int err;
+
+	err = regulator_disable(adc->vdd);
+	if (err)
+		dev_err(dev, "could not disable vdd regulator.\n");
+}
+
 static void max1241_disable_vref_action(void *data)
 {
 	struct max1241 *adc = data;
@@ -135,10 +147,20 @@ static int max1241_probe(struct spi_device *spi)
 	adc->spi = spi;
 	mutex_init(&adc->lock);
 
-	ret = devm_regulator_get_enable(dev, "vdd");
+	adc->vdd = devm_regulator_get(dev, "vdd");
+	if (IS_ERR(adc->vdd))
+		return dev_err_probe(dev, PTR_ERR(adc->vdd),
+				     "failed to get vdd regulator\n");
+
+	ret = regulator_enable(adc->vdd);
 	if (ret)
-		return dev_err_probe(dev, ret,
-				     "failed to get/enable vdd regulator\n");
+		return ret;
+
+	ret = devm_add_action_or_reset(dev, max1241_disable_vdd_action, adc);
+	if (ret) {
+		dev_err(dev, "could not set up vdd regulator cleanup action\n");
+		return ret;
+	}
 
 	adc->vref = devm_regulator_get(dev, "vref");
 	if (IS_ERR(adc->vref))

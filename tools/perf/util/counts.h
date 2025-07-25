@@ -11,6 +11,7 @@ struct evsel;
 
 struct perf_counts {
 	s8			  scaled;
+	struct perf_counts_values aggr;
 	struct xyarray		  *values;
 	struct xyarray		  *loaded;
 };

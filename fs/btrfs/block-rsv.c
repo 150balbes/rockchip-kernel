@@ -7,8 +7,6 @@
 #include "transaction.h"
 #include "block-group.h"
 #include "disk-io.h"
-#include "fs.h"
-#include "accessors.h"
 
 /*
  * HOW DO BLOCK RESERVES WORK
@@ -124,7 +122,8 @@ static u64 block_rsv_release_bytes(struct btrfs_fs_info *fs_info,
 	} else {
 		num_bytes = 0;
 	}
-	if (block_rsv->qgroup_rsv_reserved >= block_rsv->qgroup_rsv_size) {
+	if (qgroup_to_release_ret &&
+	    block_rsv->qgroup_rsv_reserved >= block_rsv->qgroup_rsv_size) {
 		qgroup_to_release = block_rsv->qgroup_rsv_reserved -
 				    block_rsv->qgroup_rsv_size;
 		block_rsv->qgroup_rsv_reserved = block_rsv->qgroup_rsv_size;
@@ -227,7 +226,7 @@ int btrfs_block_rsv_add(struct btrfs_fs_info *fs_info,
 	return ret;
 }
 
-int btrfs_block_rsv_check(struct btrfs_block_rsv *block_rsv, int min_percent)
+int btrfs_block_rsv_check(struct btrfs_block_rsv *block_rsv, int min_factor)
 {
 	u64 num_bytes = 0;
 	int ret = -ENOSPC;
@@ -236,7 +235,7 @@ int btrfs_block_rsv_check(struct btrfs_block_rsv *block_rsv, int min_percent)
 		return 0;
 
 	spin_lock(&block_rsv->lock);
-	num_bytes = mult_perc(block_rsv->size, min_percent);
+	num_bytes = div_factor(block_rsv->size, min_factor);
 	if (block_rsv->reserved >= num_bytes)
 		ret = 0;
 	spin_unlock(&block_rsv->lock);
@@ -325,6 +324,31 @@ void btrfs_block_rsv_add_bytes(struct btrfs_block_rsv *block_rsv,
 	spin_unlock(&block_rsv->lock);
 }
 
+int btrfs_cond_migrate_bytes(struct btrfs_fs_info *fs_info,
+			     struct btrfs_block_rsv *dest, u64 num_bytes,
+			     int min_factor)
+{
+	struct btrfs_block_rsv *global_rsv = &fs_info->global_block_rsv;
+	u64 min_bytes;
+
+	if (global_rsv->space_info != dest->space_info)
+		return -ENOSPC;
+
+	spin_lock(&global_rsv->lock);
+	min_bytes = div_factor(global_rsv->size, min_factor);
+	if (global_rsv->reserved < min_bytes + num_bytes) {
+		spin_unlock(&global_rsv->lock);
+		return -ENOSPC;
+	}
+	global_rsv->reserved -= num_bytes;
+	if (global_rsv->reserved < global_rsv->size)
+		global_rsv->full = false;
+	spin_unlock(&global_rsv->lock);
+
+	btrfs_block_rsv_add_bytes(dest, num_bytes, true);
+	return 0;
+}
+
 void btrfs_update_global_block_rsv(struct btrfs_fs_info *fs_info)
 {
 	struct btrfs_block_rsv *block_rsv = &fs_info->global_block_rsv;
@@ -352,6 +376,11 @@ void btrfs_update_global_block_rsv(struct btrfs_fs_info *fs_info)
 		}
 	}
 	read_unlock(&fs_info->global_root_lock);
+
+	if (btrfs_fs_compat_ro(fs_info, BLOCK_GROUP_TREE)) {
+		num_bytes += btrfs_root_used(&fs_info->block_group_root->root_item);
+		min_items++;
+	}
 
 	/*
 	 * But we also want to reserve enough space so we can do the fallback
@@ -483,7 +512,7 @@ struct btrfs_block_rsv *btrfs_use_block_rsv(struct btrfs_trans_handle *trans,
 
 	block_rsv = get_block_rsv(trans, root);
 
-	if (unlikely(block_rsv->size == 0))
+	if (unlikely(btrfs_block_rsv_size(block_rsv) == 0))
 		goto try_reserve;
 again:
 	ret = btrfs_block_rsv_use_bytes(block_rsv, blocksize);
@@ -529,17 +558,5 @@ try_reserve:
 		if (!ret)
 			return global_rsv;
 	}
-
-	/*
-	 * All hope is lost, but of course our reservations are overly
-	 * pessimistic, so instead of possibly having an ENOSPC abort here, try
-	 * one last time to force a reservation if there's enough actual space
-	 * on disk to make the reservation.
-	 */
-	ret = btrfs_reserve_metadata_bytes(fs_info, block_rsv, blocksize,
-					   BTRFS_RESERVE_FLUSH_EMERGENCY);
-	if (!ret)
-		return block_rsv;
-
 	return ERR_PTR(ret);
 }

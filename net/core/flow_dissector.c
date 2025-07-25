@@ -971,14 +971,12 @@ bool __skb_flow_dissect(const struct net *net,
 #if IS_ENABLED(CONFIG_NET_DSA)
 		if (unlikely(skb->dev && netdev_uses_dsa(skb->dev) &&
 			     proto == htons(ETH_P_XDSA))) {
-			struct metadata_dst *md_dst = skb_metadata_dst(skb);
 			const struct dsa_device_ops *ops;
 			int offset = 0;
 
 			ops = skb->dev->dsa_ptr->tag_ops;
 			/* Only DSA header taggers break flow dissection */
-			if (ops->needed_headroom &&
-			    (!md_dst || md_dst->type != METADATA_HW_PORT_MUX)) {
+			if (ops->needed_headroom) {
 				if (ops->flow_dissect)
 					ops->flow_dissect(skb, &proto, &offset);
 				else
@@ -1368,7 +1366,7 @@ proto_again:
 			break;
 		}
 
-		nhoff += ntohs(hdr->message_length);
+		nhoff += sizeof(struct ptp_header);
 		fdret = FLOW_DISSECT_RET_OUT_GOOD;
 		break;
 	}
@@ -1740,8 +1738,7 @@ u32 __skb_get_hash_symmetric(const struct sk_buff *skb)
 
 	memset(&keys, 0, sizeof(keys));
 	__skb_flow_dissect(NULL, skb, &flow_keys_dissector_symmetric,
-			   &keys, NULL, 0, 0, 0,
-			   FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
+			   &keys, NULL, 0, 0, 0, 0);
 
 	return __flow_hash_from_keys(&keys, &hashrnd);
 }

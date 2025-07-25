@@ -87,6 +87,16 @@ static const char * const iio_chan_type_name_spec[] = {
 	[IIO_POSITIONRELATIVE]  = "positionrelative",
 	[IIO_PHASE] = "phase",
 	[IIO_MASSCONCENTRATION] = "massconcentration",
+#ifdef CONFIG_NO_GKI
+	[IIO_SIGN_MOTION] = "signmotion",
+	[IIO_STEP_DETECTOR] = "stepdetector",
+	[IIO_STEP_COUNTER] = "stepcounter",
+	[IIO_TILT] = "tilt",
+	[IIO_TAP] = "tap",
+	[IIO_TAP_TAP] = "taptap",
+	[IIO_WRIST_TILT_GESTURE] = "wristtiltgesture",
+	[IIO_GESTURE] = "gesture",
+#endif
 };
 
 static const char * const iio_modifier_names[] = {
@@ -285,16 +295,16 @@ int iio_device_set_clock(struct iio_dev *indio_dev, clockid_t clock_id)
 	struct iio_dev_opaque *iio_dev_opaque = to_iio_dev_opaque(indio_dev);
 	const struct iio_event_interface *ev_int = iio_dev_opaque->event_interface;
 
-	ret = mutex_lock_interruptible(&iio_dev_opaque->mlock);
+	ret = mutex_lock_interruptible(&indio_dev->mlock);
 	if (ret)
 		return ret;
 	if ((ev_int && iio_event_enabled(ev_int)) ||
 	    iio_buffer_enabled(indio_dev)) {
-		mutex_unlock(&iio_dev_opaque->mlock);
+		mutex_unlock(&indio_dev->mlock);
 		return -EBUSY;
 	}
 	iio_dev_opaque->clock_id = clock_id;
-	mutex_unlock(&iio_dev_opaque->mlock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -1601,10 +1611,13 @@ static int iio_device_register_sysfs(struct iio_dev *indio_dev)
 	ret = iio_device_register_sysfs_group(indio_dev,
 					      &iio_dev_opaque->chan_attr_group);
 	if (ret)
-		goto error_clear_attrs;
+		goto error_free_chan_attrs;
 
 	return 0;
 
+error_free_chan_attrs:
+	kfree(iio_dev_opaque->chan_attr_group.attrs);
+	iio_dev_opaque->chan_attr_group.attrs = NULL;
 error_clear_attrs:
 	iio_free_chan_devattr_list(&iio_dev_opaque->channel_attr_list);
 
@@ -1667,14 +1680,16 @@ struct iio_dev *iio_device_alloc(struct device *parent, int sizeof_priv)
 		return NULL;
 
 	indio_dev = &iio_dev_opaque->indio_dev;
-	indio_dev->priv = (char *)iio_dev_opaque +
-		ALIGN(sizeof(struct iio_dev_opaque), IIO_DMA_MINALIGN);
+
+	if (sizeof_priv)
+		indio_dev->priv = (char *)iio_dev_opaque +
+			ALIGN(sizeof(*iio_dev_opaque), IIO_DMA_MINALIGN);
 
 	indio_dev->dev.parent = parent;
 	indio_dev->dev.type = &iio_device_type;
 	indio_dev->dev.bus = &iio_bus_type;
 	device_initialize(&indio_dev->dev);
-	mutex_init(&iio_dev_opaque->mlock);
+	mutex_init(&indio_dev->mlock);
 	mutex_init(&iio_dev_opaque->info_exist_lock);
 	INIT_LIST_HEAD(&iio_dev_opaque->channel_attr_list);
 
@@ -1696,7 +1711,7 @@ struct iio_dev *iio_device_alloc(struct device *parent, int sizeof_priv)
 	INIT_LIST_HEAD(&iio_dev_opaque->ioctl_handlers);
 
 	lockdep_register_key(&iio_dev_opaque->mlock_key);
-	lockdep_set_class(&iio_dev_opaque->mlock, &iio_dev_opaque->mlock_key);
+	lockdep_set_class(&indio_dev->mlock, &iio_dev_opaque->mlock_key);
 
 	return indio_dev;
 }
@@ -1916,7 +1931,7 @@ static const struct iio_buffer_setup_ops noop_ring_setup_ops;
 int __iio_device_register(struct iio_dev *indio_dev, struct module *this_mod)
 {
 	struct iio_dev_opaque *iio_dev_opaque = to_iio_dev_opaque(indio_dev);
-	struct fwnode_handle *fwnode;
+	struct fwnode_handle *fwnode = NULL;
 	int ret;
 
 	if (!indio_dev->info)
@@ -1927,7 +1942,8 @@ int __iio_device_register(struct iio_dev *indio_dev, struct module *this_mod)
 	/* If the calling driver did not initialize firmware node, do it here */
 	if (dev_fwnode(&indio_dev->dev))
 		fwnode = dev_fwnode(&indio_dev->dev);
-	else
+	/* The default dummy IIO device has no parent */
+	else if (indio_dev->dev.parent)
 		fwnode = dev_fwnode(indio_dev->dev.parent);
 	device_set_node(&indio_dev->dev, fwnode);
 
@@ -2058,12 +2074,10 @@ EXPORT_SYMBOL_GPL(__devm_iio_device_register);
  */
 int iio_device_claim_direct_mode(struct iio_dev *indio_dev)
 {
-	struct iio_dev_opaque *iio_dev_opaque = to_iio_dev_opaque(indio_dev);
-
-	mutex_lock(&iio_dev_opaque->mlock);
+	mutex_lock(&indio_dev->mlock);
 
 	if (iio_buffer_enabled(indio_dev)) {
-		mutex_unlock(&iio_dev_opaque->mlock);
+		mutex_unlock(&indio_dev->mlock);
 		return -EBUSY;
 	}
 	return 0;
@@ -2081,7 +2095,7 @@ EXPORT_SYMBOL_GPL(iio_device_claim_direct_mode);
  */
 void iio_device_release_direct_mode(struct iio_dev *indio_dev)
 {
-	mutex_unlock(&to_iio_dev_opaque(indio_dev)->mlock);
+	mutex_unlock(&indio_dev->mlock);
 }
 EXPORT_SYMBOL_GPL(iio_device_release_direct_mode);
 
@@ -2098,14 +2112,12 @@ EXPORT_SYMBOL_GPL(iio_device_release_direct_mode);
  */
 int iio_device_claim_buffer_mode(struct iio_dev *indio_dev)
 {
-	struct iio_dev_opaque *iio_dev_opaque = to_iio_dev_opaque(indio_dev);
-
-	mutex_lock(&iio_dev_opaque->mlock);
+	mutex_lock(&indio_dev->mlock);
 
 	if (iio_buffer_enabled(indio_dev))
 		return 0;
 
-	mutex_unlock(&iio_dev_opaque->mlock);
+	mutex_unlock(&indio_dev->mlock);
 	return -EBUSY;
 }
 EXPORT_SYMBOL_GPL(iio_device_claim_buffer_mode);
@@ -2121,7 +2133,7 @@ EXPORT_SYMBOL_GPL(iio_device_claim_buffer_mode);
  */
 void iio_device_release_buffer_mode(struct iio_dev *indio_dev)
 {
-	mutex_unlock(&to_iio_dev_opaque(indio_dev)->mlock);
+	mutex_unlock(&indio_dev->mlock);
 }
 EXPORT_SYMBOL_GPL(iio_device_release_buffer_mode);
 

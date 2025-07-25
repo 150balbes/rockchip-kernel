@@ -106,7 +106,7 @@ SYM_FUNC_START(__vmx_vcpu_run)
 	mov (%_ASM_SP), %_ASM_AX
 
 	/* Check if vmlaunch or vmresume is needed */
-	testb $VMX_RUN_VMRESUME, %bl
+	bt   $VMX_RUN_VMRESUME_SHIFT, %bx
 
 	/* Load guest registers.  Don't clobber flags. */
 	mov VCPU_RCX(%_ASM_AX), %_ASM_CX
@@ -128,8 +128,11 @@ SYM_FUNC_START(__vmx_vcpu_run)
 	/* Load guest RAX.  This kills the @regs pointer! */
 	mov VCPU_RAX(%_ASM_AX), %_ASM_AX
 
-	/* Check EFLAGS.ZF from 'testb' above */
-	jz .Lvmlaunch
+	/* Clobbers EFLAGS.ZF */
+	CLEAR_CPU_BUFFERS
+
+	/* Check EFLAGS.CF from the VMX_RUN_VMRESUME bit test above. */
+	jnc .Lvmlaunch
 
 	/*
 	 * After a successful VMRESUME/VMLAUNCH, control flow "magically"
@@ -239,6 +242,8 @@ SYM_INNER_LABEL(vmx_vmexit, SYM_L_GLOBAL)
 
 	call vmx_spec_ctrl_restore_host
 
+	CLEAR_BRANCH_HISTORY_VMEXIT
+
 	/* Put return value in AX */
 	mov %_ASM_BX, %_ASM_AX
 
@@ -269,7 +274,6 @@ SYM_FUNC_END(__vmx_vcpu_run)
 
 .section .text, "ax"
 
-#ifndef CONFIG_CC_HAS_ASM_GOTO_OUTPUT
 /**
  * vmread_error_trampoline - Trampoline from inline asm to vmread_error()
  * @field:	VMCS field encoding that failed
@@ -318,7 +322,6 @@ SYM_FUNC_START(vmread_error_trampoline)
 
 	RET
 SYM_FUNC_END(vmread_error_trampoline)
-#endif
 
 SYM_FUNC_START(vmx_do_interrupt_nmi_irqoff)
 	/*

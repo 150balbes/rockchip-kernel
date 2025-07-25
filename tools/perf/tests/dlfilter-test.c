@@ -33,7 +33,6 @@
 #include "archinsn.h"
 #include "dlfilter.h"
 #include "tests.h"
-#include "util/sample.h"
 
 #define MAP_START 0x400000
 
@@ -88,7 +87,7 @@ static __printf(1, 2) int system_cmd(const char *fmt, ...)
 	if (ret <= 0 || ret >= MAXCMD)
 		return -1;
 
-	if (verbose <= 0)
+	if (!verbose)
 		strcat(cmd, REDIRECT_TO_DEV_NULL);
 
 	pr_debug("Command: %s\n", cmd);

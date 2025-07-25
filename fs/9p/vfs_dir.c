@@ -14,6 +14,7 @@
 #include <linux/string.h>
 #include <linux/sched.h>
 #include <linux/inet.h>
+#include <linux/idr.h>
 #include <linux/slab.h>
 #include <linux/uio.h>
 #include <linux/fscache.h>

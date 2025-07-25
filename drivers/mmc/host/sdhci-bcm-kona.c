@@ -168,7 +168,7 @@ static void sdhci_bcm_kona_init_74_clocks(struct sdhci_host *host,
 	/*
 	 *  JEDEC and SD spec specify supplying 74 continuous clocks to
 	 * device after power up. With minimum bus (100KHz) that
-	 * translates to 740us
+	 * that translates to 740us
 	 */
 	if (power_mode != MMC_POWER_OFF)
 		udelay(740);

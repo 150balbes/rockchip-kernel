@@ -21,7 +21,7 @@ enum {
 struct rxe_task {
 	struct tasklet_struct	tasklet;
 	int			state;
-	spinlock_t		lock;
+	spinlock_t		state_lock; /* spinlock for task state */
 	void			*arg;
 	int			(*func)(void *arg);
 	int			ret;
@@ -43,6 +43,14 @@ void rxe_cleanup_task(struct rxe_task *task);
  * can call when tasklets are disabled
  */
 int __rxe_do_task(struct rxe_task *task);
+
+/*
+ * common function called by any of the main tasklets
+ * If there is any chance that there is additional
+ * work to do someone must reschedule the task before
+ * leaving
+ */
+void rxe_do_task(struct tasklet_struct *t);
 
 void rxe_run_task(struct rxe_task *task);
 

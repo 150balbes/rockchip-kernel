@@ -38,15 +38,12 @@
  * saturated values.
  */
 
-#include <linux/debugfs.h>
-#include <linux/device.h>
-#include <linux/io.h>
-#include <linux/math.h>
-#include <linux/module.h>
-#include <linux/rational.h>
-#include <linux/slab.h>
-
 #include <linux/clk-provider.h>
+#include <linux/io.h>
+#include <linux/module.h>
+#include <linux/device.h>
+#include <linux/slab.h>
+#include <linux/rational.h>
 
 #include "clk-fractional-divider.h"
 
@@ -66,12 +63,14 @@ static inline void clk_fd_writel(struct clk_fractional_divider *fd, u32 val)
 		writel(val, fd->reg);
 }
 
-static void clk_fd_get_div(struct clk_hw *hw, struct u32_fract *fract)
+static unsigned long clk_fd_recalc_rate(struct clk_hw *hw,
+					unsigned long parent_rate)
 {
 	struct clk_fractional_divider *fd = to_clk_fd(hw);
 	unsigned long flags = 0;
 	unsigned long m, n;
 	u32 val;
+	u64 ret;
 
 	if (fd->lock)
 		spin_lock_irqsave(fd->lock, flags);
@@ -93,22 +92,11 @@ static void clk_fd_get_div(struct clk_hw *hw, struct u32_fract *fract)
 		n++;
 	}
 
-	fract->numerator = m;
-	fract->denominator = n;
-}
-
-static unsigned long clk_fd_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
-{
-	struct u32_fract fract;
-	u64 ret;
-
-	clk_fd_get_div(hw, &fract);
-
-	if (!fract.numerator || !fract.denominator)
+	if (!n || !m)
 		return parent_rate;
 
-	ret = (u64)parent_rate * fract.numerator;
-	do_div(ret, fract.denominator);
+	ret = (u64)parent_rate * m;
+	do_div(ret, n);
 
 	return ret;
 }
@@ -146,7 +134,7 @@ static long clk_fd_round_rate(struct clk_hw *hw, unsigned long rate,
 	unsigned long m, n;
 	u64 ret;
 
-	if (!rate || (!clk_hw_can_set_rate_parent(hw) && rate >= *parent_rate))
+	if (!rate || rate >= *parent_rate)
 		return *parent_rate;
 
 	if (fd->approximation)
@@ -176,6 +164,32 @@ static int clk_fd_set_rate(struct clk_hw *hw, unsigned long rate,
 		m--;
 		n--;
 	}
+	/*
+	 * When compensation the fractional divider,
+	 * the [1:0] bits of the numerator register are omitted,
+	 * which will lead to a large deviation in the result.
+	 * Therefore, it is required that the numerator must
+	 * be greater than 4.
+	 *
+	 * Note that there are some exceptions here:
+	 * If there is an even frac div, we need to keep the original
+	 * numerator(<4) and denominator. Otherwise, it may cause the
+	 * issue that the duty ratio is not 50%.
+	 */
+	if (m < 4 && m != 0) {
+		if (n % 2 == 0)
+			val = 1;
+		else
+			val = DIV_ROUND_UP(4, m);
+
+		n *= val;
+		m *= val;
+		if (n > fd->nmask) {
+			pr_debug("%s n(%ld) is overflow, use mask value\n",
+				 __func__, n);
+			n = fd->nmask;
+		}
+	}
 
 	if (fd->lock)
 		spin_lock_irqsave(fd->lock, flags);
@@ -195,45 +209,10 @@ static int clk_fd_set_rate(struct clk_hw *hw, unsigned long rate,
 	return 0;
 }
 
-#ifdef CONFIG_DEBUG_FS
-static int clk_fd_numerator_get(void *hw, u64 *val)
-{
-	struct u32_fract fract;
-
-	clk_fd_get_div(hw, &fract);
-
-	*val = fract.numerator;
-
-	return 0;
-}
-DEFINE_DEBUGFS_ATTRIBUTE(clk_fd_numerator_fops, clk_fd_numerator_get, NULL, "%llu\n");
-
-static int clk_fd_denominator_get(void *hw, u64 *val)
-{
-	struct u32_fract fract;
-
-	clk_fd_get_div(hw, &fract);
-
-	*val = fract.denominator;
-
-	return 0;
-}
-DEFINE_DEBUGFS_ATTRIBUTE(clk_fd_denominator_fops, clk_fd_denominator_get, NULL, "%llu\n");
-
-static void clk_fd_debug_init(struct clk_hw *hw, struct dentry *dentry)
-{
-	debugfs_create_file("numerator", 0444, dentry, hw, &clk_fd_numerator_fops);
-	debugfs_create_file("denominator", 0444, dentry, hw, &clk_fd_denominator_fops);
-}
-#endif
-
 const struct clk_ops clk_fractional_divider_ops = {
 	.recalc_rate = clk_fd_recalc_rate,
 	.round_rate = clk_fd_round_rate,
 	.set_rate = clk_fd_set_rate,
-#ifdef CONFIG_DEBUG_FS
-	.debug_init = clk_fd_debug_init,
-#endif
 };
 EXPORT_SYMBOL_GPL(clk_fractional_divider_ops);
 

@@ -28,7 +28,6 @@ TOOL_OBJS = \
 	tbxfroot.o\
 	utascii.o\
 	utbuffer.o\
-	utcksum.o\
 	utdebug.o\
 	utexcep.o\
 	utglobal.o\

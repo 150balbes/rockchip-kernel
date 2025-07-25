@@ -5,7 +5,6 @@
  */
 
 #include "i915_drv.h"
-#include "i915_reg.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
 #include "intel_vrr.h"
@@ -109,6 +108,13 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
 	int vmin, vmax;
 
 	if (!intel_vrr_is_capable(connector))
+		return;
+
+	/*
+	 * FIXME all joined pipes share the same transcoder.
+	 * Need to account for that during VRR toggle/push/etc.
+	 */
+	if (crtc_state->bigjoiner_pipes)
 		return;
 
 	if (adjusted_mode->flags & DRM_MODE_FLAG_INTERLACE)

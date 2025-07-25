@@ -29,7 +29,7 @@
 			};
 		};
 
-		mmc@ff704000 {
+		dwmmc0@ff704000 {
 			broken-cd;
 			bus-width = <4>;
 			cap-mmc-highspeed;

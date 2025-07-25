@@ -390,6 +390,14 @@ static int fusb302_set_power_mode(struct fusb302_chip *chip, u8 power_mode)
 	return ret;
 }
 
+static int fusb302_rx_fifo_is_empty(struct fusb302_chip *chip)
+{
+	u8 data;
+
+	return (fusb302_i2c_read(chip, FUSB_REG_STATUS1, &data) > 0) &&
+		(data & FUSB_REG_STATUS1_RX_EMPTY);
+}
+
 static int tcpm_init(struct tcpc_dev *dev)
 {
 	struct fusb302_chip *chip = container_of(dev, struct fusb302_chip,
@@ -670,7 +678,7 @@ static int tcpm_set_cc(struct tcpc_dev *dev, enum typec_cc_status cc)
 		ret = fusb302_i2c_mask_write(chip, FUSB_REG_MASK,
 					     FUSB_REG_MASK_BC_LVL |
 					     FUSB_REG_MASK_COMP_CHNG,
-					     FUSB_REG_MASK_COMP_CHNG);
+					     FUSB_REG_MASK_BC_LVL);
 		if (ret < 0) {
 			fusb302_log(chip, "cannot set SRC interrupt, ret=%d",
 				    ret);
@@ -683,7 +691,7 @@ static int tcpm_set_cc(struct tcpc_dev *dev, enum typec_cc_status cc)
 		ret = fusb302_i2c_mask_write(chip, FUSB_REG_MASK,
 					     FUSB_REG_MASK_BC_LVL |
 					     FUSB_REG_MASK_COMP_CHNG,
-					     FUSB_REG_MASK_BC_LVL);
+					     FUSB_REG_MASK_COMP_CHNG);
 		if (ret < 0) {
 			fusb302_log(chip, "cannot set SRC interrupt, ret=%d",
 				    ret);
@@ -934,7 +942,7 @@ static int tcpm_start_toggling(struct tcpc_dev *dev,
 	}
 
 	mutex_lock(&chip->lock);
-	ret = fusb302_set_src_current(chip, cc_src_current[cc]);
+	ret = fusb302_set_src_current(chip, SRC_CURRENT_DEFAULT);
 	if (ret < 0) {
 		fusb302_log(chip, "unable to set src current %s, ret=%d",
 			    typec_cc_status_name[cc], ret);
@@ -1343,6 +1351,8 @@ static int fusb302_handle_togdone_src(struct fusb302_chip *chip,
 	} else if (cc2 == TYPEC_CC_RD &&
 		    (cc1 == TYPEC_CC_OPEN || cc1 == TYPEC_CC_RA)) {
 		cc_polarity = TYPEC_POLARITY_CC2;
+	} else if (cc1 == TYPEC_CC_RA && cc2 == TYPEC_CC_RA) {
+		cc_polarity = TYPEC_POLARITY_CC2;
 	} else {
 		fusb302_log(chip, "unexpected CC status cc1=%s, cc2=%s, restarting toggling",
 			    typec_cc_status_name[cc1],
@@ -1593,12 +1603,7 @@ static void fusb302_irq_work(struct kthread_work *work)
 
 	if (interrupta & FUSB_REG_INTERRUPTA_TX_SUCCESS) {
 		fusb302_log(chip, "IRQ: PD tx success");
-		ret = fusb302_pd_read_message(chip, &pd_msg);
-		if (ret < 0) {
-			fusb302_log(chip,
-				    "cannot read in PD message, ret=%d", ret);
-			goto done;
-		}
+		tcpm_pd_transmit_complete(chip->tcpm_port, TCPC_TX_SUCCESS);
 	}
 
 	if (interrupta & FUSB_REG_INTERRUPTA_HARDRESET) {
@@ -1613,11 +1618,15 @@ static void fusb302_irq_work(struct kthread_work *work)
 
 	if (interruptb & FUSB_REG_INTERRUPTB_GCRCSENT) {
 		fusb302_log(chip, "IRQ: PD sent good CRC");
-		ret = fusb302_pd_read_message(chip, &pd_msg);
-		if (ret < 0) {
-			fusb302_log(chip,
-				    "cannot read in PD message, ret=%d", ret);
-			goto done;
+
+		while (!fusb302_rx_fifo_is_empty(chip)) {
+			memset(&pd_msg, 0, sizeof(struct pd_message));
+			ret = fusb302_pd_read_message(chip, &pd_msg);
+			if (ret < 0) {
+				fusb302_log(chip,
+					    "cannot read in PD message, ret=%d", ret);
+				goto done;
+			}
 		}
 	}
 done:
@@ -1677,7 +1686,8 @@ static struct fwnode_handle *fusb302_fwnode_get(struct device *dev)
 	return fwnode;
 }
 
-static int fusb302_probe(struct i2c_client *client)
+static int fusb302_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct fusb302_chip *chip;
 	struct i2c_adapter *adapter = client->adapter;
@@ -1817,9 +1827,10 @@ static int fusb302_pm_resume(struct device *dev)
 	ret = fusb302_i2c_read(chip, FUSB_REG_POWER, &pwr);
 	if (pwr != FUSB_REG_POWER_PWR_ALL || ret < 0)
 		tcpm_tcpc_reset(chip->tcpm_port);
+
 	spin_lock_irqsave(&chip->irq_lock, flags);
 	if (chip->irq_while_suspended) {
-		kthread_flush_worker(chip->irq_worker);
+		kthread_queue_work(chip->irq_worker, &chip->irq_work);
 		chip->irq_while_suspended = false;
 	}
 	chip->irq_suspended = false;
@@ -1851,7 +1862,7 @@ static struct i2c_driver fusb302_driver = {
 		   .pm = &fusb302_pm_ops,
 		   .of_match_table = of_match_ptr(fusb302_dt_match),
 		   },
-	.probe_new = fusb302_probe,
+	.probe = fusb302_probe,
 	.remove = fusb302_remove,
 	.id_table = fusb302_i2c_device_id,
 };

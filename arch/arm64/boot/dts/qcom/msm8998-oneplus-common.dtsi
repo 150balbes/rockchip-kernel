@@ -233,7 +233,7 @@
 };
 
 &blsp1_uart3_on {
-	rx-pins {
+	rx {
 		/delete-property/ bias-disable;
 		/*
 		 * Configure a pull-up on 46 (RX). This is needed to
@@ -244,7 +244,7 @@
 		bias-pull-up;
 	};
 
-	cts-pins {
+	cts {
 		/delete-property/ bias-disable;
 		/*
 		 * Configure a pull-down on 47 (CTS) to match the pull
@@ -279,10 +279,6 @@
 	};
 };
 
-&pmi8998_rradc {
-	status = "okay";
-};
-
 &qusb2phy {
 	status = "okay";
 
@@ -292,7 +288,7 @@
 };
 
 &rpm_requests {
-	regulators-0 {
+	pm8998-regulators {
 		compatible = "qcom,rpm-pm8998-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -481,7 +477,7 @@
 		vreg_lvs2a_1p8: lvs2 { };
 	};
 
-	regulators-1 {
+	pmi8998-regulators {
 		compatible = "qcom,rpm-pmi8998-regulators";
 
 		vdd_bob-supply = <&vph_pwr>;
@@ -496,7 +492,7 @@
 &tlmm {
 	gpio-reserved-ranges = <0 4>, <81 4>;
 
-	hall_sensor_default: hall-sensor-default-state {
+	hall_sensor_default: hall-sensor-default {
 		pins = "gpio124";
 		function = "gpio";
 		drive-strength = <2>;
@@ -504,28 +500,28 @@
 		input-enable;
 	};
 
-	ts_int_active: ts-int-active-state {
+	ts_int_active: ts-int-active {
 		pins = "gpio125";
 		function = "gpio";
 		drive-strength = <8>;
 		bias-pull-up;
 	};
 
-	ts_reset_active: ts-reset-active-state {
+	ts_reset_active: ts-reset-active {
 		pins = "gpio89";
 		function = "gpio";
 		drive-strength = <8>;
 		bias-pull-up;
 	};
 
-	nfc_int_active: nfc-int-active-state {
+	nfc_int_active: nfc-int-active {
 		pins = "gpio92";
 		function = "gpio";
 		drive-strength = <6>;
 		bias-pull-up;
 	};
 
-	nfc_enable_active: nfc-enable-active-state {
+	nfc_enable_active: nfc-enable-active {
 		pins = "gpio12", "gpio116";
 		function = "gpio";
 		drive-strength = <6>;

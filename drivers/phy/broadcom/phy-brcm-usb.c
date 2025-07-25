@@ -233,7 +233,7 @@ static ssize_t dr_mode_show(struct device *dev,
 	return sprintf(buf, "%s\n",
 		value_to_name(&brcm_dr_mode_to_name[0],
 			      ARRAY_SIZE(brcm_dr_mode_to_name),
-			      priv->ini.supported_port_modes));
+			      priv->ini.mode));
 }
 static DEVICE_ATTR_RO(dr_mode);
 
@@ -249,8 +249,7 @@ static ssize_t dual_select_store(struct device *dev,
 	res = name_to_value(&brcm_dual_mode_to_name[0],
 			    ARRAY_SIZE(brcm_dual_mode_to_name), buf, &value);
 	if (!res) {
-		priv->ini.port_mode = value;
-		brcm_usb_set_dual_select(&priv->ini);
+		brcm_usb_set_dual_select(&priv->ini, value);
 		res = len;
 	}
 	mutex_unlock(&sysfs_lock);
@@ -496,16 +495,13 @@ static int brcm_usb_phy_probe(struct platform_device *pdev)
 	of_property_read_u32(dn, "brcm,ipp", &priv->ini.ipp);
 	of_property_read_u32(dn, "brcm,ioc", &priv->ini.ioc);
 
-	priv->ini.supported_port_modes = USB_CTLR_MODE_HOST;
+	priv->ini.mode = USB_CTLR_MODE_HOST;
 	err = of_property_read_string(dn, "dr_mode", &mode);
 	if (err == 0) {
 		name_to_value(&brcm_dr_mode_to_name[0],
 			      ARRAY_SIZE(brcm_dr_mode_to_name),
-			mode, &priv->ini.supported_port_modes);
+			mode, &priv->ini.mode);
 	}
-	/* Default port_mode to supported port_modes */
-	priv->ini.port_mode = priv->ini.supported_port_modes;
-
 	if (of_property_read_bool(dn, "brcm,has-xhci"))
 		priv->has_xhci = true;
 	if (of_property_read_bool(dn, "brcm,has-eohci"))
@@ -543,7 +539,7 @@ static int brcm_usb_phy_probe(struct platform_device *pdev)
 	 * Create sysfs entries for mode.
 	 * Remove "dual_select" attribute if not in dual mode
 	 */
-	if (priv->ini.supported_port_modes != USB_CTLR_MODE_DRD)
+	if (priv->ini.mode != USB_CTLR_MODE_DRD)
 		brcm_usb_phy_attrs[1] = NULL;
 	err = sysfs_create_group(&dev->kobj, &brcm_usb_phy_group);
 	if (err)

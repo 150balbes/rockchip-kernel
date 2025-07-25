@@ -13,9 +13,6 @@ description:
   The Microchip Pulse Density Microphone Controller (PDMC) interfaces up to 4
   digital microphones having Pulse Density Modulated (PDM) outputs.
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     const: microchip,sama7g5-pdmc
@@ -78,7 +75,7 @@ required:
   - dma-names
   - microchip,mic-pos
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

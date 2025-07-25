@@ -699,7 +699,8 @@ static int usb251xb_probe(struct usb251xb *hub)
 	return 0;
 }
 
-static int usb251xb_i2c_probe(struct i2c_client *i2c)
+static int usb251xb_i2c_probe(struct i2c_client *i2c,
+			      const struct i2c_device_id *id)
 {
 	struct usb251xb *hub;
 
@@ -757,7 +758,7 @@ static struct i2c_driver usb251xb_i2c_driver = {
 		.of_match_table = of_match_ptr(usb251xb_of_match),
 		.pm = &usb251xb_pm_ops,
 	},
-	.probe_new = usb251xb_i2c_probe,
+	.probe    = usb251xb_i2c_probe,
 	.id_table = usb251xb_id,
 };
 

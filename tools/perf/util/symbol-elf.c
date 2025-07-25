@@ -233,34 +233,6 @@ Elf_Scn *elf_section_by_name(Elf *elf, GElf_Ehdr *ep,
 	return NULL;
 }
 
-bool filename__has_section(const char *filename, const char *sec)
-{
-	int fd;
-	Elf *elf;
-	GElf_Ehdr ehdr;
-	GElf_Shdr shdr;
-	bool found = false;
-
-	fd = open(filename, O_RDONLY);
-	if (fd < 0)
-		return false;
-
-	elf = elf_begin(fd, PERF_ELF_C_READ_MMAP, NULL);
-	if (elf == NULL)
-		goto out;
-
-	if (gelf_getehdr(elf, &ehdr) == NULL)
-		goto elf_out;
-
-	found = !!elf_section_by_name(elf, &ehdr, &shdr, sec, NULL);
-
-elf_out:
-	elf_end(elf);
-out:
-	close(fd);
-	return found;
-}
-
 static int elf_read_program_header(Elf *elf, u64 vaddr, GElf_Phdr *phdr)
 {
 	size_t i, phdrnum;
@@ -581,7 +553,7 @@ static int elf_read_build_id(Elf *elf, void *bf, size_t size)
 				size_t sz = min(size, descsz);
 				memcpy(bf, ptr, sz);
 				memset(bf + sz, 0, size - sz);
-				err = descsz;
+				err = sz;
 				break;
 			}
 		}

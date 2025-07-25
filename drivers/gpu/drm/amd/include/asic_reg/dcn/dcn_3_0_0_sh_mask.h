@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: MIT
 #ifndef _dcn_3_0_0_SH_MASK_HEADER
 #define _dcn_3_0_0_SH_MASK_HEADER
 

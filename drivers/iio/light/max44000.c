@@ -523,7 +523,8 @@ out_unlock:
 	return IRQ_HANDLED;
 }
 
-static int max44000_probe(struct i2c_client *client)
+static int max44000_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct max44000_data *data;
 	struct iio_dev *indio_dev;
@@ -616,7 +617,7 @@ static struct i2c_driver max44000_driver = {
 		.name	= MAX44000_DRV_NAME,
 		.acpi_match_table = ACPI_PTR(max44000_acpi_match),
 	},
-	.probe_new	= max44000_probe,
+	.probe		= max44000_probe,
 	.id_table	= max44000_id,
 };
 

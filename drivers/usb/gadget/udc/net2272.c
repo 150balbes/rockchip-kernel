@@ -1451,7 +1451,6 @@ static int net2272_start(struct usb_gadget *_gadget,
 		dev->ep[i].irqs = 0;
 	/* hook up the driver ... */
 	dev->softconnect = 1;
-	driver->driver.bus = NULL;
 	dev->driver = driver;
 
 	/* ... then enable host detection and ep0; and we're ready
@@ -2651,7 +2650,7 @@ net2272_plat_probe(struct platform_device *pdev)
 		goto err_req;
 	}
 
-	ret = net2272_probe_fin(dev, IRQF_TRIGGER_LOW);
+	ret = net2272_probe_fin(dev, irqflags);
 	if (ret)
 		goto err_io;
 

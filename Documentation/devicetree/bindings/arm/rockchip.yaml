@@ -30,24 +30,9 @@ properties:
           - const: amarula,vyasa-rk3288
           - const: rockchip,rk3288
 
-      - description: Anbernic RG351M
-        items:
-          - const: anbernic,rg351m
-          - const: rockchip,rk3326
-
       - description: Anbernic RG353P
         items:
           - const: anbernic,rg353p
-          - const: rockchip,rk3566
-
-      - description: Anbernic RG353V
-        items:
-          - const: anbernic,rg353v
-          - const: rockchip,rk3566
-
-      - description: Anbernic RG353VS
-        items:
-          - const: anbernic,rg353vs
           - const: rockchip,rk3566
 
       - description: Anbernic RG503
@@ -483,21 +468,6 @@ properties:
           - const: hardkernel,rk3326-odroid-go2
           - const: rockchip,rk3326
 
-      - description: Hardkernel Odroid Go Advance Black Edition
-        items:
-          - const: hardkernel,rk3326-odroid-go2-v11
-          - const: rockchip,rk3326
-
-      - description: Hardkernel Odroid Go Super
-        items:
-          - const: hardkernel,rk3326-odroid-go3
-          - const: rockchip,rk3326
-
-      - description: Hardkernel Odroid M1
-        items:
-          - const: rockchip,rk3568-odroid-m1
-          - const: rockchip,rk3568
-
       - description: Hugsun X99 TV Box
         items:
           - const: hugsun,x99
@@ -593,9 +563,7 @@ properties:
       - description: Pine64 SoQuartz SoM
         items:
           - enum:
-              - pine64,soquartz-blade
               - pine64,soquartz-cm4io
-              - pine64,soquartz-model-a
           - const: pine64,soquartz
           - const: rockchip,rk3566
 
@@ -651,16 +619,6 @@ properties:
         items:
           - const: radxa,rock3a
           - const: rockchip,rk3568
-
-      - description: Radxa ROCK 5 Model A
-        items:
-          - const: radxa,rock-5a
-          - const: rockchip,rk3588s
-
-      - description: Radxa ROCK 5 Model B
-        items:
-          - const: radxa,rock-5b
-          - const: rockchip,rk3588
 
       - description: Rikomagic MK808 v1
         items:
@@ -746,20 +704,10 @@ properties:
           - const: rockchip,rk3399-sapphire-excavator
           - const: rockchip,rk3399
 
-      - description: Rockchip RK3588 Evaluation board
-        items:
-          - const: rockchip,rk3588-evb1-v10
-          - const: rockchip,rk3588
-
       - description: Rockchip RV1108 Evaluation board
         items:
           - const: rockchip,rv1108-evb
           - const: rockchip,rv1108
-
-      - description: Theobroma Systems PX30-uQ7 with Haikou baseboard
-        items:
-          - const: tsd,px30-ringneck-haikou
-          - const: rockchip,px30
 
       - description: Theobroma Systems RK3368-uQ7 with Haikou baseboard
         items:
@@ -781,11 +729,6 @@ properties:
           - const: zkmagic,a95x-z2
           - const: rockchip,rk3318
 
-      - description: Rockchip RK3566 BOX Evaluation Demo board
-        items:
-          - const: rockchip,rk3566-box-demo
-          - const: rockchip,rk3566
-
       - description: Rockchip RK3568 Evaluation board
         items:
           - const: rockchip,rk3568-evb1-v10
@@ -795,11 +738,6 @@ properties:
         items:
           - const: rockchip,rk3568-bpi-r2pro
           - const: rockchip,rk3568
-
-      - description: Rockchip RK3588 Evaluation board
-        items:
-          - const: rockchip,rk3588-evb1-v10
-          - const: rockchip,rk3588
 
 additionalProperties: true
 

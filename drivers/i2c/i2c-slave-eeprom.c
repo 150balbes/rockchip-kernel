@@ -140,9 +140,8 @@ static int i2c_slave_init_eeprom_data(struct eeprom_data *eeprom, struct i2c_cli
 	return 0;
 }
 
-static int i2c_slave_eeprom_probe(struct i2c_client *client)
+static int i2c_slave_eeprom_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct eeprom_data *eeprom;
 	int ret;
 	unsigned int size = FIELD_GET(I2C_SLAVE_BYTELEN, id->driver_data) + 1;
@@ -207,7 +206,7 @@ static struct i2c_driver i2c_slave_eeprom_driver = {
 	.driver = {
 		.name = "i2c-slave-eeprom",
 	},
-	.probe_new = i2c_slave_eeprom_probe,
+	.probe = i2c_slave_eeprom_probe,
 	.remove = i2c_slave_eeprom_remove,
 	.id_table = i2c_slave_eeprom_id,
 };

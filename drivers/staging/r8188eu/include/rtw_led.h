@@ -33,6 +33,8 @@ enum LED_STATE_871x {
 };
 
 struct led_priv {
+	struct adapter *padapter;
+
 	bool bRegUseLed;
 
 	enum LED_STATE_871x	CurrLedState; /*  Current LED state. */
@@ -45,6 +47,7 @@ struct led_priv {
 
 	u32 BlinkTimes; /*  Number of times to toggle led state for blinking. */
 
+	bool bLedLinkBlinkInProgress;
 	bool bLedScanBlinkInProgress;
 	struct delayed_work blink_work;
 };

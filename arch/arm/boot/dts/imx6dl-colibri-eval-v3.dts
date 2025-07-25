@@ -111,6 +111,7 @@
 };
 
 &usbh1 {
+	vbus-supply = <&reg_usb_host_vbus>;
 	status = "okay";
 };
 

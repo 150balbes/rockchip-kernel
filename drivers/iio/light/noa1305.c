@@ -46,6 +46,7 @@
 struct noa1305_priv {
 	struct i2c_client *client;
 	struct regmap *regmap;
+	struct regulator *vin_reg;
 };
 
 static int noa1305_measure(struct noa1305_priv *priv)
@@ -186,7 +187,15 @@ static const struct regmap_config noa1305_regmap_config = {
 	.writeable_reg = noa1305_writable_reg,
 };
 
-static int noa1305_probe(struct i2c_client *client)
+static void noa1305_reg_remove(void *data)
+{
+	struct noa1305_priv *priv = data;
+
+	regulator_disable(priv->vin_reg);
+}
+
+static int noa1305_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct noa1305_priv *priv;
 	struct iio_dev *indio_dev;
@@ -207,10 +216,22 @@ static int noa1305_probe(struct i2c_client *client)
 
 	priv = iio_priv(indio_dev);
 
-	ret = devm_regulator_get_enable(&client->dev, "vin");
-	if (ret)
-		return dev_err_probe(&client->dev, ret,
+	priv->vin_reg = devm_regulator_get(&client->dev, "vin");
+	if (IS_ERR(priv->vin_reg))
+		return dev_err_probe(&client->dev, PTR_ERR(priv->vin_reg),
 				     "get regulator vin failed\n");
+
+	ret = regulator_enable(priv->vin_reg);
+	if (ret) {
+		dev_err(&client->dev, "enable regulator vin failed\n");
+		return ret;
+	}
+
+	ret = devm_add_action_or_reset(&client->dev, noa1305_reg_remove, priv);
+	if (ret) {
+		dev_err(&client->dev, "addition of devm action failed\n");
+		return ret;
+	}
 
 	i2c_set_clientdata(client, indio_dev);
 	priv->client = client;
@@ -278,7 +299,7 @@ static struct i2c_driver noa1305_driver = {
 		.name		= NOA1305_DRIVER_NAME,
 		.of_match_table	= noa1305_of_match,
 	},
-	.probe_new	= noa1305_probe,
+	.probe		= noa1305_probe,
 	.id_table	= noa1305_ids,
 };
 

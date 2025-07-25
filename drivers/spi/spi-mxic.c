@@ -772,7 +772,8 @@ static int mxic_spi_probe(struct platform_device *pdev)
 	if (IS_ERR(mxic->send_dly_clk))
 		return PTR_ERR(mxic->send_dly_clk);
 
-	mxic->regs = devm_platform_ioremap_resource_byname(pdev, "regs");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "regs");
+	mxic->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mxic->regs))
 		return PTR_ERR(mxic->regs);
 

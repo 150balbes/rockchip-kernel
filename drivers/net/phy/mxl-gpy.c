@@ -30,10 +30,6 @@
 #define PHY_ID_GPY241BM		0x67C9DE80
 #define PHY_ID_GPY245B		0x67C9DEC0
 
-#define PHY_CTL1		0x13
-#define PHY_CTL1_MDICD		BIT(3)
-#define PHY_CTL1_MDIAB		BIT(2)
-#define PHY_CTL1_AMDIX		BIT(0)
 #define PHY_MIISTAT		0x18	/* MII state */
 #define PHY_IMASK		0x19	/* interrupt mask */
 #define PHY_ISTAT		0x1A	/* interrupt status */
@@ -64,13 +60,6 @@
 #define PHY_FWV_MAJOR_MASK	GENMASK(11, 8)
 #define PHY_FWV_MINOR_MASK	GENMASK(7, 0)
 
-#define PHY_PMA_MGBT_POLARITY	0x82
-#define PHY_MDI_MDI_X_MASK	GENMASK(1, 0)
-#define PHY_MDI_MDI_X_NORMAL	0x3
-#define PHY_MDI_MDI_X_AB	0x2
-#define PHY_MDI_MDI_X_CD	0x1
-#define PHY_MDI_MDI_X_CROSS	0x0
-
 /* SGMII */
 #define VSPEC1_SGMII_CTRL	0x08
 #define VSPEC1_SGMII_CTRL_ANEN	BIT(12)		/* Aneg enable */
@@ -79,8 +68,8 @@
 				 VSPEC1_SGMII_CTRL_ANRS)
 
 /* Temperature sensor */
-#define VSPEC1_TEMP_STA	0x0E
-#define VSPEC1_TEMP_STA_DATA	GENMASK(9, 0)
+#define VPSPEC1_TEMP_STA	0x0E
+#define VPSPEC1_TEMP_STA_DATA	GENMASK(9, 0)
 
 /* Mailbox */
 #define VSPEC1_MBOX_DATA	0x5
@@ -106,6 +95,14 @@ struct gpy_priv {
 
 	u8 fw_major;
 	u8 fw_minor;
+	u32 wolopts;
+
+	/* It takes 3 seconds to fully switch out of loopback mode before
+	 * it can safely re-enter loopback mode. Record the time when
+	 * loopback is disabled. Check and wait if necessary before loopback
+	 * is enabled.
+	 */
+	u64 lb_dis_to;
 };
 
 static const struct {
@@ -155,14 +152,14 @@ static int gpy_hwmon_read(struct device *dev,
 	struct phy_device *phydev = dev_get_drvdata(dev);
 	int ret;
 
-	ret = phy_read_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_TEMP_STA);
+	ret = phy_read_mmd(phydev, MDIO_MMD_VEND1, VPSPEC1_TEMP_STA);
 	if (ret < 0)
 		return ret;
 	if (!ret)
 		return -ENODATA;
 
 	*value = polynomial_calc(&poly_N_to_temp,
-				 FIELD_GET(VSPEC1_TEMP_STA_DATA, ret));
+				 FIELD_GET(VPSPEC1_TEMP_STA_DATA, ret));
 
 	return 0;
 }
@@ -213,6 +210,15 @@ static int gpy_hwmon_register(struct phy_device *phydev)
 }
 #endif
 
+static int gpy_ack_interrupt(struct phy_device *phydev)
+{
+	int ret;
+
+	/* Clear all pending interrupts */
+	ret = phy_read(phydev, PHY_ISTAT);
+	return ret < 0 ? ret : 0;
+}
+
 static int gpy_mbox_read(struct phy_device *phydev, u32 addr)
 {
 	struct gpy_priv *priv = phydev->priv;
@@ -254,16 +260,8 @@ out:
 
 static int gpy_config_init(struct phy_device *phydev)
 {
-	int ret;
-
-	/* Mask all interrupts */
-	ret = phy_write(phydev, PHY_IMASK, 0);
-	if (ret)
-		return ret;
-
-	/* Clear all pending interrupts */
-	ret = phy_read(phydev, PHY_ISTAT);
-	return ret < 0 ? ret : 0;
+	/* Nothing to configure. Configuration Requirement Placeholder */
+	return 0;
 }
 
 static bool gpy_has_broken_mdint(struct phy_device *phydev)
@@ -362,33 +360,6 @@ static bool gpy_sgmii_aneg_en(struct phy_device *phydev)
 	return (ret & VSPEC1_SGMII_CTRL_ANEN) ? true : false;
 }
 
-static int gpy_config_mdix(struct phy_device *phydev, u8 ctrl)
-{
-	int ret;
-	u16 val;
-
-	switch (ctrl) {
-	case ETH_TP_MDI_AUTO:
-		val = PHY_CTL1_AMDIX;
-		break;
-	case ETH_TP_MDI_X:
-		val = (PHY_CTL1_MDIAB | PHY_CTL1_MDICD);
-		break;
-	case ETH_TP_MDI:
-		val = 0;
-		break;
-	default:
-		return 0;
-	}
-
-	ret =  phy_modify(phydev, PHY_CTL1, PHY_CTL1_AMDIX | PHY_CTL1_MDIAB |
-			  PHY_CTL1_MDICD, val);
-	if (ret < 0)
-		return ret;
-
-	return genphy_c45_restart_aneg(phydev);
-}
-
 static int gpy_config_aneg(struct phy_device *phydev)
 {
 	bool changed = false;
@@ -403,10 +374,6 @@ static int gpy_config_aneg(struct phy_device *phydev)
 			? genphy_setup_forced(phydev)
 			: genphy_c45_pma_setup_forced(phydev);
 	}
-
-	ret = gpy_config_mdix(phydev,  phydev->mdix_ctrl);
-	if (ret < 0)
-		return ret;
 
 	ret = genphy_c45_an_config_aneg(phydev);
 	if (ret < 0)
@@ -474,42 +441,14 @@ static int gpy_config_aneg(struct phy_device *phydev)
 			      VSPEC1_SGMII_CTRL_ANRS, VSPEC1_SGMII_CTRL_ANRS);
 }
 
-static int gpy_update_mdix(struct phy_device *phydev)
-{
-	int ret;
-
-	ret = phy_read(phydev, PHY_CTL1);
-	if (ret < 0)
-		return ret;
-
-	if (ret & PHY_CTL1_AMDIX)
-		phydev->mdix_ctrl = ETH_TP_MDI_AUTO;
-	else
-		if (ret & PHY_CTL1_MDICD || ret & PHY_CTL1_MDIAB)
-			phydev->mdix_ctrl = ETH_TP_MDI_X;
-		else
-			phydev->mdix_ctrl = ETH_TP_MDI;
-
-	ret = phy_read_mmd(phydev, MDIO_MMD_PMAPMD, PHY_PMA_MGBT_POLARITY);
-	if (ret < 0)
-		return ret;
-
-	if ((ret & PHY_MDI_MDI_X_MASK) < PHY_MDI_MDI_X_NORMAL)
-		phydev->mdix = ETH_TP_MDI_X;
-	else
-		phydev->mdix = ETH_TP_MDI;
-
-	return 0;
-}
-
-static int gpy_update_interface(struct phy_device *phydev)
+static void gpy_update_interface(struct phy_device *phydev)
 {
 	int ret;
 
 	/* Interface mode is fixed for USXGMII and integrated PHY */
 	if (phydev->interface == PHY_INTERFACE_MODE_USXGMII ||
 	    phydev->interface == PHY_INTERFACE_MODE_INTERNAL)
-		return -EINVAL;
+		return;
 
 	/* Automatically switch SERDES interface between SGMII and 2500-BaseX
 	 * according to speed. Disable ANEG in 2500-BaseX mode.
@@ -519,12 +458,10 @@ static int gpy_update_interface(struct phy_device *phydev)
 		phydev->interface = PHY_INTERFACE_MODE_2500BASEX;
 		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
 				     VSPEC1_SGMII_CTRL_ANEN, 0);
-		if (ret < 0) {
+		if (ret < 0)
 			phydev_err(phydev,
 				   "Error: Disable of SGMII ANEG failed: %d\n",
 				   ret);
-			return ret;
-		}
 		break;
 	case SPEED_1000:
 	case SPEED_100:
@@ -538,22 +475,15 @@ static int gpy_update_interface(struct phy_device *phydev)
 		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
 				     VSPEC1_SGMII_ANEN_ANRS,
 				     VSPEC1_SGMII_ANEN_ANRS);
-		if (ret < 0) {
+		if (ret < 0)
 			phydev_err(phydev,
 				   "Error: Enable of SGMII ANEG failed: %d\n",
 				   ret);
-			return ret;
-		}
 		break;
 	}
 
-	if (phydev->speed == SPEED_2500 || phydev->speed == SPEED_1000) {
-		ret = genphy_read_master_slave(phydev);
-		if (ret < 0)
-			return ret;
-	}
-
-	return gpy_update_mdix(phydev);
+	if (phydev->speed == SPEED_2500 || phydev->speed == SPEED_1000)
+		genphy_read_master_slave(phydev);
 }
 
 static int gpy_read_status(struct phy_device *phydev)
@@ -604,21 +534,30 @@ static int gpy_read_status(struct phy_device *phydev)
 		break;
 	}
 
-	if (phydev->link) {
-		ret = gpy_update_interface(phydev);
-		if (ret < 0)
-			return ret;
-	}
+	if (phydev->link)
+		gpy_update_interface(phydev);
 
 	return 0;
 }
 
 static int gpy_config_intr(struct phy_device *phydev)
 {
+	struct gpy_priv *priv = phydev->priv;
 	u16 mask = 0;
+	int ret;
+
+	ret = gpy_ack_interrupt(phydev);
+	if (ret)
+		return ret;
 
 	if (phydev->interrupts == PHY_INTERRUPT_ENABLED)
 		mask = PHY_IMASK_MASK;
+
+	if (priv->wolopts & WAKE_MAGIC)
+		mask |= PHY_IMASK_WOL;
+
+	if (priv->wolopts & WAKE_PHY)
+		mask |= PHY_IMASK_LSTC;
 
 	return phy_write(phydev, PHY_IMASK, mask);
 }
@@ -668,6 +607,7 @@ static int gpy_set_wol(struct phy_device *phydev,
 		       struct ethtool_wolinfo *wol)
 {
 	struct net_device *attach_dev = phydev->attached_dev;
+	struct gpy_priv *priv = phydev->priv;
 	int ret;
 
 	if (wol->wolopts & WAKE_MAGIC) {
@@ -715,6 +655,8 @@ static int gpy_set_wol(struct phy_device *phydev,
 		ret = phy_read(phydev, PHY_ISTAT);
 		if (ret < 0)
 			return ret;
+
+		priv->wolopts |= WAKE_MAGIC;
 	} else {
 		/* Disable magic packet matching */
 		ret = phy_clear_bits_mmd(phydev, MDIO_MMD_VEND2,
@@ -722,6 +664,13 @@ static int gpy_set_wol(struct phy_device *phydev,
 					 WOL_EN);
 		if (ret < 0)
 			return ret;
+
+		/* Disable the WOL interrupt */
+		ret = phy_clear_bits(phydev, PHY_IMASK, PHY_IMASK_WOL);
+		if (ret < 0)
+			return ret;
+
+		priv->wolopts &= ~WAKE_MAGIC;
 	}
 
 	if (wol->wolopts & WAKE_PHY) {
@@ -738,9 +687,11 @@ static int gpy_set_wol(struct phy_device *phydev,
 		if (ret & (PHY_IMASK_MASK & ~PHY_IMASK_LSTC))
 			phy_trigger_machine(phydev);
 
+		priv->wolopts |= WAKE_PHY;
 		return 0;
 	}
 
+	priv->wolopts &= ~WAKE_PHY;
 	/* Disable the link state change interrupt */
 	return phy_clear_bits(phydev, PHY_IMASK, PHY_IMASK_LSTC);
 }
@@ -748,34 +699,42 @@ static int gpy_set_wol(struct phy_device *phydev,
 static void gpy_get_wol(struct phy_device *phydev,
 			struct ethtool_wolinfo *wol)
 {
-	int ret;
+	struct gpy_priv *priv = phydev->priv;
 
 	wol->supported = WAKE_MAGIC | WAKE_PHY;
-	wol->wolopts = 0;
-
-	ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, VPSPEC2_WOL_CTL);
-	if (ret & WOL_EN)
-		wol->wolopts |= WAKE_MAGIC;
-
-	ret = phy_read(phydev, PHY_IMASK);
-	if (ret & PHY_IMASK_LSTC)
-		wol->wolopts |= WAKE_PHY;
+	wol->wolopts = priv->wolopts;
 }
 
 static int gpy_loopback(struct phy_device *phydev, bool enable)
 {
+	struct gpy_priv *priv = phydev->priv;
+	u16 set = 0;
 	int ret;
 
-	ret = phy_modify(phydev, MII_BMCR, BMCR_LOOPBACK,
-			 enable ? BMCR_LOOPBACK : 0);
-	if (!ret) {
-		/* It takes some time for PHY device to switch
-		 * into/out-of loopback mode.
-		 */
-		msleep(100);
+	if (enable) {
+		u64 now = get_jiffies_64();
+
+		/* wait until 3 seconds from last disable */
+		if (time_before64(now, priv->lb_dis_to))
+			msleep(jiffies64_to_msecs(priv->lb_dis_to - now));
+
+		set = BMCR_LOOPBACK;
 	}
 
-	return ret;
+	ret = phy_modify(phydev, MII_BMCR, BMCR_LOOPBACK, set);
+	if (ret <= 0)
+		return ret;
+
+	if (enable) {
+		/* It takes some time for PHY device to switch into
+		 * loopback mode.
+		 */
+		msleep(100);
+	} else {
+		priv->lb_dis_to = get_jiffies_64() + HZ * 3;
+	}
+
+	return 0;
 }
 
 static int gpy115_loopback(struct phy_device *phydev, bool enable)

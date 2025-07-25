@@ -363,7 +363,8 @@ static int sp2_exit(struct i2c_client *client)
 	return 0;
 }
 
-static int sp2_probe(struct i2c_client *client)
+static int sp2_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct sp2_config *cfg = client->dev.platform_data;
 	struct sp2 *s;
@@ -416,7 +417,7 @@ static struct i2c_driver sp2_driver = {
 	.driver = {
 		.name	= "sp2",
 	},
-	.probe_new	= sp2_probe,
+	.probe		= sp2_probe,
 	.remove		= sp2_remove,
 	.id_table	= sp2_id,
 };

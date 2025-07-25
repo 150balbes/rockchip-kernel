@@ -50,10 +50,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 
-#include "tag.h"
-
-#define DSA_NAME	"dsa"
-#define EDSA_NAME	"edsa"
+#include "dsa_priv.h"
 
 #define DSA_HLEN	4
 
@@ -342,7 +339,7 @@ static struct sk_buff *dsa_rcv(struct sk_buff *skb, struct net_device *dev)
 }
 
 static const struct dsa_device_ops dsa_netdev_ops = {
-	.name	  = DSA_NAME,
+	.name	  = "dsa",
 	.proto	  = DSA_TAG_PROTO_DSA,
 	.xmit	  = dsa_xmit,
 	.rcv	  = dsa_rcv,
@@ -350,7 +347,7 @@ static const struct dsa_device_ops dsa_netdev_ops = {
 };
 
 DSA_TAG_DRIVER(dsa_netdev_ops);
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_DSA, DSA_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_DSA);
 #endif	/* CONFIG_NET_DSA_TAG_DSA */
 
 #if IS_ENABLED(CONFIG_NET_DSA_TAG_EDSA)
@@ -384,7 +381,7 @@ static struct sk_buff *edsa_rcv(struct sk_buff *skb, struct net_device *dev)
 }
 
 static const struct dsa_device_ops edsa_netdev_ops = {
-	.name	  = EDSA_NAME,
+	.name	  = "edsa",
 	.proto	  = DSA_TAG_PROTO_EDSA,
 	.xmit	  = edsa_xmit,
 	.rcv	  = edsa_rcv,
@@ -392,7 +389,7 @@ static const struct dsa_device_ops edsa_netdev_ops = {
 };
 
 DSA_TAG_DRIVER(edsa_netdev_ops);
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_EDSA, EDSA_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_EDSA);
 #endif	/* CONFIG_NET_DSA_TAG_EDSA */
 
 static struct dsa_tag_driver *dsa_tag_drivers[] = {

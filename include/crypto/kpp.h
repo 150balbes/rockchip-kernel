@@ -37,13 +37,9 @@ struct kpp_request {
  * struct crypto_kpp - user-instantiated object which encapsulate
  * algorithms and core processing logic
  *
- * @reqsize:		Request context size required by algorithm
- *			implementation
  * @base:	Common crypto API algorithm data structure
  */
 struct crypto_kpp {
-	unsigned int reqsize;
-
 	struct crypto_tfm base;
 };
 
@@ -68,6 +64,8 @@ struct crypto_kpp {
  *			put in place here.
  * @exit:		Undo everything @init did.
  *
+ * @reqsize:		Request context size required by algorithm
+ *			implementation
  * @base:		Common crypto API algorithm data structure
  */
 struct kpp_alg {
@@ -81,6 +79,7 @@ struct kpp_alg {
 	int (*init)(struct crypto_kpp *tfm);
 	void (*exit)(struct crypto_kpp *tfm);
 
+	unsigned int reqsize;
 	struct crypto_alg base;
 };
 
@@ -129,7 +128,7 @@ static inline struct kpp_alg *crypto_kpp_alg(struct crypto_kpp *tfm)
 
 static inline unsigned int crypto_kpp_reqsize(struct crypto_kpp *tfm)
 {
-	return tfm->reqsize;
+	return crypto_kpp_alg(tfm)->reqsize;
 }
 
 static inline void kpp_request_set_tfm(struct kpp_request *req,

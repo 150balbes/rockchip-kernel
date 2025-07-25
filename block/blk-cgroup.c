@@ -60,37 +60,6 @@ static struct workqueue_struct *blkcg_punt_bio_wq;
 
 #define BLKG_DESTROY_BATCH_SIZE  64
 
-/*
- * Lockless lists for tracking IO stats update
- *
- * New IO stats are stored in the percpu iostat_cpu within blkcg_gq (blkg).
- * There are multiple blkg's (one for each block device) attached to each
- * blkcg. The rstat code keeps track of which cpu has IO stats updated,
- * but it doesn't know which blkg has the updated stats. If there are many
- * block devices in a system, the cost of iterating all the blkg's to flush
- * out the IO stats can be high. To reduce such overhead, a set of percpu
- * lockless lists (lhead) per blkcg are used to track the set of recently
- * updated iostat_cpu's since the last flush. An iostat_cpu will be put
- * onto the lockless list on the update side [blk_cgroup_bio_start()] if
- * not there yet and then removed when being flushed [blkcg_rstat_flush()].
- * References to blkg are gotten and then put back in the process to
- * protect against blkg removal.
- *
- * Return: 0 if successful or -ENOMEM if allocation fails.
- */
-static int init_blkcg_llists(struct blkcg *blkcg)
-{
-	int cpu;
-
-	blkcg->lhead = alloc_percpu_gfp(struct llist_head, GFP_KERNEL);
-	if (!blkcg->lhead)
-		return -ENOMEM;
-
-	for_each_possible_cpu(cpu)
-		init_llist_head(per_cpu_ptr(blkcg->lhead, cpu));
-	return 0;
-}
-
 /**
  * blkcg_css - find the current css
  *
@@ -268,10 +237,8 @@ static struct blkcg_gq *blkg_alloc(struct blkcg *blkcg, struct gendisk *disk,
 	blkg->blkcg = blkcg;
 
 	u64_stats_init(&blkg->iostat.sync);
-	for_each_possible_cpu(cpu) {
+	for_each_possible_cpu(cpu)
 		u64_stats_init(&per_cpu_ptr(blkg->iostat_cpu, cpu)->sync);
-		per_cpu_ptr(blkg->iostat_cpu, cpu)->blkg = blkg;
-	}
 
 	for (i = 0; i < BLKCG_MAX_POLS; i++) {
 		struct blkcg_policy *pol = blkcg_policy[i];
@@ -495,11 +462,15 @@ static void blkg_destroy_all(struct gendisk *disk)
 	struct request_queue *q = disk->queue;
 	struct blkcg_gq *blkg, *n;
 	int count = BLKG_DESTROY_BATCH_SIZE;
+	int i;
 
 restart:
 	spin_lock_irq(&q->queue_lock);
 	list_for_each_entry_safe(blkg, n, &q->blkg_list, q_node) {
 		struct blkcg *blkcg = blkg->blkcg;
+
+		if (hlist_unhashed(&blkg->blkcg_node))
+			continue;
 
 		spin_lock(&blkcg->lock);
 		blkg_destroy(blkg);
@@ -515,6 +486,18 @@ restart:
 			cond_resched();
 			goto restart;
 		}
+	}
+
+	/*
+	 * Mark policy deactivated since policy offline has been done, and
+	 * the free is scheduled, so future blkcg_deactivate_policy() can
+	 * be bypassed
+	 */
+	for (i = 0; i < BLKCG_MAX_POLS; i++) {
+		struct blkcg_policy *pol = blkcg_policy[i];
+
+		if (pol)
+			__clear_bit(pol->plid, q->blkcg_pols);
 	}
 
 	q->root_blkg = NULL;
@@ -611,7 +594,7 @@ EXPORT_SYMBOL_GPL(blkcg_print_blkgs);
  * @pd: policy private data of interest
  * @v: value to print
  *
- * Print @v to @sf for the device associated with @pd.
+ * Print @v to @sf for the device assocaited with @pd.
  */
 u64 __blkg_prfill_u64(struct seq_file *sf, struct blkg_policy_data *pd, u64 v)
 {
@@ -799,7 +782,7 @@ EXPORT_SYMBOL_GPL(blkg_conf_prep);
 
 /**
  * blkg_conf_finish - finish up per-blkg config update
- * @ctx: blkg_conf_ctx initialized by blkg_conf_prep()
+ * @ctx: blkg_conf_ctx intiailized by blkg_conf_prep()
  *
  * Finish up after per-blkg config update.  This function must be paired
  * with blkg_conf_prep().
@@ -861,9 +844,7 @@ static void blkcg_iostat_update(struct blkcg_gq *blkg, struct blkg_iostat *cur,
 static void blkcg_rstat_flush(struct cgroup_subsys_state *css, int cpu)
 {
 	struct blkcg *blkcg = css_to_blkcg(css);
-	struct llist_head *lhead = per_cpu_ptr(blkcg->lhead, cpu);
-	struct llist_node *lnode;
-	struct blkg_iostat_set *bisc, *next_bisc;
+	struct blkcg_gq *blkg;
 
 	/* Root-level stats are sourced from system-wide IO stats */
 	if (!cgroup_parent(css->cgroup))
@@ -871,20 +852,11 @@ static void blkcg_rstat_flush(struct cgroup_subsys_state *css, int cpu)
 
 	rcu_read_lock();
 
-	lnode = llist_del_all(lhead);
-	if (!lnode)
-		goto out;
-
-	/*
-	 * Iterate only the iostat_cpu's queued in the lockless list.
-	 */
-	llist_for_each_entry_safe(bisc, next_bisc, lnode, lnode) {
-		struct blkcg_gq *blkg = bisc->blkg;
+	hlist_for_each_entry_rcu(blkg, &blkcg->blkg_list, blkcg_node) {
 		struct blkcg_gq *parent = blkg->parent;
+		struct blkg_iostat_set *bisc = per_cpu_ptr(blkg->iostat_cpu, cpu);
 		struct blkg_iostat cur;
 		unsigned int seq;
-
-		WRITE_ONCE(bisc->lqueued, false);
 
 		/* fetch the current per-cpu values */
 		do {
@@ -898,10 +870,8 @@ static void blkcg_rstat_flush(struct cgroup_subsys_state *css, int cpu)
 		if (parent && parent->parent)
 			blkcg_iostat_update(parent, &blkg->iostat.cur,
 					    &blkg->iostat.last);
-		percpu_ref_put(&blkg->refcnt);
 	}
 
-out:
 	rcu_read_unlock();
 }
 
@@ -1179,7 +1149,6 @@ static void blkcg_css_free(struct cgroup_subsys_state *css)
 
 	mutex_unlock(&blkcg_pol_mutex);
 
-	free_percpu(blkcg->lhead);
 	kfree(blkcg);
 }
 
@@ -1187,6 +1156,7 @@ static struct cgroup_subsys_state *
 blkcg_css_alloc(struct cgroup_subsys_state *parent_css)
 {
 	struct blkcg *blkcg;
+	struct cgroup_subsys_state *ret;
 	int i;
 
 	mutex_lock(&blkcg_pol_mutex);
@@ -1195,12 +1165,11 @@ blkcg_css_alloc(struct cgroup_subsys_state *parent_css)
 		blkcg = &blkcg_root;
 	} else {
 		blkcg = kzalloc(sizeof(*blkcg), GFP_KERNEL);
-		if (!blkcg)
+		if (!blkcg) {
+			ret = ERR_PTR(-ENOMEM);
 			goto unlock;
+		}
 	}
-
-	if (init_blkcg_llists(blkcg))
-		goto free_blkcg;
 
 	for (i = 0; i < BLKCG_MAX_POLS ; i++) {
 		struct blkcg_policy *pol = blkcg_policy[i];
@@ -1216,9 +1185,10 @@ blkcg_css_alloc(struct cgroup_subsys_state *parent_css)
 			continue;
 
 		cpd = pol->cpd_alloc_fn(GFP_KERNEL);
-		if (!cpd)
+		if (!cpd) {
+			ret = ERR_PTR(-ENOMEM);
 			goto free_pd_blkcg;
-
+		}
 		blkcg->cpd[i] = cpd;
 		cpd->blkcg = blkcg;
 		cpd->plid = i;
@@ -1242,13 +1212,12 @@ free_pd_blkcg:
 	for (i--; i >= 0; i--)
 		if (blkcg->cpd[i])
 			blkcg_policy[i]->cpd_free_fn(blkcg->cpd[i]);
-	free_percpu(blkcg->lhead);
-free_blkcg:
+
 	if (blkcg != &blkcg_root)
 		kfree(blkcg);
 unlock:
 	mutex_unlock(&blkcg_pol_mutex);
-	return ERR_PTR(-ENOMEM);
+	return ret;
 }
 
 static int blkcg_css_online(struct cgroup_subsys_state *css)
@@ -1454,6 +1423,10 @@ retry:
 	if (pol->pd_init_fn)
 		list_for_each_entry_reverse(blkg, &q->blkg_list, q_node)
 			pol->pd_init_fn(blkg->pd[pol->plid]);
+
+	if (pol->pd_online_fn)
+		list_for_each_entry_reverse(blkg, &q->blkg_list, q_node)
+			pol->pd_online_fn(blkg->pd[pol->plid]);
 
 	__set_bit(pol->plid, q->blkcg_pols);
 	ret = 0;
@@ -1833,7 +1806,7 @@ out:
 
 /**
  * blkcg_schedule_throttle - this task needs to check for throttling
- * @disk: disk to throttle
+ * @gendisk: disk to throttle
  * @use_memdelay: do we charge this to memory delay for PSI
  *
  * This is called by the IO controller when we know there's delay accumulated
@@ -1992,7 +1965,6 @@ static int blk_cgroup_io_type(struct bio *bio)
 
 void blk_cgroup_bio_start(struct bio *bio)
 {
-	struct blkcg *blkcg = bio->bi_blkg->blkcg;
 	int rwd = blk_cgroup_io_type(bio), cpu;
 	struct blkg_iostat_set *bis;
 	unsigned long flags;
@@ -2011,21 +1983,9 @@ void blk_cgroup_bio_start(struct bio *bio)
 	}
 	bis->cur.ios[rwd]++;
 
-	/*
-	 * If the iostat_cpu isn't in a lockless list, put it into the
-	 * list to indicate that a stat update is pending.
-	 */
-	if (!READ_ONCE(bis->lqueued)) {
-		struct llist_head *lhead = this_cpu_ptr(blkcg->lhead);
-
-		llist_add(&bis->lnode, lhead);
-		WRITE_ONCE(bis->lqueued, true);
-		percpu_ref_get(&bis->blkg->refcnt);
-	}
-
 	u64_stats_update_end_irqrestore(&bis->sync, flags);
 	if (cgroup_subsys_on_dfl(io_cgrp_subsys))
-		cgroup_rstat_updated(blkcg->css.cgroup, cpu);
+		cgroup_rstat_updated(bio->bi_blkg->blkcg->css.cgroup, cpu);
 	put_cpu();
 }
 

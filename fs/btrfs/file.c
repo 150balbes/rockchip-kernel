@@ -30,13 +30,6 @@
 #include "delalloc-space.h"
 #include "reflink.h"
 #include "subpage.h"
-#include "fs.h"
-#include "accessors.h"
-#include "extent-tree.h"
-#include "file-item.h"
-#include "ioctl.h"
-#include "file.h"
-#include "super.h"
 
 /* simple helper to fault in pages and copy.  This should go away
  * and be replaced with calls into generic code.
@@ -992,8 +985,7 @@ lock_and_cleanup_extent_if_need(struct btrfs_inode *inode, struct page **pages,
 		struct btrfs_ordered_extent *ordered;
 
 		if (nowait) {
-			if (!try_lock_extent(&inode->io_tree, start_pos, last_pos,
-					     cached_state)) {
+			if (!try_lock_extent(&inode->io_tree, start_pos, last_pos)) {
 				for (i = 0; i < num_pages; i++) {
 					unlock_page(pages[i]);
 					put_page(pages[i]);
@@ -1063,7 +1055,6 @@ int btrfs_check_nocow_lock(struct btrfs_inode *inode, loff_t pos,
 {
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct btrfs_root *root = inode->root;
-	struct extent_state *cached_state = NULL;
 	u64 lockstart, lockend;
 	u64 num_bytes;
 	int ret;
@@ -1080,14 +1071,12 @@ int btrfs_check_nocow_lock(struct btrfs_inode *inode, loff_t pos,
 	num_bytes = lockend - lockstart + 1;
 
 	if (nowait) {
-		if (!btrfs_try_lock_ordered_range(inode, lockstart, lockend,
-						  &cached_state)) {
+		if (!btrfs_try_lock_ordered_range(inode, lockstart, lockend)) {
 			btrfs_drew_write_unlock(&root->snapshot_lock);
 			return -EAGAIN;
 		}
 	} else {
-		btrfs_lock_and_flush_ordered_range(inode, lockstart, lockend,
-						   &cached_state);
+		btrfs_lock_and_flush_ordered_range(inode, lockstart, lockend, NULL);
 	}
 	ret = can_nocow_extent(&inode->vfs_inode, lockstart, &num_bytes,
 			NULL, NULL, NULL, nowait, false);
@@ -1096,7 +1085,7 @@ int btrfs_check_nocow_lock(struct btrfs_inode *inode, loff_t pos,
 	else
 		*write_bytes = min_t(size_t, *write_bytes ,
 				     num_bytes - pos + lockstart);
-	unlock_extent(&inode->io_tree, lockstart, lockend, &cached_state);
+	unlock_extent(&inode->io_tree, lockstart, lockend, NULL);
 
 	return ret;
 }
@@ -1199,7 +1188,7 @@ static noinline ssize_t btrfs_buffered_write(struct kiocb *iocb,
 	if (nowait)
 		ilock_flags |= BTRFS_ILOCK_TRY;
 
-	ret = btrfs_inode_lock(BTRFS_I(inode), ilock_flags);
+	ret = btrfs_inode_lock(inode, ilock_flags);
 	if (ret < 0)
 		return ret;
 
@@ -1434,7 +1423,7 @@ again:
 		iocb->ki_pos += num_written;
 	}
 out:
-	btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+	btrfs_inode_unlock(inode, ilock_flags);
 	return num_written ? num_written : ret;
 }
 
@@ -1469,24 +1458,36 @@ static ssize_t btrfs_direct_write(struct kiocb *iocb, struct iov_iter *from)
 	if (iocb->ki_flags & IOCB_NOWAIT)
 		ilock_flags |= BTRFS_ILOCK_TRY;
 
-	/* If the write DIO is within EOF, use a shared lock */
-	if (iocb->ki_pos + iov_iter_count(from) <= i_size_read(inode))
+	/*
+	 * If the write DIO is within EOF, use a shared lock and also only if
+	 * security bits will likely not be dropped by file_remove_privs() called
+	 * from btrfs_write_check(). Either will need to be rechecked after the
+	 * lock was acquired.
+	 */
+	if (iocb->ki_pos + iov_iter_count(from) <= i_size_read(inode) && IS_NOSEC(inode))
 		ilock_flags |= BTRFS_ILOCK_SHARED;
 
 relock:
-	err = btrfs_inode_lock(BTRFS_I(inode), ilock_flags);
+	err = btrfs_inode_lock(inode, ilock_flags);
 	if (err < 0)
 		return err;
 
+	/* Shared lock cannot be used with security bits set. */
+	if ((ilock_flags & BTRFS_ILOCK_SHARED) && !IS_NOSEC(inode)) {
+		btrfs_inode_unlock(inode, ilock_flags);
+		ilock_flags &= ~BTRFS_ILOCK_SHARED;
+		goto relock;
+	}
+
 	err = generic_write_checks(iocb, from);
 	if (err <= 0) {
-		btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+		btrfs_inode_unlock(inode, ilock_flags);
 		return err;
 	}
 
 	err = btrfs_write_check(iocb, from, err);
 	if (err < 0) {
-		btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+		btrfs_inode_unlock(inode, ilock_flags);
 		goto out;
 	}
 
@@ -1497,13 +1498,13 @@ relock:
 	 */
 	if ((ilock_flags & BTRFS_ILOCK_SHARED) &&
 	    pos + iov_iter_count(from) > i_size_read(inode)) {
-		btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+		btrfs_inode_unlock(inode, ilock_flags);
 		ilock_flags &= ~BTRFS_ILOCK_SHARED;
 		goto relock;
 	}
 
 	if (check_direct_IO(fs_info, from, pos)) {
-		btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+		btrfs_inode_unlock(inode, ilock_flags);
 		goto buffered;
 	}
 
@@ -1534,7 +1535,7 @@ relock:
 	 * iocb, and that needs to lock the inode. So unlock it before calling
 	 * iomap_dio_complete() to avoid a deadlock.
 	 */
-	btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+	btrfs_inode_unlock(inode, ilock_flags);
 
 	if (IS_ERR_OR_NULL(dio))
 		err = PTR_ERR_OR_ZERO(dio);
@@ -1581,8 +1582,8 @@ buffered:
 	/*
 	 * If we are in a NOWAIT context, then return -EAGAIN to signal the caller
 	 * it must retry the operation in a context where blocking is acceptable,
-	 * because even if we end up not blocking during the buffered IO attempt
-	 * below, we will block when flushing and waiting for the IO.
+	 * since we currently don't have NOWAIT semantics support for buffered IO
+	 * and may block there for many reasons (reserving space for example).
 	 */
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		err = -EAGAIN;
@@ -1622,7 +1623,7 @@ static ssize_t btrfs_encoded_write(struct kiocb *iocb, struct iov_iter *from,
 	loff_t count;
 	ssize_t ret;
 
-	btrfs_inode_lock(BTRFS_I(inode), 0);
+	btrfs_inode_lock(inode, 0);
 	count = encoded->len;
 	ret = generic_write_checks_count(iocb, &count);
 	if (ret == 0 && count != encoded->len) {
@@ -1641,7 +1642,7 @@ static ssize_t btrfs_encoded_write(struct kiocb *iocb, struct iov_iter *from,
 
 	ret = btrfs_do_encoded_write(iocb, from, encoded);
 out:
-	btrfs_inode_unlock(BTRFS_I(inode), 0);
+	btrfs_inode_unlock(inode, 0);
 	return ret;
 }
 
@@ -1702,12 +1703,10 @@ int btrfs_release_file(struct inode *inode, struct file *filp)
 {
 	struct btrfs_file_private *private = filp->private_data;
 
-	if (private) {
+	if (private && private->filldir_buf)
 		kfree(private->filldir_buf);
-		free_extent_state(private->llseek_cached_state);
-		kfree(private);
-		filp->private_data = NULL;
-	}
+	kfree(private);
+	filp->private_data = NULL;
 
 	/*
 	 * Set by setattr when we are about to truncate a file from a non-zero
@@ -1814,7 +1813,7 @@ int btrfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	if (ret)
 		goto out;
 
-	btrfs_inode_lock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_lock(inode, BTRFS_ILOCK_MMAP);
 
 	atomic_inc(&root->log_batch);
 
@@ -1838,7 +1837,7 @@ int btrfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	 */
 	ret = start_ordered_ops(inode, start, end);
 	if (ret) {
-		btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+		btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 		goto out;
 	}
 
@@ -1941,7 +1940,7 @@ int btrfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	 * file again, but that will end up using the synchronization
 	 * inside btrfs_sync_log to keep things safe.
 	 */
-	btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 
 	if (ret == BTRFS_NO_LOG_SYNC) {
 		ret = btrfs_end_transaction(trans);
@@ -2009,7 +2008,7 @@ out:
 
 out_release_extents:
 	btrfs_release_log_ctx_extents(&ctx);
-	btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 	goto out;
 }
 
@@ -2604,7 +2603,7 @@ static int btrfs_punch_hole(struct file *file, loff_t offset, loff_t len)
 	bool truncated_block = false;
 	bool updated_inode = false;
 
-	btrfs_inode_lock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_lock(inode, BTRFS_ILOCK_MMAP);
 
 	ret = btrfs_wait_ordered_range(inode, offset, len);
 	if (ret)
@@ -2652,7 +2651,7 @@ static int btrfs_punch_hole(struct file *file, loff_t offset, loff_t len)
 		truncated_block = true;
 		ret = btrfs_truncate_block(BTRFS_I(inode), offset, 0, 0);
 		if (ret) {
-			btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+			btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 			return ret;
 		}
 	}
@@ -2751,7 +2750,7 @@ out_only_mutex:
 				ret = ret2;
 		}
 	}
-	btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 	return ret;
 }
 
@@ -3062,7 +3061,7 @@ static long btrfs_fallocate(struct file *file, int mode,
 	if (mode & FALLOC_FL_PUNCH_HOLE)
 		return btrfs_punch_hole(file, offset, len);
 
-	btrfs_inode_lock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_lock(inode, BTRFS_ILOCK_MMAP);
 
 	if (!(mode & FALLOC_FL_KEEP_SIZE) && offset + len > inode->i_size) {
 		ret = inode_newsize_ok(inode, offset + len);
@@ -3112,7 +3111,7 @@ static long btrfs_fallocate(struct file *file, int mode,
 
 	if (mode & FALLOC_FL_ZERO_RANGE) {
 		ret = btrfs_zero_range(inode, offset, len, mode);
-		btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+		btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 		return ret;
 	}
 
@@ -3192,7 +3191,7 @@ static long btrfs_fallocate(struct file *file, int mode,
 			qgroup_reserved -= range->len;
 		} else if (qgroup_reserved > 0) {
 			btrfs_qgroup_free_data(BTRFS_I(inode), data_reserved,
-					       range->start, range->len);
+					       range->start, range->len, NULL);
 			qgroup_reserved -= range->len;
 		}
 		list_del(&range->list);
@@ -3210,7 +3209,7 @@ out_unlock:
 	unlock_extent(&BTRFS_I(inode)->io_tree, alloc_start, locked_end,
 		      &cached_state);
 out:
-	btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_MMAP);
+	btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 	extent_changeset_free(data_reserved);
 	return ret;
 }
@@ -3222,106 +3221,127 @@ out:
  * looping while it gets adjacent subranges, and merging them together.
  */
 static bool find_delalloc_subrange(struct btrfs_inode *inode, u64 start, u64 end,
-				   struct extent_state **cached_state,
-				   bool *search_io_tree,
 				   u64 *delalloc_start_ret, u64 *delalloc_end_ret)
 {
-	u64 len = end + 1 - start;
-	u64 delalloc_len = 0;
-	struct btrfs_ordered_extent *oe;
-	u64 oe_start;
-	u64 oe_end;
+	const u64 len = end + 1 - start;
+	struct extent_map_tree *em_tree = &inode->extent_tree;
+	struct extent_map *em;
+	u64 em_end;
+	u64 delalloc_len;
 
 	/*
 	 * Search the io tree first for EXTENT_DELALLOC. If we find any, it
 	 * means we have delalloc (dirty pages) for which writeback has not
 	 * started yet.
 	 */
-	if (*search_io_tree) {
-		spin_lock(&inode->lock);
-		if (inode->delalloc_bytes > 0) {
-			spin_unlock(&inode->lock);
-			*delalloc_start_ret = start;
-			delalloc_len = count_range_bits(&inode->io_tree,
-							delalloc_start_ret, end,
-							len, EXTENT_DELALLOC, 1,
-							cached_state);
-		} else {
-			spin_unlock(&inode->lock);
-		}
-	}
-
-	if (delalloc_len > 0) {
-		/*
-		 * If delalloc was found then *delalloc_start_ret has a sector size
-		 * aligned value (rounded down).
-		 */
+	*delalloc_start_ret = start;
+	delalloc_len = count_range_bits(&inode->io_tree, delalloc_start_ret, end,
+					len, EXTENT_DELALLOC, 1);
+	/*
+	 * If delalloc was found then *delalloc_start_ret has a sector size
+	 * aligned value (rounded down).
+	 */
+	if (delalloc_len > 0)
 		*delalloc_end_ret = *delalloc_start_ret + delalloc_len - 1;
 
-		if (*delalloc_start_ret == start) {
-			/* Delalloc for the whole range, nothing more to do. */
-			if (*delalloc_end_ret == end)
-				return true;
-			/* Else trim our search range for ordered extents. */
-			start = *delalloc_end_ret + 1;
-			len = end + 1 - start;
+	/*
+	 * Now also check if there's any extent map in the range that does not
+	 * map to a hole or prealloc extent. We do this because:
+	 *
+	 * 1) When delalloc is flushed, the file range is locked, we clear the
+	 *    EXTENT_DELALLOC bit from the io tree and create an extent map for
+	 *    an allocated extent. So we might just have been called after
+	 *    delalloc is flushed and before the ordered extent completes and
+	 *    inserts the new file extent item in the subvolume's btree;
+	 *
+	 * 2) We may have an extent map created by flushing delalloc for a
+	 *    subrange that starts before the subrange we found marked with
+	 *    EXTENT_DELALLOC in the io tree.
+	 */
+	read_lock(&em_tree->lock);
+	em = lookup_extent_mapping(em_tree, start, len);
+	if (!em) {
+		read_unlock(&em_tree->lock);
+		return (delalloc_len > 0);
+	}
+
+	/* extent_map_end() returns a non-inclusive end offset. */
+	em_end = extent_map_end(em);
+
+	/*
+	 * If we have a hole/prealloc extent map, check the next one if this one
+	 * ends before our range's end.
+	 */
+	if ((em->block_start == EXTENT_MAP_HOLE ||
+	     test_bit(EXTENT_FLAG_PREALLOC, &em->flags)) && em_end < end) {
+		struct extent_map *next_em;
+
+		next_em = btrfs_next_extent_map(em_tree, em);
+		free_extent_map(em);
+
+		/*
+		 * There's no next extent map or the next one starts beyond our
+		 * range, return the range found in the io tree (if any).
+		 */
+		if (!next_em || next_em->start > end) {
+			read_unlock(&em_tree->lock);
+			free_extent_map(next_em);
+			return (delalloc_len > 0);
 		}
-	} else {
-		/* No delalloc, future calls don't need to search again. */
-		*search_io_tree = false;
+
+		em_end = extent_map_end(next_em);
+		em = next_em;
+	}
+
+	read_unlock(&em_tree->lock);
+
+	/*
+	 * We have a hole or prealloc extent that ends at or beyond our range's
+	 * end, return the range found in the io tree (if any).
+	 */
+	if (em->block_start == EXTENT_MAP_HOLE ||
+	    test_bit(EXTENT_FLAG_PREALLOC, &em->flags)) {
+		free_extent_map(em);
+		return (delalloc_len > 0);
 	}
 
 	/*
-	 * Now also check if there's any ordered extent in the range.
-	 * We do this because:
-	 *
-	 * 1) When delalloc is flushed, the file range is locked, we clear the
-	 *    EXTENT_DELALLOC bit from the io tree and create an extent map and
-	 *    an ordered extent for the write. So we might just have been called
-	 *    after delalloc is flushed and before the ordered extent completes
-	 *    and inserts the new file extent item in the subvolume's btree;
-	 *
-	 * 2) We may have an ordered extent created by flushing delalloc for a
-	 *    subrange that starts before the subrange we found marked with
-	 *    EXTENT_DELALLOC in the io tree.
-	 *
-	 * We could also use the extent map tree to find such delalloc that is
-	 * being flushed, but using the ordered extents tree is more efficient
-	 * because it's usually much smaller as ordered extents are removed from
-	 * the tree once they complete. With the extent maps, we mau have them
-	 * in the extent map tree for a very long time, and they were either
-	 * created by previous writes or loaded by read operations.
+	 * We don't have any range as EXTENT_DELALLOC in the io tree, so the
+	 * extent map is the only subrange representing delalloc.
 	 */
-	oe = btrfs_lookup_first_ordered_range(inode, start, len);
-	if (!oe)
-		return (delalloc_len > 0);
-
-	/* The ordered extent may span beyond our search range. */
-	oe_start = max(oe->file_offset, start);
-	oe_end = min(oe->file_offset + oe->num_bytes - 1, end);
-
-	btrfs_put_ordered_extent(oe);
-
-	/* Don't have unflushed delalloc, return the ordered extent range. */
 	if (delalloc_len == 0) {
-		*delalloc_start_ret = oe_start;
-		*delalloc_end_ret = oe_end;
+		*delalloc_start_ret = em->start;
+		*delalloc_end_ret = min(end, em_end - 1);
+		free_extent_map(em);
 		return true;
 	}
 
 	/*
-	 * We have both unflushed delalloc (io_tree) and an ordered extent.
-	 * If the ranges are adjacent returned a combined range, otherwise
-	 * return the leftmost range.
+	 * The extent map represents a delalloc range that starts before the
+	 * delalloc range we found in the io tree.
 	 */
-	if (oe_start < *delalloc_start_ret) {
-		if (oe_end < *delalloc_start_ret)
-			*delalloc_end_ret = oe_end;
-		*delalloc_start_ret = oe_start;
-	} else if (*delalloc_end_ret + 1 == oe_start) {
-		*delalloc_end_ret = oe_end;
+	if (em->start < *delalloc_start_ret) {
+		*delalloc_start_ret = em->start;
+		/*
+		 * If the ranges are adjacent, return a combined range.
+		 * Otherwise return the extent map's range.
+		 */
+		if (em_end < *delalloc_start_ret)
+			*delalloc_end_ret = min(end, em_end - 1);
+
+		free_extent_map(em);
+		return true;
 	}
 
+	/*
+	 * The extent map starts after the delalloc range we found in the io
+	 * tree. If it's adjacent, return a combined range, otherwise return
+	 * the range found in the io tree.
+	 */
+	if (*delalloc_end_ret + 1 == em->start)
+		*delalloc_end_ret = min(end, em_end - 1);
+
+	free_extent_map(em);
 	return true;
 }
 
@@ -3333,8 +3353,6 @@ static bool find_delalloc_subrange(struct btrfs_inode *inode, u64 start, u64 end
  *                       sector size aligned.
  * @end:                 The end offset (inclusive value) of the search range.
  *                       It does not need to be sector size aligned.
- * @cached_state:        Extent state record used for speeding up delalloc
- *                       searches in the inode's io_tree. Can be NULL.
  * @delalloc_start_ret:  Output argument, set to the start offset of the
  *                       subrange found with delalloc (may not be sector size
  *                       aligned).
@@ -3346,21 +3364,18 @@ static bool find_delalloc_subrange(struct btrfs_inode *inode, u64 start, u64 end
  * end offsets of the subrange.
  */
 bool btrfs_find_delalloc_in_range(struct btrfs_inode *inode, u64 start, u64 end,
-				  struct extent_state **cached_state,
 				  u64 *delalloc_start_ret, u64 *delalloc_end_ret)
 {
 	u64 cur_offset = round_down(start, inode->root->fs_info->sectorsize);
 	u64 prev_delalloc_end = 0;
-	bool search_io_tree = true;
 	bool ret = false;
 
-	while (cur_offset < end) {
+	while (cur_offset <= end) {
 		u64 delalloc_start;
 		u64 delalloc_end;
 		bool delalloc;
 
 		delalloc = find_delalloc_subrange(inode, cur_offset, end,
-						  cached_state, &search_io_tree,
 						  &delalloc_start,
 						  &delalloc_end);
 		if (!delalloc)
@@ -3406,14 +3421,13 @@ bool btrfs_find_delalloc_in_range(struct btrfs_inode *inode, u64 start, u64 end,
  * is found, it updates @start_ret with the start of the subrange.
  */
 static bool find_desired_extent_in_hole(struct btrfs_inode *inode, int whence,
-					struct extent_state **cached_state,
 					u64 start, u64 end, u64 *start_ret)
 {
 	u64 delalloc_start;
 	u64 delalloc_end;
 	bool delalloc;
 
-	delalloc = btrfs_find_delalloc_in_range(inode, start, end, cached_state,
+	delalloc = btrfs_find_delalloc_in_range(inode, start, end,
 						&delalloc_start, &delalloc_end);
 	if (delalloc && whence == SEEK_DATA) {
 		*start_ret = delalloc_start;
@@ -3456,13 +3470,11 @@ static bool find_desired_extent_in_hole(struct btrfs_inode *inode, int whence,
 	return false;
 }
 
-static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
+static loff_t find_desired_extent(struct btrfs_inode *inode, loff_t offset,
+				  int whence)
 {
-	struct btrfs_inode *inode = BTRFS_I(file->f_mapping->host);
-	struct btrfs_file_private *private = file->private_data;
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct extent_state *cached_state = NULL;
-	struct extent_state **delalloc_cached_state;
 	const loff_t i_size = i_size_read(&inode->vfs_inode);
 	const u64 ino = btrfs_ino(inode);
 	struct btrfs_root *root = inode->root;
@@ -3486,22 +3498,6 @@ static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
 	    !(inode->flags & BTRFS_INODE_PREALLOC) &&
 	    inode_get_bytes(&inode->vfs_inode) == i_size)
 		return i_size;
-
-	if (!private) {
-		private = kzalloc(sizeof(*private), GFP_KERNEL);
-		/*
-		 * No worries if memory allocation failed.
-		 * The private structure is used only for speeding up multiple
-		 * lseek SEEK_HOLE/DATA calls to a file when there's delalloc,
-		 * so everything will still be correct.
-		 */
-		file->private_data = private;
-	}
-
-	if (private)
-		delalloc_cached_state = &private->llseek_cached_state;
-	else
-		delalloc_cached_state = NULL;
 
 	/*
 	 * offset can be negative, in this case we start finding DATA/HOLE from
@@ -3541,6 +3537,7 @@ static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
 		struct extent_buffer *leaf = path->nodes[0];
 		struct btrfs_file_extent_item *extent;
 		u64 extent_end;
+		u8 type;
 
 		if (path->slots[0] >= btrfs_header_nritems(leaf)) {
 			ret = btrfs_next_leaf(root, path);
@@ -3580,7 +3577,6 @@ static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
 				search_start = offset;
 
 			found = find_desired_extent_in_hole(inode, whence,
-							    delalloc_cached_state,
 							    search_start,
 							    key.offset - 1,
 							    &found_start);
@@ -3596,10 +3592,16 @@ static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
 
 		extent = btrfs_item_ptr(leaf, path->slots[0],
 					struct btrfs_file_extent_item);
+		type = btrfs_file_extent_type(leaf, extent);
 
-		if (btrfs_file_extent_disk_bytenr(leaf, extent) == 0 ||
-		    btrfs_file_extent_type(leaf, extent) ==
-		    BTRFS_FILE_EXTENT_PREALLOC) {
+		/*
+		 * Can't access the extent's disk_bytenr field if this is an
+		 * inline extent, since at that offset, it's where the extent
+		 * data starts.
+		 */
+		if (type == BTRFS_FILE_EXTENT_PREALLOC ||
+		    (type == BTRFS_FILE_EXTENT_REG &&
+		     btrfs_file_extent_disk_bytenr(leaf, extent) == 0)) {
 			/*
 			 * Explicit hole or prealloc extent, search for delalloc.
 			 * A prealloc extent is treated like a hole.
@@ -3615,7 +3617,6 @@ static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
 				search_start = offset;
 
 			found = find_desired_extent_in_hole(inode, whence,
-							    delalloc_cached_state,
 							    search_start,
 							    extent_end - 1,
 							    &found_start);
@@ -3657,8 +3658,7 @@ static loff_t find_desired_extent(struct file *file, loff_t offset, int whence)
 
 	/* We have an implicit hole from the last extent found up to i_size. */
 	if (!found && start < i_size) {
-		found = find_desired_extent_in_hole(inode, whence,
-						    delalloc_cached_state, start,
+		found = find_desired_extent_in_hole(inode, whence, start,
 						    i_size - 1, &start);
 		if (!found)
 			start = i_size;
@@ -3686,9 +3686,9 @@ static loff_t btrfs_file_llseek(struct file *file, loff_t offset, int whence)
 		return generic_file_llseek(file, offset, whence);
 	case SEEK_DATA:
 	case SEEK_HOLE:
-		btrfs_inode_lock(BTRFS_I(inode), BTRFS_ILOCK_SHARED);
-		offset = find_desired_extent(file, offset, whence);
-		btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_SHARED);
+		btrfs_inode_lock(inode, BTRFS_ILOCK_SHARED);
+		offset = find_desired_extent(BTRFS_I(inode), offset, whence);
+		btrfs_inode_unlock(inode, BTRFS_ILOCK_SHARED);
 		break;
 	}
 
@@ -3743,7 +3743,7 @@ static ssize_t btrfs_direct_read(struct kiocb *iocb, struct iov_iter *to)
 	if (check_direct_read(btrfs_sb(inode->i_sb), to, iocb->ki_pos))
 		return 0;
 
-	btrfs_inode_lock(BTRFS_I(inode), BTRFS_ILOCK_SHARED);
+	btrfs_inode_lock(inode, BTRFS_ILOCK_SHARED);
 again:
 	/*
 	 * This is similar to what we do for direct IO writes, see the comment
@@ -3792,7 +3792,7 @@ again:
 			goto again;
 		}
 	}
-	btrfs_inode_unlock(BTRFS_I(inode), BTRFS_ILOCK_SHARED);
+	btrfs_inode_unlock(inode, BTRFS_ILOCK_SHARED);
 	return ret < 0 ? ret : read;
 }
 

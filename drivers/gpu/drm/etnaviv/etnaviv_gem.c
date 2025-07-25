@@ -130,7 +130,7 @@ static int etnaviv_gem_mmap_obj(struct etnaviv_gem_object *etnaviv_obj,
 {
 	pgprot_t vm_page_prot;
 
-	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_flags |= VM_IO | VM_MIXEDMAP | VM_DONTEXPAND | VM_DONTDUMP;
 
 	vm_page_prot = vm_get_page_prot(vma->vm_flags);
 
@@ -165,8 +165,7 @@ static vm_fault_t etnaviv_gem_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct drm_gem_object *obj = vma->vm_private_data;
 	struct etnaviv_gem_object *etnaviv_obj = to_etnaviv_bo(obj);
-	struct page **pages;
-	unsigned long pfn;
+	struct page **pages, *page;
 	pgoff_t pgoff;
 	int err;
 
@@ -190,12 +189,12 @@ static vm_fault_t etnaviv_gem_fault(struct vm_fault *vmf)
 	/* We don't use vmf->pgoff since that has the fake offset: */
 	pgoff = (vmf->address - vma->vm_start) >> PAGE_SHIFT;
 
-	pfn = page_to_pfn(pages[pgoff]);
+	page = pages[pgoff];
 
 	VERB("Inserting %p pfn %lx, pa %lx", (void *)vmf->address,
-	     pfn, pfn << PAGE_SHIFT);
+	     page_to_pfn(page), page_to_pfn(page) << PAGE_SHIFT);
 
-	return vmf_insert_pfn(vma, vmf->address, pfn);
+	return vmf_insert_page(vma, vmf->address, page);
 }
 
 int etnaviv_gem_mmap_offset(struct drm_gem_object *obj, u64 *offset)
@@ -510,6 +509,7 @@ void etnaviv_gem_free_object(struct drm_gem_object *obj)
 		kfree(mapping);
 	}
 
+	drm_gem_free_mmap_offset(obj);
 	etnaviv_obj->ops->release(etnaviv_obj);
 	drm_gem_object_release(obj);
 
@@ -643,7 +643,6 @@ static int etnaviv_gem_userptr_get_pages(struct etnaviv_gem_object *etnaviv_obj)
 	struct page **pvec = NULL;
 	struct etnaviv_gem_userptr *userptr = &etnaviv_obj->userptr;
 	int ret, pinned = 0, npages = etnaviv_obj->base.size >> PAGE_SHIFT;
-	unsigned int gup_flags = FOLL_LONGTERM;
 
 	might_lock_read(&current->mm->mmap_lock);
 
@@ -654,15 +653,14 @@ static int etnaviv_gem_userptr_get_pages(struct etnaviv_gem_object *etnaviv_obj)
 	if (!pvec)
 		return -ENOMEM;
 
-	if (!userptr->ro)
-		gup_flags |= FOLL_WRITE;
-
 	do {
 		unsigned num_pages = npages - pinned;
 		uint64_t ptr = userptr->ptr + pinned * PAGE_SIZE;
 		struct page **pages = pvec + pinned;
 
-		ret = pin_user_pages_fast(ptr, num_pages, gup_flags, pages);
+		ret = pin_user_pages_fast(ptr, num_pages,
+					  FOLL_WRITE | FOLL_FORCE | FOLL_LONGTERM,
+					  pages);
 		if (ret < 0) {
 			unpin_user_pages(pvec, pinned);
 			kvfree(pvec);

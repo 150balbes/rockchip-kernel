@@ -9,10 +9,6 @@ snd-soc-avs-objs += trace.o
 # tell define_trace.h where to find the trace header
 CFLAGS_trace.o := -I$(src)
 
-ifneq ($(CONFIG_DEBUG_FS),)
-snd-soc-avs-objs += probes.o debugfs.o
-endif
-
 obj-$(CONFIG_SND_SOC_INTEL_AVS) += snd-soc-avs.o
 
 # Machine support

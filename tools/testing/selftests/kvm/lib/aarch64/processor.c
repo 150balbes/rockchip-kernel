@@ -11,7 +11,6 @@
 #include "guest_modes.h"
 #include "kvm_util.h"
 #include "processor.h"
-#include <linux/bitfield.h>
 
 #define DEFAULT_ARM64_GUEST_STACK_VADDR_MIN	0xac0000
 
@@ -77,15 +76,13 @@ static uint64_t __maybe_unused ptrs_per_pte(struct kvm_vm *vm)
 
 void virt_arch_pgd_alloc(struct kvm_vm *vm)
 {
-	size_t nr_pages = page_align(vm, ptrs_per_pgd(vm) * 8) / vm->page_size;
-
-	if (vm->pgd_created)
-		return;
-
-	vm->pgd = vm_phy_pages_alloc(vm, nr_pages,
-				     KVM_GUEST_PAGE_TABLE_MIN_PADDR,
-				     vm->memslots[MEM_REGION_PT]);
-	vm->pgd_created = true;
+	if (!vm->pgd_created) {
+		vm_paddr_t paddr = vm_phy_pages_alloc(vm,
+			page_align(vm, ptrs_per_pgd(vm) * 8) / vm->page_size,
+			KVM_GUEST_PAGE_TABLE_MIN_PADDR, 0);
+		vm->pgd = paddr;
+		vm->pgd_created = true;
+	}
 }
 
 static void _virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
@@ -136,12 +133,12 @@ static void _virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
 
 void virt_arch_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr)
 {
-	uint64_t attr_idx = MT_NORMAL;
+	uint64_t attr_idx = 4; /* NORMAL (See DEFAULT_MAIR_EL1) */
 
 	_virt_pg_map(vm, vaddr, paddr, attr_idx);
 }
 
-uint64_t *virt_get_pte_hva(struct kvm_vm *vm, vm_vaddr_t gva)
+vm_paddr_t addr_arch_gva2gpa(struct kvm_vm *vm, vm_vaddr_t gva)
 {
 	uint64_t *ptep;
 
@@ -172,18 +169,11 @@ uint64_t *virt_get_pte_hva(struct kvm_vm *vm, vm_vaddr_t gva)
 		TEST_FAIL("Page table levels must be 2, 3, or 4");
 	}
 
-	return ptep;
+	return pte_addr(vm, *ptep) + (gva & (vm->page_size - 1));
 
 unmapped_gva:
 	TEST_FAIL("No mapping for vm virtual address, gva: 0x%lx", gva);
-	exit(EXIT_FAILURE);
-}
-
-vm_paddr_t addr_arch_gva2gpa(struct kvm_vm *vm, vm_vaddr_t gva)
-{
-	uint64_t *ptep = virt_get_pte_hva(vm, gva);
-
-	return pte_addr(vm, *ptep) + (gva & (vm->page_size - 1));
+	exit(1);
 }
 
 static void pte_dump(FILE *stream, struct kvm_vm *vm, uint8_t indent, uint64_t page, int level)
@@ -328,15 +318,12 @@ void vcpu_arch_dump(FILE *stream, struct kvm_vcpu *vcpu, uint8_t indent)
 struct kvm_vcpu *aarch64_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id,
 				  struct kvm_vcpu_init *init, void *guest_code)
 {
-	size_t stack_size;
-	uint64_t stack_vaddr;
+	size_t stack_size = vm->page_size == 4096 ?
+					DEFAULT_STACK_PGS * vm->page_size :
+					vm->page_size;
+	uint64_t stack_vaddr = vm_vaddr_alloc(vm, stack_size,
+					      DEFAULT_ARM64_GUEST_STACK_VADDR_MIN);
 	struct kvm_vcpu *vcpu = __vm_vcpu_add(vm, vcpu_id);
-
-	stack_size = vm->page_size == 4096 ? DEFAULT_STACK_PGS * vm->page_size :
-					     vm->page_size;
-	stack_vaddr = __vm_vaddr_alloc(vm, stack_size,
-				       DEFAULT_ARM64_GUEST_STACK_VADDR_MIN,
-				       MEM_REGION_DATA);
 
 	aarch64_vcpu_setup(vcpu, init);
 
@@ -441,8 +428,8 @@ unexpected_exception:
 
 void vm_init_descriptor_tables(struct kvm_vm *vm)
 {
-	vm->handlers = __vm_vaddr_alloc(vm, sizeof(struct handlers),
-					vm->page_size, MEM_REGION_DATA);
+	vm->handlers = vm_vaddr_alloc(vm, sizeof(struct handlers),
+			vm->page_size);
 
 	*(vm_vaddr_t *)addr_gva2hva(vm, (vm_vaddr_t)(&exception_handlers)) = vm->handlers;
 }
@@ -499,13 +486,22 @@ void aarch64_get_supported_page_sizes(uint32_t ipa,
 	err = ioctl(vcpu_fd, KVM_GET_ONE_REG, &reg);
 	TEST_ASSERT(err == 0, KVM_IOCTL_ERROR(KVM_GET_ONE_REG, vcpu_fd));
 
-	*ps4k = FIELD_GET(ARM64_FEATURE_MASK(ID_AA64MMFR0_TGRAN4), val) != 0xf;
-	*ps64k = FIELD_GET(ARM64_FEATURE_MASK(ID_AA64MMFR0_TGRAN64), val) == 0;
-	*ps16k = FIELD_GET(ARM64_FEATURE_MASK(ID_AA64MMFR0_TGRAN16), val) != 0;
+	*ps4k = ((val >> 28) & 0xf) != 0xf;
+	*ps64k = ((val >> 24) & 0xf) == 0;
+	*ps16k = ((val >> 20) & 0xf) != 0;
 
 	close(vcpu_fd);
 	close(vm_fd);
 	close(kvm_fd);
+}
+
+/*
+ * arm64 doesn't have a true default mode, so start by computing the
+ * available IPA space and page sizes early.
+ */
+void __attribute__((constructor)) init_guest_modes(void)
+{
+       guest_modes_append_default();
 }
 
 void smccc_hvc(uint32_t function_id, uint64_t arg0, uint64_t arg1,
@@ -531,23 +527,4 @@ void smccc_hvc(uint32_t function_id, uint64_t arg0, uint64_t arg1,
 		       [arg1] "r"(arg1), [arg2] "r"(arg2), [arg3] "r"(arg3),
 		       [arg4] "r"(arg4), [arg5] "r"(arg5), [arg6] "r"(arg6)
 		     : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7");
-}
-
-void kvm_selftest_arch_init(void)
-{
-	/*
-	 * arm64 doesn't have a true default mode, so start by computing the
-	 * available IPA space and page sizes early.
-	 */
-	guest_modes_append_default();
-}
-
-void vm_vaddr_populate_bitmap(struct kvm_vm *vm)
-{
-	/*
-	 * arm64 selftests use only TTBR0_EL1, meaning that the valid VA space
-	 * is [0, 2^(64 - TCR_EL1.T0SZ)).
-	 */
-	sparsebit_set_num(vm->vpages_valid, 0,
-			  (1ULL << vm->va_bits) >> vm->page_shift);
 }

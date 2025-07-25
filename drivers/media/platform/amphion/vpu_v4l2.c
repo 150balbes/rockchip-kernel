@@ -100,7 +100,7 @@ int vpu_notify_source_change(struct vpu_inst *inst)
 	return 0;
 }
 
-int vpu_set_last_buffer_dequeued(struct vpu_inst *inst)
+int vpu_set_last_buffer_dequeued(struct vpu_inst *inst, bool eos)
 {
 	struct vb2_queue *q;
 
@@ -116,7 +116,8 @@ int vpu_set_last_buffer_dequeued(struct vpu_inst *inst)
 	vpu_trace(inst->dev, "last buffer dequeued\n");
 	q->last_buffer_dequeued = true;
 	wake_up(&q->done_wq);
-	vpu_notify_eos(inst);
+	if (eos)
+		vpu_notify_eos(inst);
 	return 0;
 }
 
@@ -133,136 +134,51 @@ bool vpu_is_source_empty(struct vpu_inst *inst)
 	return true;
 }
 
-static int vpu_init_format(struct vpu_inst *inst, struct vpu_format *fmt)
-{
-	const struct vpu_format *info;
-
-	info = vpu_helper_find_format(inst, fmt->type, fmt->pixfmt);
-	if (!info) {
-		info = vpu_helper_enum_format(inst, fmt->type, 0);
-		if (!info)
-			return -EINVAL;
-	}
-	memcpy(fmt, info, sizeof(*fmt));
-
-	return 0;
-}
-
-static int vpu_calc_fmt_bytesperline(struct v4l2_format *f, struct vpu_format *fmt)
+const struct vpu_format *vpu_try_fmt_common(struct vpu_inst *inst, struct v4l2_format *f)
 {
 	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
-	int i;
-
-	if (fmt->flags & V4L2_FMT_FLAG_COMPRESSED) {
-		for (i = 0; i < fmt->comp_planes; i++)
-			fmt->bytesperline[i] = 0;
-		return 0;
-	}
-	if (pixmp->num_planes == fmt->comp_planes) {
-		for (i = 0; i < fmt->comp_planes; i++)
-			fmt->bytesperline[i] = pixmp->plane_fmt[i].bytesperline;
-		return 0;
-	}
-	if (pixmp->num_planes > 1)
-		return -EINVAL;
-
-	/*amphion vpu only support nv12 and nv12 tiled,
-	 * so the bytesperline of luma and chroma should be same
-	 */
-	for (i = 0; i < fmt->comp_planes; i++)
-		fmt->bytesperline[i] = pixmp->plane_fmt[0].bytesperline;
-
-	return 0;
-}
-
-static int vpu_calc_fmt_sizeimage(struct vpu_inst *inst, struct vpu_format *fmt)
-{
+	u32 type = f->type;
 	u32 stride = 1;
+	u32 bytesperline;
+	u32 sizeimage;
+	const struct vpu_format *fmt;
+	const struct vpu_core_resources *res;
 	int i;
 
-	if (!(fmt->flags & V4L2_FMT_FLAG_COMPRESSED)) {
-		const struct vpu_core_resources *res = vpu_get_resource(inst);
-
-		if (res)
-			stride = res->stride;
+	fmt = vpu_helper_find_format(inst, type, pixmp->pixelformat);
+	if (!fmt) {
+		fmt = vpu_helper_enum_format(inst, type, 0);
+		if (!fmt)
+			return NULL;
+		pixmp->pixelformat = fmt->pixfmt;
 	}
 
-	for (i = 0; i < fmt->comp_planes; i++) {
-		fmt->sizeimage[i] = vpu_helper_get_plane_size(fmt->pixfmt,
-							      fmt->width,
-							      fmt->height,
-							      i,
-							      stride,
-							      fmt->field != V4L2_FIELD_NONE ? 1 : 0,
-							      &fmt->bytesperline[i]);
-		fmt->sizeimage[i] = max_t(u32, fmt->sizeimage[i], PAGE_SIZE);
-		if (fmt->flags & V4L2_FMT_FLAG_COMPRESSED) {
-			fmt->sizeimage[i] = clamp_val(fmt->sizeimage[i], SZ_128K, SZ_8M);
-			fmt->bytesperline[i] = 0;
-		}
-	}
-
-	return 0;
-}
-
-u32 vpu_get_fmt_plane_size(struct vpu_format *fmt, u32 plane_no)
-{
-	u32 size;
-	int i;
-
-	if (plane_no >= fmt->mem_planes)
-		return 0;
-
-	if (fmt->comp_planes == fmt->mem_planes)
-		return fmt->sizeimage[plane_no];
-	if (plane_no < fmt->mem_planes - 1)
-		return fmt->sizeimage[plane_no];
-
-	size = fmt->sizeimage[plane_no];
-	for (i = fmt->mem_planes; i < fmt->comp_planes; i++)
-		size += fmt->sizeimage[i];
-
-	return size;
-}
-
-int vpu_try_fmt_common(struct vpu_inst *inst, struct v4l2_format *f, struct vpu_format *fmt)
-{
-	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
-	int i;
-	int ret;
-
-	fmt->pixfmt = pixmp->pixelformat;
-	fmt->type = f->type;
-	ret = vpu_init_format(inst, fmt);
-	if (ret < 0)
-		return ret;
-
-	fmt->width = pixmp->width;
-	fmt->height = pixmp->height;
-	if (fmt->width)
-		fmt->width = vpu_helper_valid_frame_width(inst, fmt->width);
-	if (fmt->height)
-		fmt->height = vpu_helper_valid_frame_height(inst, fmt->height);
-	fmt->field = pixmp->field == V4L2_FIELD_ANY ? V4L2_FIELD_NONE : pixmp->field;
-	vpu_calc_fmt_bytesperline(f, fmt);
-	vpu_calc_fmt_sizeimage(inst, fmt);
-	if ((fmt->flags & V4L2_FMT_FLAG_COMPRESSED) && pixmp->plane_fmt[0].sizeimage)
-		fmt->sizeimage[0] = clamp_val(pixmp->plane_fmt[0].sizeimage, SZ_128K, SZ_8M);
-
-	pixmp->pixelformat = fmt->pixfmt;
-	pixmp->width = fmt->width;
-	pixmp->height = fmt->height;
+	res = vpu_get_resource(inst);
+	if (res)
+		stride = res->stride;
+	if (pixmp->width)
+		pixmp->width = vpu_helper_valid_frame_width(inst, pixmp->width);
+	if (pixmp->height)
+		pixmp->height = vpu_helper_valid_frame_height(inst, pixmp->height);
 	pixmp->flags = fmt->flags;
-	pixmp->num_planes = fmt->mem_planes;
-	pixmp->field = fmt->field;
-	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
+	pixmp->num_planes = fmt->num_planes;
+	if (pixmp->field == V4L2_FIELD_ANY)
+		pixmp->field = V4L2_FIELD_NONE;
 	for (i = 0; i < pixmp->num_planes; i++) {
-		pixmp->plane_fmt[i].bytesperline = fmt->bytesperline[i];
-		pixmp->plane_fmt[i].sizeimage = vpu_get_fmt_plane_size(fmt, i);
-		memset(pixmp->plane_fmt[i].reserved, 0, sizeof(pixmp->plane_fmt[i].reserved));
+		bytesperline = max_t(s32, pixmp->plane_fmt[i].bytesperline, 0);
+		sizeimage = vpu_helper_get_plane_size(pixmp->pixelformat,
+						      pixmp->width,
+						      pixmp->height,
+						      i,
+						      stride,
+						      pixmp->field > V4L2_FIELD_NONE ? 1 : 0,
+						      &bytesperline);
+		sizeimage = max_t(s32, pixmp->plane_fmt[i].sizeimage, sizeimage);
+		pixmp->plane_fmt[i].bytesperline = bytesperline;
+		pixmp->plane_fmt[i].sizeimage = sizeimage;
 	}
 
-	return 0;
+	return fmt;
 }
 
 static bool vpu_check_ready(struct vpu_inst *inst, u32 type)
@@ -471,10 +387,10 @@ static int vpu_vb2_queue_setup(struct vb2_queue *vq,
 	cur_fmt = vpu_get_format(inst, vq->type);
 
 	if (*plane_count) {
-		if (*plane_count != cur_fmt->mem_planes)
+		if (*plane_count != cur_fmt->num_planes)
 			return -EINVAL;
-		for (i = 0; i < cur_fmt->mem_planes; i++) {
-			if (psize[i] < vpu_get_fmt_plane_size(cur_fmt, i))
+		for (i = 0; i < cur_fmt->num_planes; i++) {
+			if (psize[i] < cur_fmt->sizeimage[i])
 				return -EINVAL;
 		}
 		return 0;
@@ -484,9 +400,14 @@ static int vpu_vb2_queue_setup(struct vb2_queue *vq,
 		*buf_count = max_t(unsigned int, *buf_count, inst->min_buffer_out);
 	else
 		*buf_count = max_t(unsigned int, *buf_count, inst->min_buffer_cap);
-	*plane_count = cur_fmt->mem_planes;
-	for (i = 0; i < cur_fmt->mem_planes; i++)
-		psize[i] = vpu_get_fmt_plane_size(cur_fmt, i);
+	*plane_count = cur_fmt->num_planes;
+	for (i = 0; i < cur_fmt->num_planes; i++)
+		psize[i] = cur_fmt->sizeimage[i];
+
+	if (V4L2_TYPE_IS_OUTPUT(vq->type) && inst->state == VPU_CODEC_STATE_SEEK) {
+		vpu_trace(inst->dev, "reinit when VIDIOC_REQBUFS(OUTPUT, 0)\n");
+		call_void_vop(inst, release);
+	}
 
 	return 0;
 }
@@ -516,8 +437,8 @@ static int vpu_vb2_buf_prepare(struct vb2_buffer *vb)
 	u32 i;
 
 	cur_fmt = vpu_get_format(inst, vb->type);
-	for (i = 0; i < cur_fmt->mem_planes; i++) {
-		if (vpu_get_vb_length(vb, i) < vpu_get_fmt_plane_size(cur_fmt, i)) {
+	for (i = 0; i < cur_fmt->num_planes; i++) {
+		if (vpu_get_vb_length(vb, i) < cur_fmt->sizeimage[i]) {
 			dev_dbg(inst->dev, "[%d] %s buf[%d] is invalid\n",
 				inst->id, vpu_type_name(vb->type), vb->index);
 			vpu_set_buffer_state(vbuf, VPU_BUF_STATE_ERROR);
@@ -710,6 +631,7 @@ int vpu_v4l2_open(struct file *file, struct vpu_inst *inst)
 		func = &vpu->decoder;
 
 	atomic_set(&inst->ref_count, 0);
+	atomic_long_set(&inst->last_response_cmd, 0);
 	vpu_inst_get(inst);
 	inst->vpu = vpu;
 	inst->core = vpu_request_core(vpu, inst->type);
@@ -772,9 +694,9 @@ int vpu_v4l2_close(struct file *file)
 		v4l2_m2m_ctx_release(inst->fh.m2m_ctx);
 		inst->fh.m2m_ctx = NULL;
 	}
+	call_void_vop(inst, release);
 	vpu_inst_unlock(inst);
 
-	call_void_vop(inst, release);
 	vpu_inst_unregister(inst);
 	vpu_inst_put(inst);
 

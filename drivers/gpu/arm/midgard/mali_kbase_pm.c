@@ -66,7 +66,7 @@ int kbase_pm_context_active_handle_suspend(struct kbase_device *kbdev, enum kbas
 		case KBASE_PM_SUSPEND_HANDLER_DONT_REACTIVATE:
 			if (kbdev->pm.active_count != 0)
 				break;
-			/* FALLTHROUGH */
+			fallthrough;
 		case KBASE_PM_SUSPEND_HANDLER_DONT_INCREASE:
 			mutex_unlock(&kbdev->pm.lock);
 			mutex_unlock(&js_devdata->runpool_mutex);

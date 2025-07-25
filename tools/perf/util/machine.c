@@ -2555,16 +2555,18 @@ static int lbr_callchain_add_lbr_ip(struct thread *thread,
 		save_lbr_cursor_node(thread, cursor, i);
 	}
 
-	/* Add LBR ip from first entries.to */
-	ip = entries[0].to;
-	flags = &entries[0].flags;
-	*branch_from = entries[0].from;
-	err = add_callchain_ip(thread, cursor, parent,
-			       root_al, &cpumode, ip,
-			       true, flags, NULL,
-			       *branch_from);
-	if (err)
-		return err;
+	if (lbr_nr > 0) {
+		/* Add LBR ip from first entries.to */
+		ip = entries[0].to;
+		flags = &entries[0].flags;
+		*branch_from = entries[0].from;
+		err = add_callchain_ip(thread, cursor, parent,
+				root_al, &cpumode, ip,
+				true, flags, NULL,
+				*branch_from);
+		if (err)
+			return err;
+	}
 
 	return 0;
 }
@@ -3335,44 +3337,4 @@ int machine__for_each_kernel_map(struct machine *machine, machine__map_t fn, voi
 		}
 	}
 	return err;
-}
-
-bool machine__is_lock_function(struct machine *machine, u64 addr)
-{
-	if (!machine->sched.text_start) {
-		struct map *kmap;
-		struct symbol *sym = machine__find_kernel_symbol_by_name(machine, "__sched_text_start", &kmap);
-
-		if (!sym) {
-			/* to avoid retry */
-			machine->sched.text_start = 1;
-			return false;
-		}
-
-		machine->sched.text_start = kmap->unmap_ip(kmap, sym->start);
-
-		/* should not fail from here */
-		sym = machine__find_kernel_symbol_by_name(machine, "__sched_text_end", &kmap);
-		machine->sched.text_end = kmap->unmap_ip(kmap, sym->start);
-
-		sym = machine__find_kernel_symbol_by_name(machine, "__lock_text_start", &kmap);
-		machine->lock.text_start = kmap->unmap_ip(kmap, sym->start);
-
-		sym = machine__find_kernel_symbol_by_name(machine, "__lock_text_end", &kmap);
-		machine->lock.text_end = kmap->unmap_ip(kmap, sym->start);
-	}
-
-	/* failed to get kernel symbols */
-	if (machine->sched.text_start == 1)
-		return false;
-
-	/* mutex and rwsem functions are in sched text section */
-	if (machine->sched.text_start <= addr && addr < machine->sched.text_end)
-		return true;
-
-	/* spinlock functions are in lock text section */
-	if (machine->lock.text_start <= addr && addr < machine->lock.text_end)
-		return true;
-
-	return false;
 }

@@ -89,6 +89,7 @@
 #include <linux/sched/task_stack.h>
 #include <linux/context_tracking.h>
 #include <linux/random.h>
+#include <linux/moduleloader.h>
 #include <linux/list.h>
 #include <linux/integrity.h>
 #include <linux/proc_ns.h>
@@ -96,7 +97,6 @@
 #include <linux/cache.h>
 #include <linux/rodata_test.h>
 #include <linux/jump_label.h>
-#include <linux/mem_encrypt.h>
 #include <linux/kcsan.h>
 #include <linux/init_syscalls.h>
 #include <linux/stackdepot.h>
@@ -104,7 +104,6 @@
 #include <net/net_namespace.h>
 
 #include <asm/io.h>
-#include <asm/bugs.h>
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
@@ -145,8 +144,7 @@ void (*__initdata late_time_init)(void);
 /* Untouched command line saved by arch-specific code. */
 char __initdata boot_command_line[COMMAND_LINE_SIZE];
 /* Untouched saved command line (eg. for /proc) */
-char *saved_command_line __ro_after_init;
-unsigned int saved_command_line_len __ro_after_init;
+char *saved_command_line;
 /* Command line for parameter parsing */
 static char *static_command_line;
 /* Untouched extra command line */
@@ -536,6 +534,10 @@ static int __init unknown_bootoption(char *param, char *val,
 {
 	size_t len = strlen(param);
 
+	/* Handle params aliased to sysctls */
+	if (sysctl_is_alias(param))
+		return 0;
+
 	repair_env_string(param, val);
 
 	/* Handle obsolete-style parameters */
@@ -605,7 +607,6 @@ static int __init rdinit_setup(char *str)
 __setup("rdinit=", rdinit_setup);
 
 #ifndef CONFIG_SMP
-static const unsigned int setup_max_cpus = NR_CPUS;
 static inline void setup_nr_cpu_ids(void) { }
 static inline void smp_prepare_cpus(unsigned int maxcpus) { }
 #endif
@@ -630,6 +631,8 @@ static void __init setup_command_line(char *command_line)
 	saved_command_line = memblock_alloc(len + ilen, SMP_CACHE_BYTES);
 	if (!saved_command_line)
 		panic("%s: Failed to allocate %zu bytes\n", __func__, len + ilen);
+
+	len = xlen + strlen(command_line) + 1;
 
 	static_command_line = memblock_alloc(len, SMP_CACHE_BYTES);
 	if (!static_command_line)
@@ -668,8 +671,6 @@ static void __init setup_command_line(char *command_line)
 			strcpy(saved_command_line + len, extra_init_args);
 		}
 	}
-
-	saved_command_line_len = strlen(saved_command_line);
 }
 
 /*
@@ -783,8 +784,6 @@ void __init __weak thread_stack_cache_init(void)
 {
 }
 #endif
-
-void __init __weak mem_encrypt_init(void) { }
 
 void __init __weak poking_init(void) { }
 
@@ -971,7 +970,23 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	build_all_zonelists(NULL);
 	page_alloc_init();
 
+#ifdef CONFIG_ARCH_ROCKCHIP
+	{
+		const char *s = saved_command_line;
+		const char *e = &saved_command_line[strlen(saved_command_line)];
+		int n =
+		    pr_notice("Kernel command line: %s\n", saved_command_line);
+		n -= strlen("Kernel command line: ");
+		s += n;
+		/* command line maybe too long to print one time */
+		while (n > 0 && s < e) {
+			n = pr_cont("%s\n", s);
+			s += n;
+		}
+	}
+#else
 	pr_notice("Kernel command line: %s\n", saved_command_line);
+#endif
 	/* parameters may set static keys */
 	jump_label_init();
 	parse_early_param();
@@ -1088,14 +1103,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	 */
 	locking_selftest();
 
-	/*
-	 * This needs to be called before any devices perform DMA
-	 * operations that might use the SWIOTLB bounce buffers. It will
-	 * mark the bounce buffers as decrypted so that their usage will
-	 * not cause "plain-text" data to be decrypted when accessed.
-	 */
-	mem_encrypt_init();
-
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (initrd_start && !initrd_below_start_ok &&
 	    page_to_pfn(virt_to_page((void *)initrd_start)) < min_low_pfn) {
@@ -1112,6 +1119,9 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 		late_time_init();
 	sched_clock_init();
 	calibrate_delay();
+
+	arch_cpu_finalize_init();
+
 	pid_idr_init();
 	anon_vma_init();
 #ifdef CONFIG_X86
@@ -1137,8 +1147,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	cgroup_init();
 	taskstats_init_early();
 	delayacct_init();
-
-	check_bugs();
 
 	acpi_subsystem_init();
 	arch_post_acpi_subsys_init();
@@ -1364,6 +1372,183 @@ static int __init ignore_unknown_bootoption(char *param, char *val,
 	return 0;
 }
 
+#ifdef CONFIG_INITCALL_ASYNC
+extern initcall_entry_t __initcall0s_start[];
+extern initcall_entry_t __initcall1s_start[];
+extern initcall_entry_t __initcall2s_start[];
+extern initcall_entry_t __initcall3s_start[];
+extern initcall_entry_t __initcall4s_start[];
+extern initcall_entry_t __initcall5s_start[];
+extern initcall_entry_t __initcall6s_start[];
+extern initcall_entry_t __initcall7s_start[];
+
+static initcall_entry_t *initcall_sync_levels[] __initdata = {
+	__initcall0s_start,
+	__initcall1s_start,
+	__initcall2s_start,
+	__initcall3s_start,
+	__initcall4s_start,
+	__initcall5s_start,
+	__initcall6s_start,
+	__initcall7s_start,
+	__initcall_end,
+};
+
+struct initcall_work {
+	struct kthread_work work;
+	initcall_t call;
+};
+
+struct initcall_worker {
+	struct kthread_worker *worker;
+	bool queued;
+};
+
+static struct initcall_worker *initcall_workers;
+static int initcall_nr_workers;
+
+static int __init setup_initcall_nr_threads(char *str)
+{
+	get_option(&str, &initcall_nr_workers);
+
+	return 1;
+}
+__setup("initcall_nr_threads=", setup_initcall_nr_threads);
+
+static void __init initcall_work_func(struct kthread_work *work)
+{
+	struct initcall_work *iwork =
+		container_of(work, struct initcall_work, work);
+
+	do_one_initcall(iwork->call);
+}
+
+static void __init initcall_queue_work(struct initcall_worker *iworker,
+				       struct initcall_work *iwork)
+{
+	kthread_queue_work(iworker->worker, &iwork->work);
+	iworker->queued = true;
+}
+
+static void __init initcall_flush_worker(int level, bool sync)
+{
+	int i;
+	struct initcall_worker *iworker;
+
+	for (i = 0; i < initcall_nr_workers; i++) {
+		iworker = &initcall_workers[i];
+		if (iworker->queued) {
+			kthread_flush_worker(iworker->worker);
+			iworker->queued = false;
+		}
+	}
+}
+
+static int __init do_initcall_level_threaded(int level)
+{
+	initcall_entry_t *fn;
+	size_t i = 0, w = 0;
+	size_t n = initcall_levels[level + 1] - initcall_levels[level];
+	struct initcall_work *iwork, *iworks;
+	ktime_t start = 0, end;
+
+	if (!n)
+		return 0;
+
+	iworks = kmalloc_array(n, sizeof(*iworks), GFP_KERNEL);
+	if (!iworks)
+		return -ENOMEM;
+
+	if (initcall_debug)
+		start = ktime_get();
+
+	for (fn = initcall_levels[level]; fn < initcall_sync_levels[level];
+	     fn++, i++) {
+		iwork = &iworks[i];
+		iwork->call = initcall_from_entry(fn);
+		kthread_init_work(&iwork->work, initcall_work_func);
+		initcall_queue_work(&initcall_workers[w], iwork);
+		if (++w >= initcall_nr_workers)
+			w = 0;
+	}
+	if (initcall_sync_levels[level] > initcall_levels[level]) {
+		initcall_flush_worker(level, false);
+
+		if (initcall_debug) {
+			end = ktime_get();
+			printk(KERN_DEBUG "initcall level %s %lld usecs\n",
+			       initcall_level_names[level],
+			       ktime_us_delta(end, start));
+			start = end;
+		}
+	}
+
+	for (fn = initcall_sync_levels[level]; fn < initcall_levels[level + 1];
+	     fn++, i++) {
+		iwork = &iworks[i];
+		iwork->call = initcall_from_entry(fn);
+		kthread_init_work(&iwork->work, initcall_work_func);
+		initcall_queue_work(&initcall_workers[w], iwork);
+		if (++w >= initcall_nr_workers)
+			w = 0;
+	}
+	if (initcall_levels[level + 1] > initcall_sync_levels[level]) {
+		initcall_flush_worker(level, true);
+
+		if (initcall_debug) {
+			end = ktime_get();
+			printk(KERN_DEBUG "initcall level %s_sync %lld usecs\n",
+			       initcall_level_names[level],
+			       ktime_us_delta(end, start));
+		}
+	}
+
+	kfree(iworks);
+
+	return 0;
+}
+
+static void __init initcall_init_workers(void)
+{
+	int i;
+
+	if (initcall_nr_workers < 0)
+		initcall_nr_workers = num_online_cpus() * 2;
+
+	if (!initcall_nr_workers)
+		return;
+
+	initcall_workers =
+		kcalloc(initcall_nr_workers, sizeof(*initcall_workers),
+			GFP_KERNEL);
+	if (!initcall_workers)
+		initcall_nr_workers = 0;
+
+	for (i = 0; i < initcall_nr_workers; i++) {
+		struct kthread_worker *worker;
+
+		worker = kthread_create_worker(0, "init/%d", i);
+		if (IS_ERR(worker)) {
+			i--;
+			initcall_nr_workers = (i >= 0 ? i : 0);
+			break;
+		}
+		initcall_workers[i].worker = worker;
+	}
+}
+
+static void __init initcall_free_works(void)
+{
+	int i;
+
+	for (i = 0; i < initcall_nr_workers; i++)
+		if (initcall_workers[i].worker)
+			kthread_destroy_worker(initcall_workers[i].worker);
+
+	kfree(initcall_workers);
+}
+#endif /* CONFIG_INITCALL_ASYNC */
+
 static void __init do_initcall_level(int level, char *command_line)
 {
 	initcall_entry_t *fn;
@@ -1375,6 +1560,13 @@ static void __init do_initcall_level(int level, char *command_line)
 		   NULL, ignore_unknown_bootoption);
 
 	trace_initcall_level(initcall_level_names[level]);
+
+#ifdef CONFIG_INITCALL_ASYNC
+	if (initcall_nr_workers)
+		if (do_initcall_level_threaded(level) == 0)
+			return;
+#endif
+
 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 		do_one_initcall(initcall_from_entry(fn));
 }
@@ -1382,8 +1574,12 @@ static void __init do_initcall_level(int level, char *command_line)
 static void __init do_initcalls(void)
 {
 	int level;
-	size_t len = saved_command_line_len + 1;
+	size_t len = strlen(saved_command_line) + 1;
 	char *command_line;
+
+#ifdef CONFIG_INITCALL_ASYNC
+	initcall_init_workers();
+#endif
 
 	command_line = kzalloc(len, GFP_KERNEL);
 	if (!command_line)
@@ -1396,6 +1592,10 @@ static void __init do_initcalls(void)
 	}
 
 	kfree(command_line);
+
+#ifdef CONFIG_INITCALL_ASYNC
+	initcall_free_works();
+#endif
 }
 
 /*
@@ -1483,11 +1683,11 @@ static void mark_readonly(void)
 	if (rodata_enabled) {
 		/*
 		 * load_module() results in W+X mappings, which are cleaned
-		 * up with call_rcu().  Let's make sure that queued work is
+		 * up with init_free_wq. Let's make sure that queued work is
 		 * flushed so that we don't hit false positives looking for
 		 * insecure pages which are W+X.
 		 */
-		rcu_barrier();
+		flush_module_init_free_work();
 		mark_rodata_ro();
 		rodata_test();
 	} else
@@ -1624,6 +1824,10 @@ static noinline void __init kernel_init_freeable(void)
 
 	smp_init();
 	sched_init_smp();
+
+#ifdef CONFIG_ROCKCHIP_THUNDER_BOOT_DEFER_FREE_MEMBLOCK
+	kthread_run(defer_free_memblock, NULL, "defer_mem");
+#endif
 
 	padata_init();
 	page_alloc_init_late();

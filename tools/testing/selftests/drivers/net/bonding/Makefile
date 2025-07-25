@@ -5,10 +5,7 @@ TEST_PROGS := \
 	bond-arp-interval-causes-panic.sh \
 	bond-break-lacpdu-tx.sh \
 	bond-lladdr-target.sh \
-	dev_addr_lists.sh \
-	mode-1-recovery-updelay.sh \
-	mode-2-recovery-updelay.sh \
-	option_prio.sh
+	dev_addr_lists.sh
 
 TEST_FILES := \
 	lag_lib.sh \

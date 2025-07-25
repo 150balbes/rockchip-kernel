@@ -72,11 +72,11 @@
 	};
 
 	gpio-leds {
-		led-red-sata2 {
+		red-sata2 {
 			label = "dart:red:sata2";
 			gpios = <&pca9554 0 GPIO_ACTIVE_LOW>;
 		};
-		led-red-sata3 {
+		red-sata3 {
 			label = "dart:red:sata3";
 			gpios = <&pca9554 3 GPIO_ACTIVE_LOW>;
 		};

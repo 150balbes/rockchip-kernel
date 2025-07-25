@@ -16,14 +16,8 @@ static const struct mtk_gate_regs hif_cg_regs = {
 	.sta_ofs = 0x0030,
 };
 
-#define GATE_HIF(_id, _name, _parent, _shift) {		\
-		.id = _id,				\
-		.name = _name,				\
-		.parent_name = _parent,			\
-		.regs = &hif_cg_regs,			\
-		.shift = _shift,			\
-		.ops = &mtk_clk_gate_ops_no_setclr_inv,	\
-	}
+#define GATE_HIF(_id, _name, _parent, _shift)				\
+	GATE_MTK(_id, _name, _parent, &hif_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr_inv)
 
 static const struct mtk_gate hif_clks[] = {
 	GATE_HIF(CLK_HIFSYS_USB0PHY, "usb0_phy_clk", "ethpll_500m_ck", 21),
@@ -54,8 +48,8 @@ static int clk_mt2701_hif_probe(struct platform_device *pdev)
 
 	clk_data = mtk_alloc_clk_data(CLK_HIFSYS_NR);
 
-	mtk_clk_register_gates(node, hif_clks, ARRAY_SIZE(hif_clks),
-						clk_data);
+	mtk_clk_register_gates(&pdev->dev, node, hif_clks,
+			       ARRAY_SIZE(hif_clks), clk_data);
 
 	r = of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
 	if (r) {

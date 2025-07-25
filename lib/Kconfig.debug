@@ -18,6 +18,10 @@ config PRINTK_TIME
 	  The behavior is also controlled by the kernel command line
 	  parameter printk.time=1. See Documentation/admin-guide/kernel-parameters.rst
 
+config PRINTK_TIME_FROM_ARM_ARCH_TIMER
+	bool "Timing from ARM architected timer"
+	depends on PRINTK_TIME && ARM_ARCH_TIMER && NO_GKI
+
 config PRINTK_CALLER
 	bool "Show caller information on printks"
 	depends on PRINTK
@@ -312,21 +316,8 @@ config DEBUG_INFO_REDUCED
 	  DEBUG_INFO build and compile times are reduced too.
 	  Only works with newer gcc versions.
 
-choice
-	prompt "Compressed Debug information"
-	help
-	  Compress the resulting debug info. Results in smaller debug info sections,
-	  but requires that consumers are able to decompress the results.
-
-	  If unsure, choose DEBUG_INFO_COMPRESSED_NONE.
-
-config DEBUG_INFO_COMPRESSED_NONE
-	bool "Don't compress debug information"
-	help
-	  Don't compress debug info sections.
-
-config DEBUG_INFO_COMPRESSED_ZLIB
-	bool "Compress debugging information with zlib"
+config DEBUG_INFO_COMPRESSED
+	bool "Compressed debugging information"
 	depends on $(cc-option,-gz=zlib)
 	depends on $(ld-option,--compress-debug-sections=zlib)
 	help
@@ -339,18 +330,6 @@ config DEBUG_INFO_COMPRESSED_ZLIB
 	  recompressed with a different compression scheme. But this is still
 	  preferable to setting $KDEB_COMPRESS to "none" which would be even
 	  larger.
-
-config DEBUG_INFO_COMPRESSED_ZSTD
-	bool "Compress debugging information with zstd"
-	depends on $(cc-option,-gz=zstd)
-	depends on $(ld-option,--compress-debug-sections=zstd)
-	help
-	  Compress the debug information using zstd.  This may provide better
-	  compression than zlib, for about the same time costs, but requires newer
-	  toolchain support.  Requires GCC 13.0+ or Clang 16.0+, binutils 2.40+, and
-	  zstd.
-
-endchoice # "Compressed Debug information"
 
 config DEBUG_INFO_SPLIT
 	bool "Produce split debuginfo in .dwo files"
@@ -368,7 +347,7 @@ config DEBUG_INFO_SPLIT
 	  Incompatible with older versions of ccache.
 
 config DEBUG_INFO_BTF
-	bool "Generate BTF typeinfo"
+	bool "Generate BTF type information"
 	depends on !DEBUG_INFO_SPLIT && !DEBUG_INFO_REDUCED
 	depends on !GCC_PLUGIN_RANDSTRUCT || COMPILE_TEST
 	depends on BPF_SYSCALL
@@ -389,8 +368,18 @@ config PAHOLE_HAS_BTF_TAG
 	  btf_decl_tag) or not. Currently only clang compiler implements
 	  these attributes, so make the config depend on CC_IS_CLANG.
 
+config PAHOLE_HAS_LANG_EXCLUDE
+	def_bool PAHOLE_VERSION >= 124
+	help
+	  Support for the --lang_exclude flag which makes pahole exclude
+	  compilation units from the supplied language. Used in Kbuild to
+	  omit Rust CUs which are not supported in version 1.24 of pahole,
+	  otherwise it would emit malformed kernel and module binaries when
+	  using DEBUG_INFO_BTF_MODULES.
+
 config DEBUG_INFO_BTF_MODULES
-	def_bool y
+	bool "Generate BTF type information for kernel modules"
+	default y
 	depends on DEBUG_INFO_BTF && MODULES && PAHOLE_HAS_SPLIT_BTF
 	help
 	  Generate compact split BTF type information for kernel modules.
@@ -494,7 +483,6 @@ config SECTION_MISMATCH_WARN_ONLY
 config DEBUG_FORCE_FUNCTION_ALIGN_64B
 	bool "Force all function address 64B aligned"
 	depends on EXPERT && (X86_64 || ARM64 || PPC32 || PPC64 || ARC)
-	select FUNCTION_ALIGNMENT_64B
 	help
 	  There are cases that a commit from one domain changes the function
 	  address alignment of other domains, and cause magic performance
@@ -753,7 +741,6 @@ config DEBUG_KMEMLEAK
 	select STACKTRACE if STACKTRACE_SUPPORT
 	select KALLSYMS
 	select CRC32
-	select STACKDEPOT
 	help
 	  Say Y here if you want to enable the memory leak
 	  detector. The memory allocation/freeing is traced in a way
@@ -1101,12 +1088,23 @@ config HARDLOCKUP_CHECK_TIMESTAMP
 # arch/ can define HAVE_HARDLOCKUP_DETECTOR_ARCH to provide their own hard
 # lockup detector rather than the perf based detector.
 #
+config HAVE_HARDLOCKUP_DETECTOR_OTHER_CPU
+	def_bool y
+	depends on NO_GKI
+	depends on SMP
+	depends on !HAVE_HARDLOCKUP_DETECTOR_PERF && !HAVE_HARDLOCKUP_DETECTOR_ARCH
+
+config HARDLOCKUP_DETECTOR_OTHER_CPU
+	bool
+	select SOFTLOCKUP_DETECTOR
+
 config HARDLOCKUP_DETECTOR
 	bool "Detect Hard Lockups"
 	depends on DEBUG_KERNEL && !S390
-	depends on HAVE_HARDLOCKUP_DETECTOR_PERF || HAVE_HARDLOCKUP_DETECTOR_ARCH
+	depends on HAVE_HARDLOCKUP_DETECTOR_PERF || HAVE_HARDLOCKUP_DETECTOR_ARCH || HAVE_HARDLOCKUP_DETECTOR_OTHER_CPU
 	select LOCKUP_DETECTOR
 	select HARDLOCKUP_DETECTOR_PERF if HAVE_HARDLOCKUP_DETECTOR_PERF
+	select HARDLOCKUP_DETECTOR_OTHER_CPU if HAVE_HARDLOCKUP_DETECTOR_OTHER_CPU
 	help
 	  Say Y here to enable the kernel to act as a watchdog to detect
 	  hard lockups.
@@ -1246,12 +1244,15 @@ config DEBUG_TIMEKEEPING
 config DEBUG_PREEMPT
 	bool "Debug preemptible kernel"
 	depends on DEBUG_KERNEL && PREEMPTION && TRACE_IRQFLAGS_SUPPORT
-	default y
 	help
 	  If you say Y here then the kernel will use a debug variant of the
 	  commonly used smp_processor_id() function and will print warnings
 	  if kernel code uses it in a preemption-unsafe way. Also, the kernel
 	  will detect preemption count underflows.
+
+	  This option has potential to introduce high runtime overhead,
+	  depending on workload as it triggers debugging routines for each
+	  this_cpu operation. It should only be used for debugging purposes.
 
 menu "Lock Debugging (spinlocks, mutexes, etc...)"
 
@@ -1744,16 +1745,6 @@ config LATENCYTOP
 	  Enable this option if you want to use the LatencyTOP tool
 	  to find out which userspace is blocking on what kernel operations.
 
-config DEBUG_CGROUP_REF
-	bool "Disable inlining of cgroup css reference count functions"
-	depends on DEBUG_KERNEL
-	depends on CGROUPS
-	depends on KPROBES
-	default n
-	help
-	  Force cgroup css reference count functions to not be inlined so
-	  that they can be kprobed for debugging.
-
 source "kernel/trace/Kconfig"
 
 config PROVIDE_OHCI1394_DMA_INIT
@@ -2008,6 +1999,7 @@ config FAIL_SUNRPC
 config FAULT_INJECTION_STACKTRACE_FILTER
 	bool "stacktrace filter for fault-injection capabilities"
 	depends on FAULT_INJECTION_DEBUG_FS && STACKTRACE_SUPPORT
+	depends on !X86_64
 	select STACKTRACE
 	depends on FRAME_POINTER || MIPS || PPC || S390 || MICROBLAZE || ARM || ARC || X86
 	help
@@ -2128,6 +2120,7 @@ config TEST_MIN_HEAP
 config TEST_SORT
 	tristate "Array-based sort test" if !KUNIT_ALL_TESTS
 	depends on KUNIT
+	select STACKTRACE if ARCH_CORRECT_STACKTRACE_ON_KRETPROBE
 	default KUNIT_ALL_TESTS
 	help
 	  This option enables the self-test function of 'sort()' at boot,
@@ -2260,6 +2253,9 @@ config STRING_SELFTEST
 config TEST_STRING_HELPERS
 	tristate "Test functions located in the string_helpers module at runtime"
 
+config TEST_STRSCPY
+	tristate "Test strscpy*() family of functions at runtime"
+
 config TEST_KSTRTOX
 	tristate "Test kstrto*() family of functions at runtime"
 
@@ -2283,7 +2279,6 @@ config TEST_XARRAY
 	tristate "Test the XArray code at runtime"
 
 config TEST_MAPLE_TREE
-	depends on DEBUG_KERNEL
 	select DEBUG_MAPLE_TREE
 	tristate "Test the Maple Tree code at runtime"
 
@@ -2293,6 +2288,15 @@ config TEST_RHASHTABLE
 	  Enable this option to test the rhashtable functions at boot.
 
 	  If unsure, say N.
+
+config TEST_SIPHASH
+	tristate "Perform selftest on siphash functions"
+	help
+	  Enable this option to test the kernel's siphash (<linux/siphash.h>) hash
+	  functions on boot (or module load).
+
+	  This is intended to help people writing architecture-specific
+	  optimized versions.  If unsure, say N.
 
 config TEST_IDA
 	tristate "Perform selftest on IDA functions"
@@ -2621,22 +2625,6 @@ config HW_BREAKPOINT_KUNIT_TEST
 
 	  If unsure, say N.
 
-config STRSCPY_KUNIT_TEST
-	tristate "Test strscpy*() family of functions at runtime" if !KUNIT_ALL_TESTS
-	depends on KUNIT
-	default KUNIT_ALL_TESTS
-
-config SIPHASH_KUNIT_TEST
-	tristate "Perform selftest on siphash functions" if !KUNIT_ALL_TESTS
-	depends on KUNIT
-	default KUNIT_ALL_TESTS
-	help
-	  Enable this option to test the kernel's siphash (<linux/siphash.h>) hash
-	  functions on boot (or module load).
-
-	  This is intended to help people writing architecture-specific
-	  optimized versions.  If unsure, say N.
-
 config TEST_UDELAY
 	tristate "udelay test driver"
 	help
@@ -2853,22 +2841,6 @@ config RUST_OVERFLOW_CHECKS
 	  Note that this will apply to all Rust code, including `core`.
 
 	  If unsure, say Y.
-
-config RUST_BUILD_ASSERT_ALLOW
-	bool "Allow unoptimized build-time assertions"
-	depends on RUST
-	help
-	  Controls how are `build_error!` and `build_assert!` handled during build.
-
-	  If calls to them exist in the binary, it may indicate a violated invariant
-	  or that the optimizer failed to verify the invariant during compilation.
-
-	  This should not happen, thus by default the build is aborted. However,
-	  as an escape hatch, you can choose Y here to ignore them during build
-	  and let the check be carried at runtime (with `panic!` being called if
-	  the check fails).
-
-	  If unsure, say N.
 
 endmenu # "Rust"
 

@@ -19,10 +19,10 @@
 #include "util/data.h"
 #include "util/stat.h"
 #include "util/debug.h"
+#include "util/event.h"
 #include "util/symbol.h"
 #include "util/session.h"
 #include "util/build-id.h"
-#include "util/sample.h"
 #include "util/synthetic-events.h"
 
 #define MMAP_DEV_MAJOR  8
@@ -361,7 +361,7 @@ static int inject_build_id(struct bench_data *data, u64 *max_rss)
 		return -1;
 
 	for (i = 0; i < nr_mmaps; i++) {
-		int idx = rand() % (nr_dsos - 1);
+		int idx = rand() % nr_dsos;
 		struct bench_dso *dso = &dsos[idx];
 		u64 timestamp = rand() % 1000000;
 

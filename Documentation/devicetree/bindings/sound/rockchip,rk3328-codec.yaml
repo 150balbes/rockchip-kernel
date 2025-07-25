@@ -8,9 +8,6 @@ title: Rockchip rk3328 internal codec
 
 maintainers:
   - Heiko Stuebner <heiko@sntech.de>
-allOf:
-  - $ref: dai-common.yaml#
-
 
 properties:
   compatible:
@@ -56,7 +53,7 @@ required:
   - rockchip,grf
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

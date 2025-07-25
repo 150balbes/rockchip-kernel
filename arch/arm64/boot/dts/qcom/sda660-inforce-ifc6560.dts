@@ -99,7 +99,7 @@
 };
 
 &adsp_pil {
-	firmware-name = "qcom/sda660/adsp.mbn";
+	firmware-name = "qcom/ifc6560/adsp.mbn";
 };
 
 &blsp_i2c6 {
@@ -231,7 +231,7 @@
 };
 
 &rpm_requests {
-	regulators-0 {
+	pm660-regulators {
 		compatible = "qcom,rpm-pm660-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -313,7 +313,7 @@
 		};
 	};
 
-	regulators-1 {
+	pm660l-regulators {
 		compatible = "qcom,rpm-pm660l-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -401,18 +401,16 @@
 };
 
 &sdc2_state_on {
-	sd-cd-pins {
+	sd-cd {
 		pins = "gpio54";
-		function = "gpio";
 		bias-pull-up;
 		drive-strength = <2>;
 	};
 };
 
 &sdc2_state_off {
-	sd-cd-pins {
+	sd-cd {
 		pins = "gpio54";
-		function = "gpio";
 		bias-disable;
 		drive-strength = <2>;
 	};
@@ -438,7 +436,7 @@
 
 	cd-gpios = <&tlmm 54 GPIO_ACTIVE_LOW>;
 	no-sdio;
-	no-mmc;
+	no-emmc;
 };
 
 &tlmm {

@@ -99,20 +99,20 @@ enum epf_ntb_bar {
  *       NTB Driver               NTB Driver
  */
 struct epf_ntb_ctrl {
-	u32 command;
-	u32 argument;
-	u16 command_status;
-	u16 link_status;
-	u32 topology;
-	u64 addr;
-	u64 size;
-	u32 num_mws;
-	u32 reserved;
-	u32 spad_offset;
-	u32 spad_count;
-	u32 db_entry_size;
-	u32 db_data[MAX_DB_COUNT];
-	u32 db_offset[MAX_DB_COUNT];
+	u32     command;
+	u32     argument;
+	u16     command_status;
+	u16     link_status;
+	u32     topology;
+	u64     addr;
+	u64     size;
+	u32     num_mws;
+	u32	reserved;
+	u32     spad_offset;
+	u32     spad_count;
+	u32	db_entry_size;
+	u32     db_data[MAX_DB_COUNT];
+	u32     db_offset[MAX_DB_COUNT];
 } __packed;
 
 struct epf_ntb {
@@ -136,7 +136,8 @@ struct epf_ntb {
 
 	struct epf_ntb_ctrl *reg;
 
-	u32 *epf_db;
+	phys_addr_t epf_db_phy;
+	void __iomem *epf_db;
 
 	phys_addr_t vpci_mw_phy[MAX_MW];
 	void __iomem *vpci_mw_addr[MAX_MW];
@@ -257,10 +258,12 @@ static void epf_ntb_cmd_handler(struct work_struct *work)
 	ntb = container_of(work, struct epf_ntb, cmd_handler.work);
 
 	for (i = 1; i < ntb->db_count; i++) {
-		if (ntb->epf_db[i]) {
-			ntb->db |= 1 << (i - 1);
+		if (readl(ntb->epf_db + i * 4)) {
+			if (readl(ntb->epf_db + i * 4))
+				ntb->db |= 1 << (i - 1);
+
 			ntb_db_event(&ntb->ntb, i);
-			ntb->epf_db[i] = 0;
+			writel(0, ntb->epf_db + i * 4);
 		}
 	}
 
@@ -431,7 +434,7 @@ static int epf_ntb_config_spad_bar_alloc(struct epf_ntb *ntb)
 	spad_count = ntb->spad_count;
 
 	ctrl_size = sizeof(struct epf_ntb_ctrl);
-	spad_size = 2 * spad_count * sizeof(u32);
+	spad_size = 2 * spad_count * 4;
 
 	if (!align) {
 		ctrl_size = roundup_pow_of_two(ctrl_size);
@@ -461,7 +464,7 @@ static int epf_ntb_config_spad_bar_alloc(struct epf_ntb *ntb)
 	ctrl->num_mws = ntb->num_mws;
 	ntb->spad_size = spad_size;
 
-	ctrl->db_entry_size = sizeof(u32);
+	ctrl->db_entry_size = 4;
 
 	for (i = 0; i < ntb->db_count; i++) {
 		ntb->reg->db_data[i] = 1 + i;
@@ -533,7 +536,7 @@ static int epf_ntb_db_bar_init(struct epf_ntb *ntb)
 	struct pci_epf_bar *epf_bar;
 	void __iomem *mw_addr;
 	enum pci_barno barno;
-	size_t size = sizeof(u32) * ntb->db_count;
+	size_t size = 4 * ntb->db_count;
 
 	epc_features = pci_epc_get_features(ntb->epf->epc,
 					    ntb->epf->func_no,
@@ -652,6 +655,7 @@ err_alloc_mem:
 /**
  * epf_ntb_mw_bar_clear() - Clear Memory window BARs
  * @ntb: NTB device that facilitates communication between HOST and VHOST
+ * @num_mws: the number of Memory window BARs that to be cleared
  */
 static void epf_ntb_mw_bar_clear(struct epf_ntb *ntb, int num_mws)
 {
@@ -1119,11 +1123,11 @@ static int vntb_epf_link_enable(struct ntb_dev *ntb,
 static u32 vntb_epf_spad_read(struct ntb_dev *ndev, int idx)
 {
 	struct epf_ntb *ntb = ntb_ndev(ndev);
-	int off = ntb->reg->spad_offset, ct = ntb->reg->spad_count * sizeof(u32);
+	int off = ntb->reg->spad_offset, ct = ntb->reg->spad_count * 4;
 	u32 val;
-	void __iomem *base = (void __iomem *)ntb->reg;
+	void __iomem *base = ntb->reg;
 
-	val = readl(base + off + ct + idx * sizeof(u32));
+	val = readl(base + off + ct + idx * 4);
 	return val;
 }
 
@@ -1131,10 +1135,10 @@ static int vntb_epf_spad_write(struct ntb_dev *ndev, int idx, u32 val)
 {
 	struct epf_ntb *ntb = ntb_ndev(ndev);
 	struct epf_ntb_ctrl *ctrl = ntb->reg;
-	int off = ctrl->spad_offset, ct = ctrl->spad_count * sizeof(u32);
-	void __iomem *base = (void __iomem *)ntb->reg;
+	int off = ctrl->spad_offset, ct = ctrl->spad_count * 4;
+	void __iomem *base = ntb->reg;
 
-	writel(val, base + off + ct + idx * sizeof(u32));
+	writel(val, base + off + ct + idx * 4);
 	return 0;
 }
 
@@ -1143,10 +1147,10 @@ static u32 vntb_epf_peer_spad_read(struct ntb_dev *ndev, int pidx, int idx)
 	struct epf_ntb *ntb = ntb_ndev(ndev);
 	struct epf_ntb_ctrl *ctrl = ntb->reg;
 	int off = ctrl->spad_offset;
-	void __iomem *base = (void __iomem *)ntb->reg;
+	void __iomem *base = ntb->reg;
 	u32 val;
 
-	val = readl(base + off + idx * sizeof(u32));
+	val = readl(base + off + idx * 4);
 	return val;
 }
 
@@ -1155,9 +1159,9 @@ static int vntb_epf_peer_spad_write(struct ntb_dev *ndev, int pidx, int idx, u32
 	struct epf_ntb *ntb = ntb_ndev(ndev);
 	struct epf_ntb_ctrl *ctrl = ntb->reg;
 	int off = ctrl->spad_offset;
-	void __iomem *base = (void __iomem *)ntb->reg;
+	void __iomem *base = ntb->reg;
 
-	writel(val, base + off + idx * sizeof(u32));
+	writel(val, base + off + idx * 4);
 	return 0;
 }
 
@@ -1277,14 +1281,11 @@ static int pci_vntb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ret = ntb_register_device(&ndev->ntb);
 	if (ret) {
 		dev_err(dev, "Failed to register NTB device\n");
-		goto err_register_dev;
+		return ret;
 	}
 
 	dev_dbg(dev, "PCI Virtual NTB driver loaded\n");
 	return 0;
-
-err_register_dev:
-	return -EINVAL;
 }
 
 static struct pci_device_id pci_vntb_table[] = {

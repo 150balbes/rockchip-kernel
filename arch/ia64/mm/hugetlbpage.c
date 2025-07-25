@@ -58,7 +58,7 @@ huge_pte_offset (struct mm_struct *mm, unsigned long addr, unsigned long sz)
 
 	pgd = pgd_offset(mm, taddr);
 	if (pgd_present(*pgd)) {
-		p4d = p4d_offset(pgd, addr);
+		p4d = p4d_offset(pgd, taddr);
 		if (p4d_present(*p4d)) {
 			pud = pud_offset(p4d, taddr);
 			if (pud_present(*pud)) {
@@ -91,6 +91,21 @@ int prepare_hugepage_range(struct file *file,
 	return 0;
 }
 
+struct page *follow_huge_addr(struct mm_struct *mm, unsigned long addr, int write)
+{
+	struct page *page;
+	pte_t *ptep;
+
+	if (REGION_NUMBER(addr) != RGN_HPAGE)
+		return ERR_PTR(-EINVAL);
+
+	ptep = huge_pte_offset(mm, addr, HPAGE_SIZE);
+	if (!ptep || pte_none(*ptep))
+		return NULL;
+	page = pte_page(*ptep);
+	page += ((addr & ~HPAGE_MASK) >> PAGE_SHIFT);
+	return page;
+}
 int pmd_huge(pmd_t pmd)
 {
 	return 0;

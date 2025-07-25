@@ -3,6 +3,7 @@
 #define __LIBPERF_CPUMAP_H
 
 #include <perf/core.h>
+#include <perf/cpumap.h>
 #include <stdio.h>
 #include <stdbool.h>
 
@@ -10,8 +11,6 @@
 struct perf_cpu {
 	int cpu;
 };
-
-struct perf_cpu_map;
 
 LIBPERF_API struct perf_cpu_map *perf_cpu_map__dummy_new(void);
 LIBPERF_API struct perf_cpu_map *perf_cpu_map__default_new(void);

@@ -79,7 +79,6 @@ required:
   - spi-cpol
 
 allOf:
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
   - if:
       properties:
         compatible:
@@ -108,7 +107,7 @@ allOf:
       dependencies:
         adi,sync-mode: [ clocks ]
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

@@ -6,19 +6,40 @@
  */
 #include "kvm_util.h"
 
-void ucall_arch_init(struct kvm_vm *vm, vm_paddr_t mmio_gpa)
+void ucall_init(struct kvm_vm *vm, void *arg)
 {
 }
 
-void ucall_arch_do_ucall(vm_vaddr_t uc)
+void ucall_uninit(struct kvm_vm *vm)
 {
+}
+
+void ucall(uint64_t cmd, int nargs, ...)
+{
+	struct ucall uc = {
+		.cmd = cmd,
+	};
+	va_list va;
+	int i;
+
+	nargs = min(nargs, UCALL_MAX_ARGS);
+
+	va_start(va, nargs);
+	for (i = 0; i < nargs; ++i)
+		uc.args[i] = va_arg(va, uint64_t);
+	va_end(va);
+
 	/* Exit via DIAGNOSE 0x501 (normally used for breakpoints) */
-	asm volatile ("diag 0,%0,0x501" : : "a"(uc) : "memory");
+	asm volatile ("diag 0,%0,0x501" : : "a"(&uc) : "memory");
 }
 
-void *ucall_arch_get_ucall(struct kvm_vcpu *vcpu)
+uint64_t get_ucall(struct kvm_vcpu *vcpu, struct ucall *uc)
 {
 	struct kvm_run *run = vcpu->run;
+	struct ucall ucall = {};
+
+	if (uc)
+		memset(uc, 0, sizeof(*uc));
 
 	if (run->exit_reason == KVM_EXIT_S390_SIEIC &&
 	    run->s390_sieic.icptcode == 4 &&
@@ -26,7 +47,13 @@ void *ucall_arch_get_ucall(struct kvm_vcpu *vcpu)
 	    (run->s390_sieic.ipb >> 16) == 0x501) {
 		int reg = run->s390_sieic.ipa & 0xf;
 
-		return (void *)run->s.regs.gprs[reg];
+		memcpy(&ucall, addr_gva2hva(vcpu->vm, run->s.regs.gprs[reg]),
+		       sizeof(ucall));
+
+		vcpu_run_complete_io(vcpu);
+		if (uc)
+			memcpy(uc, &ucall, sizeof(ucall));
 	}
-	return NULL;
+
+	return ucall.cmd;
 }

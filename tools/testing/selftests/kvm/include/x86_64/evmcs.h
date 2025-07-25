@@ -10,7 +10,6 @@
 #define SELFTEST_KVM_EVMCS_H
 
 #include <stdint.h>
-#include "hyperv.h"
 #include "vmx.h"
 
 #define u16 uint16_t
@@ -20,6 +19,15 @@
 #define EVMCS_VERSION 1
 
 extern bool enable_evmcs;
+
+struct hv_vp_assist_page {
+	__u32 apic_assist;
+	__u32 reserved;
+	__u64 vtl_control[2];
+	__u64 nested_enlightenments_control[2];
+	__u32 enlighten_vmentry;
+	__u64 current_nested_vmcs;
+};
 
 struct hv_enlightened_vmcs {
 	u32 revision_id;
@@ -32,8 +40,6 @@ struct hv_enlightened_vmcs {
 	u16 host_fs_selector;
 	u16 host_gs_selector;
 	u16 host_tr_selector;
-
-	u16 padding16_1;
 
 	u64 host_ia32_pat;
 	u64 host_ia32_efer;
@@ -153,7 +159,7 @@ struct hv_enlightened_vmcs {
 	u64 ept_pointer;
 
 	u16 virtual_processor_id;
-	u16 padding16_2[3];
+	u16 padding16[3];
 
 	u64 padding64_2[5];
 	u64 guest_physical_address;
@@ -189,13 +195,13 @@ struct hv_enlightened_vmcs {
 	u64 guest_rip;
 
 	u32 hv_clean_fields;
-	u32 padding32_1;
+	u32 hv_padding_32;
 	u32 hv_synthetic_controls;
 	struct {
 		u32 nested_flush_hypercall:1;
 		u32 msr_bitmap:1;
 		u32 reserved:30;
-	}  __packed hv_enlightenments_control;
+	} hv_enlightenments_control;
 	u32 hv_vp_id;
 	u32 padding32_2;
 	u64 hv_vm_id;
@@ -216,7 +222,7 @@ struct hv_enlightened_vmcs {
 	u64 host_ssp;
 	u64 host_ia32_int_ssp_table_addr;
 	u64 padding64_6;
-} __packed;
+};
 
 #define HV_VMX_ENLIGHTENED_CLEAN_FIELD_NONE                     0
 #define HV_VMX_ENLIGHTENED_CLEAN_FIELD_IO_BITMAP                BIT(0)
@@ -237,15 +243,29 @@ struct hv_enlightened_vmcs {
 #define HV_VMX_ENLIGHTENED_CLEAN_FIELD_ENLIGHTENMENTSCONTROL    BIT(15)
 #define HV_VMX_ENLIGHTENED_CLEAN_FIELD_ALL                      0xFFFF
 
-#define HV_VMX_SYNTHETIC_EXIT_REASON_TRAP_AFTER_FLUSH 0x10000031
+#define HV_X64_MSR_VP_ASSIST_PAGE		0x40000073
+#define HV_X64_MSR_VP_ASSIST_PAGE_ENABLE	0x00000001
+#define HV_X64_MSR_VP_ASSIST_PAGE_ADDRESS_SHIFT	12
+#define HV_X64_MSR_VP_ASSIST_PAGE_ADDRESS_MASK	\
+		(~((1ull << HV_X64_MSR_VP_ASSIST_PAGE_ADDRESS_SHIFT) - 1))
 
 extern struct hv_enlightened_vmcs *current_evmcs;
+extern struct hv_vp_assist_page *current_vp_assist;
 
 int vcpu_enable_evmcs(struct kvm_vcpu *vcpu);
 
-static inline void evmcs_enable(void)
+static inline int enable_vp_assist(uint64_t vp_assist_pa, void *vp_assist)
 {
+	u64 val = (vp_assist_pa & HV_X64_MSR_VP_ASSIST_PAGE_ADDRESS_MASK) |
+		HV_X64_MSR_VP_ASSIST_PAGE_ENABLE;
+
+	wrmsr(HV_X64_MSR_VP_ASSIST_PAGE, val);
+
+	current_vp_assist = vp_assist;
+
 	enable_evmcs = true;
+
+	return 0;
 }
 
 static inline int evmcs_vmptrld(uint64_t vmcs_pa, void *vmcs)
@@ -256,16 +276,6 @@ static inline int evmcs_vmptrld(uint64_t vmcs_pa, void *vmcs)
 	current_evmcs = vmcs;
 
 	return 0;
-}
-
-static inline bool load_evmcs(struct hyperv_test_pages *hv)
-{
-	if (evmcs_vmptrld(hv->enlightened_vmcs_gpa, hv->enlightened_vmcs))
-		return false;
-
-	current_evmcs->revision_id = EVMCS_VERSION;
-
-	return true;
 }
 
 static inline int evmcs_vmptrst(uint64_t *value)

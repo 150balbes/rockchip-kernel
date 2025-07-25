@@ -456,7 +456,8 @@ static const struct v4l2_subdev_ops vpx3220_ops = {
  * Client management code
  */
 
-static int vpx3220_probe(struct i2c_client *client)
+static int vpx3220_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct vpx3220 *decoder;
 	struct v4l2_subdev *sd;
@@ -546,7 +547,7 @@ static struct i2c_driver vpx3220_driver = {
 	.driver = {
 		.name	= "vpx3220",
 	},
-	.probe_new	= vpx3220_probe,
+	.probe		= vpx3220_probe,
 	.remove		= vpx3220_remove,
 	.id_table	= vpx3220_id,
 };

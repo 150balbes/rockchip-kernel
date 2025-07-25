@@ -43,9 +43,6 @@
 #define SOF_DBG_PRINT_IPC_SUCCESS_LOGS		BIT(9) /* print IPC success
 							* in dmesg logs
 							*/
-#define SOF_DBG_FORCE_NOCODEC			BIT(10) /* ignore all codec-related
-							 * configurations
-							 */
 
 /* Flag definitions used for controlling the DSP dump behavior */
 #define SOF_DBG_DUMP_REGS		BIT(0)
@@ -174,10 +171,6 @@ struct snd_sof_dsp_ops {
 	 * TODO: consider removing these operations and calling respective
 	 * implementations directly
 	 */
-	void (*write8)(struct snd_sof_dev *sof_dev, void __iomem *addr,
-		       u8 value); /* optional */
-	u8 (*read8)(struct snd_sof_dev *sof_dev,
-		    void __iomem *addr); /* optional */
 	void (*write)(struct snd_sof_dev *sof_dev, void __iomem *addr,
 		      u32 value); /* optional */
 	u32 (*read)(struct snd_sof_dev *sof_dev,
@@ -428,11 +421,15 @@ struct sof_ipc_pm_ops {
  *			DSP.
  *			The function implements generic, hardware independent way
  *			of loading the initial firmware and its modules (if any).
+ * @query_fw_configuration: Optional function pointer to query information and
+ *			configuration from the booted firmware.
+ *			Executed after the first successful firmware boot.
  */
 struct sof_ipc_fw_loader_ops {
 	int (*validate)(struct snd_sof_dev *sdev);
 	size_t (*parse_ext_manifest)(struct snd_sof_dev *sdev);
 	int (*load_fw_to_dsp)(struct snd_sof_dev *sdev);
+	int (*query_fw_configuration)(struct snd_sof_dev *sdev);
 };
 
 struct sof_ipc_tplg_ops;
@@ -445,11 +442,6 @@ struct sof_ipc_pcm_ops;
  * @pcm:	Pointer to PCM ops
  * @fw_loader:	Pointer to Firmware Loader ops
  * @fw_tracing:	Pointer to Firmware tracing ops
- *
- * @init:	Optional pointer for IPC related initialization
- * @exit:	Optional pointer for IPC related cleanup
- * @post_fw_boot: Optional pointer to execute IPC related tasks after firmware
- *		boot.
  *
  * @tx_msg:	Function pointer for sending a 'short' IPC message
  * @set_get_data: Function pointer for set/get data ('large' IPC message). This
@@ -471,10 +463,6 @@ struct sof_ipc_ops {
 	const struct sof_ipc_pcm_ops *pcm;
 	const struct sof_ipc_fw_loader_ops *fw_loader;
 	const struct sof_ipc_fw_tracing_ops *fw_tracing;
-
-	int (*init)(struct snd_sof_dev *sdev);
-	void (*exit)(struct snd_sof_dev *sdev);
-	int (*post_fw_boot)(struct snd_sof_dev *sdev);
 
 	int (*tx_msg)(struct snd_sof_dev *sdev, void *msg_data, size_t msg_bytes,
 		      void *reply_data, size_t reply_bytes, bool no_pm);
@@ -680,8 +668,6 @@ static inline void snd_sof_ipc_msgs_rx(struct snd_sof_dev *sdev)
 }
 int sof_ipc_tx_message(struct snd_sof_ipc *ipc, void *msg_data, size_t msg_bytes,
 		       void *reply_data, size_t reply_bytes);
-int sof_ipc_set_get_data(struct snd_sof_ipc *ipc, void *msg_data,
-			 size_t msg_bytes, bool set);
 int sof_ipc_tx_message_no_pm(struct snd_sof_ipc *ipc, void *msg_data, size_t msg_bytes,
 			     void *reply_data, size_t reply_bytes);
 int sof_ipc_send_msg(struct snd_sof_dev *sdev, void *msg_data, size_t msg_bytes,

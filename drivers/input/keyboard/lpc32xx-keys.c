@@ -264,6 +264,7 @@ static int lpc32xx_kscan_probe(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int lpc32xx_kscan_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -301,9 +302,10 @@ static int lpc32xx_kscan_resume(struct device *dev)
 	mutex_unlock(&input->mutex);
 	return retval;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(lpc32xx_kscan_pm_ops, lpc32xx_kscan_suspend,
-				lpc32xx_kscan_resume);
+static SIMPLE_DEV_PM_OPS(lpc32xx_kscan_pm_ops, lpc32xx_kscan_suspend,
+			 lpc32xx_kscan_resume);
 
 static const struct of_device_id lpc32xx_kscan_match[] = {
 	{ .compatible = "nxp,lpc3220-key" },
@@ -315,7 +317,7 @@ static struct platform_driver lpc32xx_kscan_driver = {
 	.probe		= lpc32xx_kscan_probe,
 	.driver		= {
 		.name	= DRV_NAME,
-		.pm	= pm_sleep_ptr(&lpc32xx_kscan_pm_ops),
+		.pm	= &lpc32xx_kscan_pm_ops,
 		.of_match_table = lpc32xx_kscan_match,
 	}
 };

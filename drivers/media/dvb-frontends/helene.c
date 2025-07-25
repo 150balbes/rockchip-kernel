@@ -1025,7 +1025,7 @@ struct dvb_frontend *helene_attach_s(struct dvb_frontend *fe,
 			priv->i2c_address, priv->i2c);
 	return fe;
 }
-EXPORT_SYMBOL(helene_attach_s);
+EXPORT_SYMBOL_GPL(helene_attach_s);
 
 struct dvb_frontend *helene_attach(struct dvb_frontend *fe,
 		const struct helene_config *config,
@@ -1061,9 +1061,10 @@ struct dvb_frontend *helene_attach(struct dvb_frontend *fe,
 			priv->i2c_address, priv->i2c);
 	return fe;
 }
-EXPORT_SYMBOL(helene_attach);
+EXPORT_SYMBOL_GPL(helene_attach);
 
-static int helene_probe(struct i2c_client *client)
+static int helene_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct helene_config *config = client->dev.platform_data;
 	struct dvb_frontend *fe = config->fe;
@@ -1110,7 +1111,7 @@ static struct i2c_driver helene_driver = {
 	.driver = {
 		.name = "helene",
 	},
-	.probe_new = helene_probe,
+	.probe    = helene_probe,
 	.id_table = helene_id,
 };
 module_i2c_driver(helene_driver);

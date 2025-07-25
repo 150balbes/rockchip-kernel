@@ -171,7 +171,6 @@ static int __init processor_probe(struct parisc_device *dev)
 	p->cpu_num = cpu_info.cpu_num;
 	p->cpu_loc = cpu_info.cpu_loc;
 
-	set_cpu_possible(cpuid, true);
 	store_cpu_topology(cpuid);
 
 #ifdef CONFIG_SMP
@@ -272,14 +271,9 @@ void __init collect_boot_cpu_data(void)
 		printk(KERN_INFO "capabilities 0x%lx\n",
 			boot_cpu_data.pdc.capabilities);
 
-	if (pdc_model_sysmodel(OS_ID_HPUX, boot_cpu_data.pdc.sys_model_name) == PDC_OK)
-		pr_info("HP-UX model name: %s\n",
+	if (pdc_model_sysmodel(boot_cpu_data.pdc.sys_model_name) == PDC_OK)
+		printk(KERN_INFO "model %s\n",
 			boot_cpu_data.pdc.sys_model_name);
-
-	serial_no[0] = 0;
-	if (pdc_model_sysmodel(OS_ID_MPEXL, serial_no) == PDC_OK &&
-		serial_no[0])
-		pr_info("MPE/iX model name: %s\n", serial_no);
 
 	dump_stack_set_arch_desc("%s", boot_cpu_data.pdc.sys_model_name);
 
@@ -377,10 +371,18 @@ int
 show_cpuinfo (struct seq_file *m, void *v)
 {
 	unsigned long cpu;
+	char cpu_name[60], *p;
+
+	/* strip PA path from CPU name to not confuse lscpu */
+	strlcpy(cpu_name, per_cpu(cpu_data, 0).dev->name, sizeof(cpu_name));
+	p = strrchr(cpu_name, '[');
+	if (p)
+		*(--p) = 0;
 
 	for_each_online_cpu(cpu) {
-		const struct cpuinfo_parisc *cpuinfo = &per_cpu(cpu_data, cpu);
 #ifdef CONFIG_SMP
+		const struct cpuinfo_parisc *cpuinfo = &per_cpu(cpu_data, cpu);
+
 		if (0 == cpuinfo->hpa)
 			continue;
 #endif
@@ -425,8 +427,7 @@ show_cpuinfo (struct seq_file *m, void *v)
 
 		seq_printf(m, "model\t\t: %s - %s\n",
 				 boot_cpu_data.pdc.sys_model_name,
-				 cpuinfo->dev ?
-				 cpuinfo->dev->name : "Unknown");
+				 cpu_name);
 
 		seq_printf(m, "hversion\t: 0x%08x\n"
 			        "sversion\t: 0x%08x\n",
@@ -464,13 +465,6 @@ static struct parisc_driver cpu_driver __refdata = {
  */
 void __init processor_init(void)
 {
-	unsigned int cpu;
-
 	reset_cpu_topology();
-
-	/* reset possible mask. We will mark those which are possible. */
-	for_each_possible_cpu(cpu)
-		set_cpu_possible(cpu, false);
-
 	register_parisc_driver(&cpu_driver);
 }

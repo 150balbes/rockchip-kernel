@@ -324,7 +324,7 @@ static void acpi_processor_power_verify_c3(struct acpi_processor *pr,
 	 * the erratum), but this is known to disrupt certain ISA
 	 * devices thus we take the conservative approach.
 	 */
-	if (errata.piix4.fdma) {
+	else if (errata.piix4.fdma) {
 		acpi_handle_debug(pr->handle,
 				  "C3 not supported on PIIX4 with Type-F DMA\n");
 		return;
@@ -384,6 +384,8 @@ static void acpi_processor_power_verify_c3(struct acpi_processor *pr,
 	 * handle BM_RLD is to set it and leave it set.
 	 */
 	acpi_write_bit_register(ACPI_BITREG_BUS_MASTER_RLD, 1);
+
+	return;
 }
 
 static int acpi_cst_latency_cmp(const void *a, const void *b)
@@ -457,7 +459,7 @@ static int acpi_processor_power_verify(struct acpi_processor *pr)
 
 	lapic_timer_propagate_broadcast(pr);
 
-	return working;
+	return (working);
 }
 
 static int acpi_processor_get_cstate_info(struct acpi_processor *pr)
@@ -1429,6 +1431,8 @@ int acpi_processor_power_exit(struct acpi_processor *pr)
 		acpi_processor_registered--;
 		if (acpi_processor_registered == 0)
 			cpuidle_unregister_driver(&acpi_idle_driver);
+
+		kfree(dev);
 	}
 
 	pr->flags.power_setup_done = 0;

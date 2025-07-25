@@ -157,7 +157,13 @@ of_get_fixed_voltage_config(struct device *dev,
 	return config;
 }
 
+static int fixed_voltage_get_current_limit(struct regulator_dev *rdev)
+{
+	return rdev->constraints->max_uA;
+}
+
 static const struct regulator_ops fixed_voltage_ops = {
+	.get_current_limit = fixed_voltage_get_current_limit,
 };
 
 static const struct regulator_ops fixed_voltage_clkenabled_ops = {
@@ -215,7 +221,7 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
 		drvdata->enable_clock = devm_clk_get(dev, NULL);
 		if (IS_ERR(drvdata->enable_clock)) {
 			dev_err(dev, "Can't get enable-clock from devicetree\n");
-			return -ENOENT;
+			return PTR_ERR(drvdata->enable_clock);
 		}
 	} else if (drvtype && drvtype->has_performance_state) {
 		drvdata->desc.ops = &fixed_voltage_domain_ops;

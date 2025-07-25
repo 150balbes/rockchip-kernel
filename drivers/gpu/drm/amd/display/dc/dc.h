@@ -47,7 +47,7 @@ struct aux_payload;
 struct set_config_cmd_payload;
 struct dmub_notification;
 
-#define DC_VER "3.2.215"
+#define DC_VER "3.2.207"
 
 #define MAX_SURFACES 3
 #define MAX_PLANES 6
@@ -230,6 +230,11 @@ struct dc_caps {
 	uint32_t dmdata_alloc_size;
 	unsigned int max_cursor_size;
 	unsigned int max_video_width;
+	/*
+	 * max video plane width that can be safely assumed to be always
+	 * supported by single DPP pipe.
+	 */
+	unsigned int max_optimizable_video_width;
 	unsigned int min_horizontal_blanking_period;
 	int linear_pitch_alignment;
 	bool dcc_const_color;
@@ -261,13 +266,11 @@ struct dc_caps {
 	uint32_t cache_line_size;
 	uint32_t cache_num_ways;
 	uint16_t subvp_fw_processing_delay_us;
-	uint8_t subvp_drr_max_vblank_margin_us;
 	uint16_t subvp_prefetch_end_to_mall_start_us;
 	uint8_t subvp_swath_height_margin_lines; // subvp start line must be aligned to 2 x swath height
 	uint16_t subvp_pstate_allow_width_us;
 	uint16_t subvp_vertical_int_margin_us;
 	bool seamless_odm;
-	uint8_t subvp_drr_vblank_start_margin_us;
 };
 
 struct dc_bug_wa {
@@ -395,7 +398,6 @@ struct dc_config {
 	bool disable_dmcu;
 	bool enable_4to1MPC;
 	bool enable_windowed_mpo_odm;
-	bool forceHBR2CP2520; // Used for switching between test patterns TPS4 and CP2520
 	uint32_t allow_edp_hotplug_detection;
 	bool clamp_min_dcfclk;
 	uint64_t vblank_alignment_dto_params;
@@ -409,7 +411,6 @@ struct dc_config {
 	bool use_default_clock_table;
 	bool force_bios_enable_lttpr;
 	uint8_t force_bios_fixed_vs;
-	int sdpif_request_limit_words_per_umc;
 
 };
 
@@ -459,15 +460,15 @@ enum pipe_split_policy {
 	MPC_SPLIT_DYNAMIC = 0,
 
 	/**
-	 * @MPC_SPLIT_AVOID: Avoid pipe split, which means that DC will not
+	 * @MPC_SPLIT_DYNAMIC: Avoid pipe split, which means that DC will not
 	 * try any sort of split optimization.
 	 */
 	MPC_SPLIT_AVOID = 1,
 
 	/**
-	 * @MPC_SPLIT_AVOID_MULT_DISP: With this option, DC will only try to
-	 * optimize the pipe utilization when using a single display; if the
-	 * user connects to a second display, DC will avoid pipe split.
+	 * @MPC_SPLIT_DYNAMIC: With this option, DC will only try to optimize
+	 * the pipe utilization when using a single display; if the user
+	 * connects to a second display, DC will avoid pipe split.
 	 */
 	MPC_SPLIT_AVOID_MULT_DISP = 2,
 };
@@ -500,7 +501,7 @@ enum dcn_zstate_support_state {
 };
 
 /**
- * struct dc_clocks - DC pipe clocks
+ * dc_clocks - DC pipe clocks
  *
  * For any clocks that may differ per pipe only the max is stored in this
  * structure
@@ -531,7 +532,7 @@ struct dc_clocks {
 	bool fclk_prev_p_state_change_support;
 	int num_ways;
 
-	/*
+	/**
 	 * @fw_based_mclk_switching
 	 *
 	 * DC has a mechanism that leverage the variable refresh rate to switch
@@ -796,6 +797,7 @@ struct dc_debug_options {
 	unsigned int force_odm_combine; //bit vector based on otg inst
 	unsigned int seamless_boot_odm_combine;
 	unsigned int force_odm_combine_4to1; //bit vector based on otg inst
+	int minimum_z8_residency_time;
 	bool disable_z9_mpc;
 	unsigned int force_fclk_khz;
 	bool enable_tri_buf;
@@ -853,7 +855,6 @@ struct dc_debug_options {
 	unsigned int force_subvp_num_ways;
 	unsigned int force_mall_ss_num_ways;
 	bool alloc_extra_way_for_cursor;
-	uint32_t subvp_extra_lines;
 	bool force_usr_allow;
 	/* uses value at boot and disables switch */
 	bool disable_dtb_ref_clk_switch;
@@ -1542,8 +1543,6 @@ struct dc_sink_init_data {
 	uint32_t dongle_max_pix_clk;
 	bool converter_disable_audio;
 };
-
-bool dc_extended_blank_supported(struct dc *dc);
 
 struct dc_sink *dc_sink_create(const struct dc_sink_init_data *init_params);
 

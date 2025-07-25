@@ -181,9 +181,6 @@ void riscv_pmu_start(struct perf_event *event, int flags)
 	uint64_t max_period = riscv_pmu_ctr_get_width_mask(event);
 	u64 init_val;
 
-	if (WARN_ON_ONCE(!(event->hw.state & PERF_HES_STOPPED)))
-		return;
-
 	if (flags & PERF_EF_RELOAD)
 		WARN_ON_ONCE(!(event->hw.state & PERF_HES_UPTODATE));
 
@@ -248,6 +245,10 @@ static int riscv_pmu_event_init(struct perf_event *event)
 	int mapped_event;
 	u64 event_config = 0;
 	uint64_t cmask;
+
+	/* driver does not support branch stack sampling */
+	if (has_branch_stack(event))
+		return -EOPNOTSUPP;
 
 	hwc->flags = 0;
 	mapped_event = rvpmu->event_map(event, &event_config);

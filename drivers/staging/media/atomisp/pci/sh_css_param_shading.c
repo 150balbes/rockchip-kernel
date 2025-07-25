@@ -13,7 +13,6 @@
  * more details.
  */
 
-#include <linux/math.h>
 #include <linux/slab.h>
 
 #include <math_support.h>
@@ -240,9 +239,10 @@ prepare_shading_table(const struct ia_css_shading_table *in_table,
 {
 	unsigned int input_width, input_height, table_width, table_height, i;
 	unsigned int left_padding, top_padding, left_cropping;
-	struct ia_css_shading_table *result;
-	struct u32_fract bds;
+	unsigned int bds_numerator, bds_denominator;
 	int right_padding;
+
+	struct ia_css_shading_table *result;
 
 	assert(target_table);
 	assert(binary);
@@ -265,16 +265,17 @@ prepare_shading_table(const struct ia_css_shading_table *in_table,
 	left_cropping = (binary->info->sp.pipeline.left_cropping == 0) ?
 			binary->dvs_envelope.width : 2 * ISP_VEC_NELEMS;
 
-	sh_css_bds_factor_get_fract(bds_factor, &bds);
+	sh_css_bds_factor_get_numerator_denominator
+	(bds_factor, &bds_numerator, &bds_denominator);
 
 	left_padding  = (left_padding + binary->info->sp.pipeline.left_cropping) *
-			bds.numerator / bds.denominator -
+			bds_numerator / bds_denominator -
 			binary->info->sp.pipeline.left_cropping;
 	right_padding = (binary->internal_frame_info.res.width -
-			 binary->effective_in_frame_res.width * bds.denominator /
-			 bds.numerator - left_cropping) * bds.numerator / bds.denominator;
-	top_padding = binary->info->sp.pipeline.top_cropping * bds.numerator /
-		      bds.denominator -
+			 binary->effective_in_frame_res.width * bds_denominator /
+			 bds_numerator - left_cropping) * bds_numerator / bds_denominator;
+	top_padding = binary->info->sp.pipeline.top_cropping * bds_numerator /
+		      bds_denominator -
 		      binary->info->sp.pipeline.top_cropping;
 
 	/*

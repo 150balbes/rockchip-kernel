@@ -225,12 +225,6 @@ union dmub_psr_debug_flags {
 		 * Use TPS3 signal when restore main link.
 		 */
 		uint32_t force_wakeup_by_tps3 : 1;
-
-		/**
-		 * Back to back flip, therefore cannot power down PHY
-		 */
-		uint32_t back_to_back_flip : 1;
-
 	} bitfields;
 
 	/**
@@ -351,7 +345,7 @@ union dmub_fw_boot_status {
 		uint32_t optimized_init_done : 1; /**< 1 if optimized init done */
 		uint32_t restore_required : 1; /**< 1 if driver should call restore */
 		uint32_t defer_load : 1; /**< 1 if VBIOS data is deferred programmed */
-		uint32_t reserved : 1;
+		uint32_t fams_enabled : 1; /**< 1 if VBIOS data is deferred programmed */
 		uint32_t detection_required: 1; /**<  if detection need to be triggered by driver */
 
 	} bits; /**< status bits */
@@ -407,9 +401,8 @@ union dmub_fw_boot_options {
 		uint32_t gpint_scratch8: 1; /* 1 if GPINT is in scratch8*/
 		uint32_t usb4_cm_version: 1; /**< 1 CM support */
 		uint32_t dpia_hpd_int_enable_supported: 1; /* 1 if dpia hpd int enable supported */
-		uint32_t usb4_dpia_bw_alloc_supported: 1; /* 1 if USB4 dpia BW allocation supported */
 
-		uint32_t reserved : 15; /**< reserved */
+		uint32_t reserved : 16; /**< reserved */
 	} bits; /**< boot bits */
 	uint32_t all; /**< 32-bit access to bits */
 };
@@ -457,6 +450,10 @@ enum dmub_cmd_vbios_type {
 	 * Query DP alt status on a transmitter.
 	 */
 	DMUB_CMD__VBIOS_TRANSMITTER_QUERY_DP_ALT  = 26,
+	/**
+	 * Controls domain power gating
+	 */
+	DMUB_CMD__VBIOS_DOMAIN_CONTROL = 28,
 };
 
 //==============================================================================
@@ -736,11 +733,6 @@ enum dmub_cmd_type {
 	/**
 	 * Command type used for all VBIOS interface commands.
 	 */
-
-	/**
-	 * Command type used for all SECURE_DISPLAY commands.
-	 */
-	DMUB_CMD__SECURE_DISPLAY = 85,
 
 	/**
 	 * Command type used to set DPIA HPD interrupt state
@@ -1029,14 +1021,13 @@ struct dmub_cmd_fw_assisted_mclk_switch_pipe_data_v2 {
 			uint16_t vtotal;
 			uint16_t htotal;
 			uint8_t vblank_pipe_index;
-			uint8_t padding[1];
+			uint8_t padding[2];
 			struct {
 				uint8_t drr_in_use;
 				uint8_t drr_window_size_ms;	// Indicates largest VMIN/VMAX adjustment per frame
 				uint16_t min_vtotal_supported;	// Min VTOTAL that supports switching in VBLANK
 				uint16_t max_vtotal_supported;	// Max VTOTAL that can support SubVP static scheduling
 				uint8_t use_ramping;		// Use ramping or not
-				uint8_t drr_vblank_start_margin;
 			} drr_info;				// DRR considered as part of SubVP + VBLANK case
 		} vblank_data;
 	} pipe_config;
@@ -1202,6 +1193,23 @@ union dmub_cmd_dig1_transmitter_control_data {
 struct dmub_rb_cmd_dig1_transmitter_control {
 	struct dmub_cmd_header header; /**< header */
 	union dmub_cmd_dig1_transmitter_control_data transmitter_control; /**< payload */
+};
+
+/**
+ * struct dmub_rb_cmd_domain_control_data - Data for DOMAIN power control
+ */
+struct dmub_rb_cmd_domain_control_data {
+	uint8_t inst : 6; /**< DOMAIN instance to control */
+	uint8_t power_gate : 1; /**< 1=power gate, 0=power up */
+	uint8_t reserved[3]; /**< Reserved for future use */
+};
+
+/**
+ * struct dmub_rb_cmd_domain_control - Controls DOMAIN power gating
+ */
+struct dmub_rb_cmd_domain_control {
+	struct dmub_cmd_header header; /**< header */
+	struct dmub_rb_cmd_domain_control_data data; /**< payload */
 };
 
 /**
@@ -1879,13 +1887,9 @@ struct dmub_cmd_psr_copy_settings_data {
 	 */
 	uint8_t use_phy_fsm;
 	/**
-	 * frame delay for frame re-lock
-	 */
-	uint8_t relock_delay_frame_cnt;
-	/**
 	 * Explicit padding to 2 byte boundary.
 	 */
-	uint8_t pad3;
+	uint8_t pad3[2];
 };
 
 /**
@@ -3161,33 +3165,6 @@ struct dmub_rb_cmd_get_usbc_cable_id {
 };
 
 /**
- * Command type of a DMUB_CMD__SECURE_DISPLAY command
- */
-enum dmub_cmd_secure_display_type {
-	DMUB_CMD__SECURE_DISPLAY_TEST_CMD = 0,		/* test command to only check if inbox message works */
-	DMUB_CMD__SECURE_DISPLAY_CRC_STOP_UPDATE,
-	DMUB_CMD__SECURE_DISPLAY_CRC_WIN_NOTIFY
-};
-
-/**
- * Definition of a DMUB_CMD__SECURE_DISPLAY command
- */
-struct dmub_rb_cmd_secure_display {
-	struct dmub_cmd_header header;
-	/**
-	 * Data passed from driver to dmub firmware.
-	 */
-	struct dmub_cmd_roi_info {
-		uint16_t x_start;
-		uint16_t x_end;
-		uint16_t y_start;
-		uint16_t y_end;
-		uint8_t otg_id;
-		uint8_t phy_id;
-	} roi_info;
-};
-
-/**
  * union dmub_rb_cmd - DMUB inbox command.
  */
 union dmub_rb_cmd {
@@ -3231,6 +3208,10 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__VBIOS_DIG1_TRANSMITTER_CONTROL command.
 	 */
 	struct dmub_rb_cmd_dig1_transmitter_control dig1_transmitter_control;
+	/**
+	 * Definition of a DMUB_CMD__VBIOS_DOMAIN_CONTROL command.
+	 */
+	struct dmub_rb_cmd_domain_control domain_control;
 	/**
 	 * Definition of a DMUB_CMD__PSR_SET_VERSION command.
 	 */
@@ -3391,11 +3372,6 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__QUERY_HPD_STATE command.
 	 */
 	struct dmub_rb_cmd_query_hpd_state query_hpd;
-	/**
-	 * Definition of a DMUB_CMD__SECURE_DISPLAY command.
-	 */
-	struct dmub_rb_cmd_secure_display secure_display;
-
 	/**
 	 * Definition of a DMUB_CMD__DPIA_HPD_INT_ENABLE command.
 	 */

@@ -43,9 +43,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/pagemap.h>
 
-/* How many pages do we try to swap or page in/out together? As a power of 2 */
+/* How many pages do we try to swap or page in/out together? */
 int page_cluster;
-const int page_cluster_max = 31;
 
 /* Protecting only lru_rotate.fbatch which requires disabling interrupts */
 struct lru_rotate {
@@ -296,20 +295,8 @@ void folio_rotate_reclaimable(struct folio *folio)
 	}
 }
 
-void lru_note_cost(struct lruvec *lruvec, bool file,
-		   unsigned int nr_io, unsigned int nr_rotated)
+void lru_note_cost(struct lruvec *lruvec, bool file, unsigned int nr_pages)
 {
-	unsigned long cost;
-
-	/*
-	 * Reflect the relative cost of incurring IO and spending CPU
-	 * time on rotations. This doesn't attempt to make a precise
-	 * comparison, it just says: if reloads are about comparable
-	 * between the LRU lists, or rotations are overwhelmingly
-	 * different between them, adjust scan balance for CPU work.
-	 */
-	cost = nr_io * SWAP_CLUSTER_MAX + nr_rotated;
-
 	do {
 		unsigned long lrusize;
 
@@ -323,9 +310,9 @@ void lru_note_cost(struct lruvec *lruvec, bool file,
 		spin_lock_irq(&lruvec->lru_lock);
 		/* Record cost event */
 		if (file)
-			lruvec->file_cost += cost;
+			lruvec->file_cost += nr_pages;
 		else
-			lruvec->anon_cost += cost;
+			lruvec->anon_cost += nr_pages;
 
 		/*
 		 * Decay previous events
@@ -348,10 +335,10 @@ void lru_note_cost(struct lruvec *lruvec, bool file,
 	} while ((lruvec = parent_lruvec(lruvec)));
 }
 
-void lru_note_cost_refault(struct folio *folio)
+void lru_note_cost_folio(struct folio *folio)
 {
 	lru_note_cost(folio_lruvec(folio), folio_is_file_lru(folio),
-		      folio_nr_pages(folio), 0);
+			folio_nr_pages(folio));
 }
 
 static void folio_activate_fn(struct lruvec *lruvec, struct folio *folio)
@@ -981,30 +968,22 @@ void lru_cache_disable(void)
 
 /**
  * release_pages - batched put_page()
- * @arg: array of pages to release
+ * @pages: array of pages to release
  * @nr: number of pages
  *
- * Decrement the reference count on all the pages in @arg.  If it
+ * Decrement the reference count on all the pages in @pages.  If it
  * fell to zero, remove the page from the LRU and free it.
- *
- * Note that the argument can be an array of pages, encoded pages,
- * or folio pointers. We ignore any encoded bits, and turn any of
- * them into just a folio that gets free'd.
  */
-void release_pages(release_pages_arg arg, int nr)
+void release_pages(struct page **pages, int nr)
 {
 	int i;
-	struct encoded_page **encoded = arg.encoded_pages;
 	LIST_HEAD(pages_to_free);
 	struct lruvec *lruvec = NULL;
 	unsigned long flags = 0;
 	unsigned int lock_batch;
 
 	for (i = 0; i < nr; i++) {
-		struct folio *folio;
-
-		/* Turn any of the argument types into a folio */
-		folio = page_folio(encoded_page_ptr(encoded[i]));
+		struct folio *folio = page_folio(pages[i]);
 
 		/*
 		 * Make sure the IRQ-safe lock-holding time does not get

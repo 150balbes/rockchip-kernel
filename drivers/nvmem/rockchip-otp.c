@@ -14,7 +14,7 @@
 #include <linux/module.h>
 #include <linux/nvmem-provider.h>
 #include <linux/reset.h>
-#include <linux/soc/rockchip/cpu.h>
+#include <linux/rockchip/cpu.h>
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
@@ -25,6 +25,7 @@
 #define OTPC_SBPI_CMD_VALID_PRE		0x0024
 #define OTPC_SBPI_CS_VALID_PRE		0x0028
 #define OTPC_SBPI_STATUS		0x002C
+#define OTPC_LOCK_CTRL			0x0050
 #define OTPC_USER_CTRL			0x0100
 #define OTPC_USER_ADDR			0x0104
 #define OTPC_USER_ENABLE		0x0108
@@ -59,6 +60,8 @@
 #define OTPC_USE_USER_MASK		GENMASK(16, 16)
 #define OTPC_USER_FSM_ENABLE		BIT(0)
 #define OTPC_USER_FSM_ENABLE_MASK	GENMASK(16, 16)
+#define OTPC_LOCK			BIT(0)
+#define OTPC_LOCK_MASK			GENMASK(16, 16)
 #define OTPC_SBPI_DONE			BIT(1)
 #define OTPC_USER_DONE			BIT(2)
 
@@ -76,6 +79,8 @@
 #define OTPC_TIMEOUT			10000
 #define OTPC_TIMEOUT_PROG		100000
 #define RK3568_NBYTES			2
+
+#define RK3576_NO_SECURE_OFFSET		0x1C0
 
 #define RK3588_OTPC_AUTO_CTRL		0x04
 #define RK3588_OTPC_AUTO_EN		0x08
@@ -167,6 +172,7 @@ struct rockchip_otp {
 
 struct rockchip_data {
 	int size;
+	int ns_offset;
 	const char * const *clocks;
 	int num_clks;
 	nvmem_reg_read_t reg_read;
@@ -453,12 +459,6 @@ static int rk3568_otp_read(void *context, unsigned int offset, void *val,
 		goto out;
 	}
 
-	ret = rockchip_otp_reset(otp);
-	if (ret) {
-		dev_err(otp->dev, "failed to reset otp phy\n");
-		goto disable_clks;
-	}
-
 	ret = px30_otp_ecc_enable(otp, true);
 	if (ret < 0) {
 		dev_err(otp->dev, "rockchip_otp_ecc_enable err\n");
@@ -468,6 +468,7 @@ static int rk3568_otp_read(void *context, unsigned int offset, void *val,
 	writel(OTPC_USE_USER | OTPC_USE_USER_MASK, otp->base + OTPC_USER_CTRL);
 	udelay(5);
 	while (addr_len--) {
+		writel(OTPC_LOCK | OTPC_LOCK_MASK, otp->base + OTPC_LOCK_CTRL);
 		writel(addr_start++ | OTPC_USER_ADDR_MASK,
 		       otp->base + OTPC_USER_ADDR);
 		writel(OTPC_USER_FSM_ENABLE | OTPC_USER_FSM_ENABLE_MASK,
@@ -486,11 +487,14 @@ static int rk3568_otp_read(void *context, unsigned int offset, void *val,
 		out_value = readl(otp->base + OTPC_USER_Q);
 		memcpy(&buf[i], &out_value, RK3568_NBYTES);
 		i += RK3568_NBYTES;
+		writel(OTPC_LOCK_MASK, otp->base + OTPC_LOCK_CTRL);
 	}
 
 	memcpy(val, buf + addr_offset, bytes);
 
 read_end:
+	if (ret)
+		writel(OTPC_LOCK_MASK, otp->base + OTPC_LOCK_CTRL);
 	writel(0x0 | OTPC_USE_USER_MASK, otp->base + OTPC_USER_CTRL);
 disable_clks:
 	clk_bulk_disable_unprepare(otp->num_clks, otp->clks);
@@ -534,7 +538,7 @@ static int rk3588_otp_read(void *context, unsigned int offset, void *val,
 	addr_end = roundup(offset + bytes, RK3588_NBYTES) / RK3588_NBYTES;
 	addr_offset = offset % RK3588_NBYTES;
 	addr_len = addr_end - addr_start;
-	addr_start += RK3588_NO_SECURE_OFFSET;
+	addr_start += otp->data->ns_offset;
 
 	buf = kzalloc(array3_size(addr_len, RK3588_NBYTES, sizeof(*buf)),
 		      GFP_KERNEL);
@@ -761,8 +765,33 @@ static const struct rockchip_data px30s_data = {
 	.reg_read = px30s_otp_read,
 };
 
+static const char * const rk3528_otp_clocks[] = {
+	"usr", "sbpi", "apb",
+};
+
+static const struct rockchip_data rk3506_data = {
+	.size = 0x78,
+	.clocks = rk3528_otp_clocks,
+	.num_clks = ARRAY_SIZE(rk3528_otp_clocks),
+	.reg_read = rk3568_otp_read,
+};
+
+static const struct rockchip_data rk3528_data = {
+	.size = 0x80,
+	.clocks = rk3528_otp_clocks,
+	.num_clks = ARRAY_SIZE(rk3528_otp_clocks),
+	.reg_read = rk3568_otp_read,
+};
+
 static const char * const rk3568_otp_clocks[] = {
 	"usr", "sbpi", "apb", "phy",
+};
+
+static const struct rockchip_data rk3562_data = {
+	.size = 0x80,
+	.clocks = rk3568_otp_clocks,
+	.num_clks = ARRAY_SIZE(rk3568_otp_clocks),
+	.reg_read = rk3568_otp_read,
 };
 
 static const struct rockchip_data rk3568_data = {
@@ -772,25 +801,34 @@ static const struct rockchip_data rk3568_data = {
 	.reg_read = rk3568_otp_read,
 };
 
+static const char * const rk3576_otp_clocks[] = {
+	"otpc", "apb",
+};
+
+static const struct rockchip_data rk3576_data = {
+	.size = 0x100,
+	.ns_offset = RK3576_NO_SECURE_OFFSET,
+	.clocks = rk3576_otp_clocks,
+	.num_clks = ARRAY_SIZE(rk3576_otp_clocks),
+	.reg_read = rk3588_otp_read,
+};
+
 static const char * const rk3588_otp_clocks[] = {
-	"otpc", "apb", "arb", "phy",
+	"otpc", "apb", "phy",
 };
 
 static const struct rockchip_data rk3588_data = {
 	.size = 0x400,
+	.ns_offset = RK3588_NO_SECURE_OFFSET,
 	.clocks = rk3588_otp_clocks,
 	.num_clks = ARRAY_SIZE(rk3588_otp_clocks),
 	.reg_read = rk3588_otp_read,
 };
 
-static const char * const rv1106_otp_clocks[] = {
-	"usr", "sbpi", "apb", "phy", "arb", "pmc",
-};
-
 static const struct rockchip_data rv1106_data = {
 	.size = 0x80,
-	.clocks = rv1106_otp_clocks,
-	.num_clks = ARRAY_SIZE(rv1106_otp_clocks),
+	.clocks = rk3568_otp_clocks,
+	.num_clks = ARRAY_SIZE(rk3568_otp_clocks),
 	.reg_read = rk3568_otp_read,
 };
 
@@ -828,10 +866,34 @@ static const struct of_device_id rockchip_otp_match[] = {
 		.data = (void *)&px30s_data,
 	},
 #endif
+#ifdef CONFIG_CPU_RK3506
+	{
+		.compatible = "rockchip,rk3506-otp",
+		.data = (void *)&rk3506_data,
+	},
+#endif
+#ifdef CONFIG_CPU_RK3528
+	{
+		.compatible = "rockchip,rk3528-otp",
+		.data = (void *)&rk3528_data,
+	},
+#endif
+#ifdef CONFIG_CPU_RK3562
+	{
+		.compatible = "rockchip,rk3562-otp",
+		.data = (void *)&rk3562_data,
+	},
+#endif
 #ifdef CONFIG_CPU_RK3568
 	{
 		.compatible = "rockchip,rk3568-otp",
 		.data = (void *)&rk3568_data,
+	},
+#endif
+#ifdef CONFIG_CPU_RK3576
+	{
+		.compatible = "rockchip,rk3576-otp",
+		.data = (void *)&rk3576_data,
 	},
 #endif
 #ifdef CONFIG_CPU_RK3588
@@ -855,16 +917,6 @@ static const struct of_device_id rockchip_otp_match[] = {
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, rockchip_otp_match);
-
-static bool soc_is_px30s(void)
-{
-	return false;
-}
-
-static bool soc_is_rk3308bs(void)
-{
-	return false;
-}
 
 static int rockchip_otp_probe(struct platform_device *pdev)
 {

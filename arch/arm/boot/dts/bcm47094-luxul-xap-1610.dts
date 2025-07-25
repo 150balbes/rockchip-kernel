@@ -23,18 +23,18 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-status {
+		status	{
 			label = "bcm53xx:green:status";
 			gpios = <&chipcommon 0 GPIO_ACTIVE_LOW>;
 			linux,default-trigger = "timer";
 		};
 
-		led-2ghz {
+		2ghz {
 			label = "bcm53xx:blue:2ghz";
 			gpios = <&chipcommon 13 GPIO_ACTIVE_LOW>;
 		};
 
-		led-5ghz {
+		5ghz {
 			label = "bcm53xx:blue:5ghz";
 			gpios = <&chipcommon 14 GPIO_ACTIVE_LOW>;
 		};

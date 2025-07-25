@@ -11,6 +11,7 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/idr.h>
 #include <net/9p/9p.h>
 #include <net/9p/client.h>
 

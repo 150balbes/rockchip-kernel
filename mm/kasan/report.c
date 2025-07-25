@@ -9,7 +9,6 @@
  *        Andrey Konovalov <andreyknvl@gmail.com>
  */
 
-#include <kunit/test.h>
 #include <linux/bitops.h>
 #include <linux/ftrace.h>
 #include <linux/init.h>
@@ -30,6 +29,8 @@
 #include <trace/events/error_report.h>
 
 #include <asm/sections.h>
+
+#include <kunit/test.h>
 
 #include "kasan.h"
 #include "../slab.h"
@@ -114,63 +115,40 @@ EXPORT_SYMBOL_GPL(kasan_restore_multi_shot);
 #endif
 
 #if IS_ENABLED(CONFIG_KASAN_KUNIT_TEST)
-
-/*
- * Whether the KASAN KUnit test suite is currently being executed.
- * Updated in kasan_test.c.
- */
-bool kasan_kunit_executing;
-
-void kasan_kunit_test_suite_start(void)
-{
-	WRITE_ONCE(kasan_kunit_executing, true);
-}
-EXPORT_SYMBOL_GPL(kasan_kunit_test_suite_start);
-
-void kasan_kunit_test_suite_end(void)
-{
-	WRITE_ONCE(kasan_kunit_executing, false);
-}
-EXPORT_SYMBOL_GPL(kasan_kunit_test_suite_end);
-
-static bool kasan_kunit_test_suite_executing(void)
-{
-	return READ_ONCE(kasan_kunit_executing);
-}
-
-#else /* CONFIG_KASAN_KUNIT_TEST */
-
-static inline bool kasan_kunit_test_suite_executing(void) { return false; }
-
-#endif /* CONFIG_KASAN_KUNIT_TEST */
-
-#if IS_ENABLED(CONFIG_KUNIT)
-
-static void fail_non_kasan_kunit_test(void)
+static void update_kunit_status(bool sync)
 {
 	struct kunit *test;
-
-	if (kasan_kunit_test_suite_executing())
-		return;
+	struct kunit_resource *resource;
+	struct kunit_kasan_status *status;
 
 	test = current->kunit_test;
-	if (test)
+	if (!test)
+		return;
+
+	resource = kunit_find_named_resource(test, "kasan_status");
+	if (!resource) {
 		kunit_set_failure(test);
+		return;
+	}
+
+	status = (struct kunit_kasan_status *)resource->data;
+	WRITE_ONCE(status->report_found, true);
+	WRITE_ONCE(status->sync_fault, sync);
+
+	kunit_put_resource(resource);
 }
-
-#else /* CONFIG_KUNIT */
-
-static inline void fail_non_kasan_kunit_test(void) { }
-
-#endif /* CONFIG_KUNIT */
+#else
+static void update_kunit_status(bool sync) { }
+#endif
 
 static DEFINE_SPINLOCK(report_lock);
 
 static void start_report(unsigned long *flags, bool sync)
 {
-	fail_non_kasan_kunit_test();
 	/* Respect the /proc/sys/kernel/traceoff_on_warning interface. */
 	disable_trace_on_warning();
+	/* Update status of the currently running KASAN test. */
+	update_kunit_status(sync);
 	/* Do not allow LOCKDEP mangling KASAN reports. */
 	lockdep_off();
 	/* Make sure we don't end up in loop. */
@@ -545,7 +523,7 @@ void kasan_report_async(void)
 }
 #endif /* CONFIG_KASAN_HW_TAGS */
 
-#ifdef CONFIG_KASAN_INLINE
+#if defined(CONFIG_KASAN_GENERIC) || defined(CONFIG_KASAN_SW_TAGS)
 /*
  * With CONFIG_KASAN_INLINE, accesses to bogus pointers (outside the high
  * canonical half of the address space) cause out-of-bounds shadow memory reads

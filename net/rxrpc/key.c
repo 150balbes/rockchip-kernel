@@ -513,7 +513,7 @@ int rxrpc_get_server_data_key(struct rxrpc_connection *conn,
 	if (ret < 0)
 		goto error;
 
-	conn->key = key;
+	conn->params.key = key;
 	_leave(" = 0 [%d]", key_serial(key));
 	return 0;
 
@@ -602,8 +602,7 @@ static long rxrpc_read(const struct key *key,
 		}
 
 		_debug("token[%u]: toksize=%u", ntoks, toksize);
-		if (WARN_ON(toksize > AFSTOKEN_LENGTH_MAX))
-			return -EIO;
+		ASSERTCMP(toksize, <=, AFSTOKEN_LENGTH_MAX);
 
 		toksizes[ntoks++] = toksize;
 		size += toksize + 4; /* each token has a length word */
@@ -680,9 +679,8 @@ static long rxrpc_read(const struct key *key,
 			return -ENOPKG;
 		}
 
-		if (WARN_ON((unsigned long)xdr - (unsigned long)oldxdr ==
-			    toksize))
-			return -EIO;
+		ASSERTCMP((unsigned long)xdr - (unsigned long)oldxdr, ==,
+			  toksize);
 	}
 
 #undef ENCODE_STR
@@ -690,10 +688,8 @@ static long rxrpc_read(const struct key *key,
 #undef ENCODE64
 #undef ENCODE
 
-	if (WARN_ON(tok != ntoks))
-		return -EIO;
-	if (WARN_ON((unsigned long)xdr - (unsigned long)buffer != size))
-		return -EIO;
+	ASSERTCMP(tok, ==, ntoks);
+	ASSERTCMP((char __user *) xdr - buffer, ==, size);
 	_leave(" = %zu", size);
 	return size;
 }

@@ -4,7 +4,6 @@
 #include <linux/bpf_trace.h>
 #include <linux/netdevice.h>
 #include <linux/bitfield.h>
-#include <net/xfrm.h>
 
 #include "../nfp_app.h"
 #include "../nfp_net.h"
@@ -168,34 +167,28 @@ nfp_nfd3_tx_csum(struct nfp_net_dp *dp, struct nfp_net_r_vector *r_vec,
 	u64_stats_update_end(&r_vec->tx_sync);
 }
 
-static int nfp_nfd3_prep_tx_meta(struct nfp_net_dp *dp, struct sk_buff *skb,
-				 u64 tls_handle, bool *ipsec)
+static int nfp_nfd3_prep_tx_meta(struct nfp_net_dp *dp, struct sk_buff *skb, u64 tls_handle)
 {
 	struct metadata_dst *md_dst = skb_metadata_dst(skb);
-	struct nfp_ipsec_offload offload_info;
 	unsigned char *data;
 	bool vlan_insert;
 	u32 meta_id = 0;
 	int md_bytes;
 
-#ifdef CONFIG_NFP_NET_IPSEC
-	if (xfrm_offload(skb))
-		*ipsec = nfp_net_ipsec_tx_prep(dp, skb, &offload_info);
-#endif
-
-	if (unlikely(md_dst && md_dst->type != METADATA_HW_PORT_MUX))
-		md_dst = NULL;
+	if (unlikely(md_dst || tls_handle)) {
+		if (unlikely(md_dst && md_dst->type != METADATA_HW_PORT_MUX))
+			md_dst = NULL;
+	}
 
 	vlan_insert = skb_vlan_tag_present(skb) && (dp->ctrl & NFP_NET_CFG_CTRL_TXVLAN_V2);
 
-	if (!(md_dst || tls_handle || vlan_insert || *ipsec))
+	if (!(md_dst || tls_handle || vlan_insert))
 		return 0;
 
 	md_bytes = sizeof(meta_id) +
 		   !!md_dst * NFP_NET_META_PORTID_SIZE +
 		   !!tls_handle * NFP_NET_META_CONN_HANDLE_SIZE +
-		   vlan_insert * NFP_NET_META_VLAN_SIZE +
-		   *ipsec * NFP_NET_META_IPSEC_FIELD_SIZE; /* IPsec has 12 bytes of metadata */
+		   vlan_insert * NFP_NET_META_VLAN_SIZE;
 
 	if (unlikely(skb_cow_head(skb, md_bytes)))
 		return -ENOMEM;
@@ -225,19 +218,6 @@ static int nfp_nfd3_prep_tx_meta(struct nfp_net_dp *dp, struct sk_buff *skb,
 		meta_id <<= NFP_NET_META_FIELD_SIZE;
 		meta_id |= NFP_NET_META_VLAN;
 	}
-	if (*ipsec) {
-		/* IPsec has three consecutive 4-bit IPsec metadata types,
-		 * so in total IPsec has three 4 bytes of metadata.
-		 */
-		data -= NFP_NET_META_IPSEC_SIZE;
-		put_unaligned_be32(offload_info.seq_hi, data);
-		data -= NFP_NET_META_IPSEC_SIZE;
-		put_unaligned_be32(offload_info.seq_low, data);
-		data -= NFP_NET_META_IPSEC_SIZE;
-		put_unaligned_be32(offload_info.handle - 1, data);
-		meta_id <<= NFP_NET_META_IPSEC_FIELD_SIZE;
-		meta_id |= NFP_NET_META_IPSEC << 8 | NFP_NET_META_IPSEC << 4 | NFP_NET_META_IPSEC;
-	}
 
 	data -= sizeof(meta_id);
 	put_unaligned_be32(meta_id, data);
@@ -266,7 +246,6 @@ netdev_tx_t nfp_nfd3_tx(struct sk_buff *skb, struct net_device *netdev)
 	dma_addr_t dma_addr;
 	unsigned int fsize;
 	u64 tls_handle = 0;
-	bool ipsec = false;
 	u16 qidx;
 
 	dp = &nn->dp;
@@ -294,7 +273,7 @@ netdev_tx_t nfp_nfd3_tx(struct sk_buff *skb, struct net_device *netdev)
 		return NETDEV_TX_OK;
 	}
 
-	md_bytes = nfp_nfd3_prep_tx_meta(dp, skb, tls_handle, &ipsec);
+	md_bytes = nfp_nfd3_prep_tx_meta(dp, skb, tls_handle);
 	if (unlikely(md_bytes < 0))
 		goto err_flush;
 
@@ -333,8 +312,6 @@ netdev_tx_t nfp_nfd3_tx(struct sk_buff *skb, struct net_device *netdev)
 		txd->vlan = cpu_to_le16(skb_vlan_tag_get(skb));
 	}
 
-	if (ipsec)
-		nfp_nfd3_ipsec_tx(txd, skb);
 	/* Gather DMA */
 	if (nr_frags > 0) {
 		__le64 second_half;
@@ -787,15 +764,6 @@ nfp_nfd3_parse_meta(struct net_device *netdev, struct nfp_meta_parsed *meta,
 				return false;
 			data += sizeof(struct nfp_net_tls_resync_req);
 			break;
-#ifdef CONFIG_NFP_NET_IPSEC
-		case NFP_NET_META_IPSEC:
-			/* Note: IPsec packet will have zero saidx, so need add 1
-			 * to indicate packet is IPsec packet within driver.
-			 */
-			meta->ipsec_saidx = get_unaligned_be32(data) + 1;
-			data += 4;
-			break;
-#endif
 		default:
 			return true;
 		}
@@ -908,11 +876,12 @@ static int nfp_nfd3_rx(struct nfp_net_rx_ring *rx_ring, int budget)
 	struct nfp_net_dp *dp = &r_vec->nfp_net->dp;
 	struct nfp_net_tx_ring *tx_ring;
 	struct bpf_prog *xdp_prog;
-	int idx, pkts_polled = 0;
 	bool xdp_tx_cmpl = false;
 	unsigned int true_bufsz;
 	struct sk_buff *skb;
+	int pkts_polled = 0;
 	struct xdp_buff xdp;
+	int idx;
 
 	xdp_prog = READ_ONCE(dp->xdp_prog);
 	true_bufsz = xdp_prog ? PAGE_SIZE : dp->fl_bufsz;
@@ -1111,13 +1080,6 @@ static int nfp_nfd3_rx(struct nfp_net_rx_ring *rx_ring, int budget)
 			nfp_nfd3_rx_drop(dp, r_vec, rx_ring, NULL, skb);
 			continue;
 		}
-
-#ifdef CONFIG_NFP_NET_IPSEC
-		if (meta.ipsec_saidx != 0 && unlikely(nfp_net_ipsec_rx(&meta, skb))) {
-			nfp_nfd3_rx_drop(dp, r_vec, rx_ring, NULL, skb);
-			continue;
-		}
-#endif
 
 		if (meta_len_xdp)
 			skb_metadata_set(skb, meta_len_xdp);

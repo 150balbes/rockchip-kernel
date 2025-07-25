@@ -61,7 +61,6 @@ required:
   - DCVDD-supply
 
 allOf:
-  - $ref: dai-common.yaml#
   - $ref: /schemas/spi/spi-peripheral-props.yaml#
 
 unevaluatedProperties: false

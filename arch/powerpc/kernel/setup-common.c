@@ -59,7 +59,6 @@
 #include <asm/xmon.h>
 #include <asm/cputhreads.h>
 #include <mm/mmu_decl.h>
-#include <asm/archrandom.h>
 #include <asm/fadump.h>
 #include <asm/udbg.h>
 #include <asm/hugetlb.h>
@@ -86,6 +85,10 @@ EXPORT_SYMBOL(machine_id);
 
 int boot_cpuid = -1;
 EXPORT_SYMBOL_GPL(boot_cpuid);
+
+#ifdef CONFIG_PPC64
+int boot_cpu_hwid = -1;
+#endif
 
 /*
  * These are used in binfmt_elf.c to put aux entries on the stack
@@ -943,6 +946,8 @@ void __init setup_arch(char **cmdline_p)
 
 	/* Parse memory topology */
 	mem_topology_setup();
+	/* Set max_mapnr before paging_init() */
+	set_max_mapnr(max_pfn);
 
 	/*
 	 * Release secondary cpus out of their spinloops at 0x60 now that

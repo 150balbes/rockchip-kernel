@@ -29,8 +29,9 @@ else
 	exit 1
 fi
 
-T="`mktemp -d ${TMPDIR-/tmp}/config_override.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/config_override.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
 sed < $override -e 's/^/grep -v "/' -e 's/=.*$/="/' |
 	awk '

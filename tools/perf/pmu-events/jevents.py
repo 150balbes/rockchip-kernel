@@ -4,7 +4,6 @@
 import argparse
 import csv
 import json
-import metric
 import os
 import sys
 from typing import (Callable, Dict, Optional, Sequence, Set, Tuple)
@@ -269,10 +268,9 @@ class JsonEvent:
     self.metric_name = jd.get('MetricName')
     self.metric_group = jd.get('MetricGroup')
     self.metric_constraint = jd.get('MetricConstraint')
-    self.metric_expr = None
-    if 'MetricExpr' in jd:
-       self.metric_expr = metric.ParsePerfJson(jd['MetricExpr']).Simplify()
-
+    self.metric_expr = jd.get('MetricExpr')
+    if self.metric_expr:
+      self.metric_expr = self.metric_expr.replace('\\', '\\\\')
     arch_std = jd.get('ArchStdEvent')
     if precise and self.desc and '(Precise Event)' not in self.desc:
       extra_desc += ' (Must be precise)' if precise == '2' else (' (Precise '
@@ -324,10 +322,6 @@ class JsonEvent:
     s = ''
     for attr in _json_event_attributes:
       x = getattr(self, attr)
-      if x and attr == 'metric_expr':
-        # Convert parsed metric expressions into a string. Slashes
-        # must be doubled in the file.
-        x = x.ToPerfJson().replace('\\', '\\\\')
       s += f'{x}\\000' if x else '\\000'
     return s
 

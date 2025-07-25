@@ -123,8 +123,7 @@ int disk_register_independent_access_ranges(struct gendisk *disk)
 	 */
 	WARN_ON(iars->sysfs_registered);
 	ret = kobject_init_and_add(&iars->kobj, &blk_ia_ranges_ktype,
-				   &disk->queue_kobj, "%s",
-				   "independent_access_ranges");
+				   &q->kobj, "%s", "independent_access_ranges");
 	if (ret) {
 		disk->ia_ranges = NULL;
 		kobject_put(&iars->kobj);

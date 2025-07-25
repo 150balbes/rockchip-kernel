@@ -64,4 +64,3 @@ int BPF_PROG(test_percpu_helper, struct cgroup *cgrp, const char *path)
 
 	return 0;
 }
-char _license[] SEC("license") = "GPL";

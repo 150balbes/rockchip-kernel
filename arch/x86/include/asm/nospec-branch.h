@@ -12,104 +12,8 @@
 #include <asm/msr-index.h>
 #include <asm/unwind_hints.h>
 #include <asm/percpu.h>
-#include <asm/current.h>
 
-/*
- * Call depth tracking for Intel SKL CPUs to address the RSB underflow
- * issue in software.
- *
- * The tracking does not use a counter. It uses uses arithmetic shift
- * right on call entry and logical shift left on return.
- *
- * The depth tracking variable is initialized to 0x8000.... when the call
- * depth is zero. The arithmetic shift right sign extends the MSB and
- * saturates after the 12th call. The shift count is 5 for both directions
- * so the tracking covers 12 nested calls.
- *
- *  Call
- *  0: 0x8000000000000000	0x0000000000000000
- *  1: 0xfc00000000000000	0xf000000000000000
- * ...
- * 11: 0xfffffffffffffff8	0xfffffffffffffc00
- * 12: 0xffffffffffffffff	0xffffffffffffffe0
- *
- * After a return buffer fill the depth is credited 12 calls before the
- * next stuffing has to take place.
- *
- * There is a inaccuracy for situations like this:
- *
- *  10 calls
- *   5 returns
- *   3 calls
- *   4 returns
- *   3 calls
- *   ....
- *
- * The shift count might cause this to be off by one in either direction,
- * but there is still a cushion vs. the RSB depth. The algorithm does not
- * claim to be perfect and it can be speculated around by the CPU, but it
- * is considered that it obfuscates the problem enough to make exploitation
- * extremly difficult.
- */
-#define RET_DEPTH_SHIFT			5
-#define RSB_RET_STUFF_LOOPS		16
-#define RET_DEPTH_INIT			0x8000000000000000ULL
-#define RET_DEPTH_INIT_FROM_CALL	0xfc00000000000000ULL
-#define RET_DEPTH_CREDIT		0xffffffffffffffffULL
-
-#ifdef CONFIG_CALL_THUNKS_DEBUG
-# define CALL_THUNKS_DEBUG_INC_CALLS				\
-	incq	%gs:__x86_call_count;
-# define CALL_THUNKS_DEBUG_INC_RETS				\
-	incq	%gs:__x86_ret_count;
-# define CALL_THUNKS_DEBUG_INC_STUFFS				\
-	incq	%gs:__x86_stuffs_count;
-# define CALL_THUNKS_DEBUG_INC_CTXSW				\
-	incq	%gs:__x86_ctxsw_count;
-#else
-# define CALL_THUNKS_DEBUG_INC_CALLS
-# define CALL_THUNKS_DEBUG_INC_RETS
-# define CALL_THUNKS_DEBUG_INC_STUFFS
-# define CALL_THUNKS_DEBUG_INC_CTXSW
-#endif
-
-#if defined(CONFIG_CALL_DEPTH_TRACKING) && !defined(COMPILE_OFFSETS)
-
-#include <asm/asm-offsets.h>
-
-#define CREDIT_CALL_DEPTH					\
-	movq	$-1, PER_CPU_VAR(pcpu_hot + X86_call_depth);
-
-#define ASM_CREDIT_CALL_DEPTH					\
-	movq	$-1, PER_CPU_VAR(pcpu_hot + X86_call_depth);
-
-#define RESET_CALL_DEPTH					\
-	mov	$0x80, %rax;					\
-	shl	$56, %rax;					\
-	movq	%rax, PER_CPU_VAR(pcpu_hot + X86_call_depth);
-
-#define RESET_CALL_DEPTH_FROM_CALL				\
-	mov	$0xfc, %rax;					\
-	shl	$56, %rax;					\
-	movq	%rax, PER_CPU_VAR(pcpu_hot + X86_call_depth);	\
-	CALL_THUNKS_DEBUG_INC_CALLS
-
-#define INCREMENT_CALL_DEPTH					\
-	sarq	$5, %gs:pcpu_hot + X86_call_depth;		\
-	CALL_THUNKS_DEBUG_INC_CALLS
-
-#define ASM_INCREMENT_CALL_DEPTH				\
-	sarq	$5, PER_CPU_VAR(pcpu_hot + X86_call_depth);	\
-	CALL_THUNKS_DEBUG_INC_CALLS
-
-#else
-#define CREDIT_CALL_DEPTH
-#define ASM_CREDIT_CALL_DEPTH
-#define RESET_CALL_DEPTH
-#define INCREMENT_CALL_DEPTH
-#define ASM_INCREMENT_CALL_DEPTH
-#define RESET_CALL_DEPTH_FROM_CALL
-#endif
+#define RETPOLINE_THUNK_SIZE	32
 
 /*
  * Fill the CPU return stack buffer.
@@ -128,7 +32,6 @@
  * from C via asm(".include <asm/nospec-branch.h>") but let's not go there.
  */
 
-#define RETPOLINE_THUNK_SIZE	32
 #define RSB_CLEAR_LOOPS		32	/* To forcibly overwrite all entries */
 
 /*
@@ -157,9 +60,7 @@
 	dec	reg;					\
 	jnz	771b;					\
 	/* barrier for jnz misprediction */		\
-	lfence;						\
-	ASM_CREDIT_CALL_DEPTH				\
-	CALL_THUNKS_DEBUG_INC_CTXSW
+	lfence;
 #else
 /*
  * i386 doesn't unconditionally have LFENCE, as such it can't
@@ -211,7 +112,7 @@
  * eventually turn into it's own annotation.
  */
 .macro ANNOTATE_UNRET_END
-#ifdef CONFIG_DEBUG_ENTRY
+#if (defined(CONFIG_CPU_UNRET_ENTRY) || defined(CONFIG_CPU_SRSO))
 	ANNOTATE_RETPOLINE_SAFE
 	nop
 #endif
@@ -266,18 +167,27 @@
 .Lskip_rsb_\@:
 .endm
 
+/*
+ * The CALL to srso_alias_untrain_ret() must be patched in directly at
+ * the spot where untraining must be done, ie., srso_alias_untrain_ret()
+ * must be the target of a CALL instruction instead of indirectly
+ * jumping to a wrapper which then calls it. Therefore, this macro is
+ * called outside of __UNTRAIN_RET below, for the time being, before the
+ * kernel can support nested alternatives with arbitrary nesting.
+ */
+.macro CALL_UNTRAIN_RET
 #ifdef CONFIG_CPU_UNRET_ENTRY
-#define CALL_ZEN_UNTRAIN_RET	"call zen_untrain_ret"
-#else
-#define CALL_ZEN_UNTRAIN_RET	""
+	ALTERNATIVE_2 "", "call entry_untrain_ret", X86_FEATURE_UNRET, \
+		          "call srso_alias_untrain_ret", X86_FEATURE_SRSO_ALIAS
 #endif
+.endm
 
 /*
  * Mitigate RETBleed for AMD/Hygon Zen uarch. Requires KERNEL CR3 because the
  * return thunk isn't mapped into the userspace tables (then again, AMD
  * typically has NO_MELTDOWN).
  *
- * While zen_untrain_ret() doesn't clobber anything but requires stack,
+ * While retbleed_untrain_ret() doesn't clobber anything but requires stack,
  * entry_ibpb() will clobber AX, CX, DX.
  *
  * As such, this must be placed after every *SWITCH_TO_KERNEL_CR3 at a point
@@ -285,33 +195,38 @@
  */
 .macro UNTRAIN_RET
 #if defined(CONFIG_CPU_UNRET_ENTRY) || defined(CONFIG_CPU_IBPB_ENTRY) || \
-	defined(CONFIG_CALL_DEPTH_TRACKING)
+	defined(CONFIG_CPU_SRSO)
 	ANNOTATE_UNRET_END
-	ALTERNATIVE_3 "",						\
-		      CALL_ZEN_UNTRAIN_RET, X86_FEATURE_UNRET,		\
-		      "call entry_ibpb", X86_FEATURE_ENTRY_IBPB,	\
-		      __stringify(RESET_CALL_DEPTH), X86_FEATURE_CALL_DEPTH
+	CALL_UNTRAIN_RET
+	ALTERNATIVE "", "call entry_ibpb", X86_FEATURE_ENTRY_IBPB
 #endif
 .endm
 
-.macro UNTRAIN_RET_FROM_CALL
-#if defined(CONFIG_CPU_UNRET_ENTRY) || defined(CONFIG_CPU_IBPB_ENTRY) || \
-	defined(CONFIG_CALL_DEPTH_TRACKING)
-	ANNOTATE_UNRET_END
-	ALTERNATIVE_3 "",						\
-		      CALL_ZEN_UNTRAIN_RET, X86_FEATURE_UNRET,		\
-		      "call entry_ibpb", X86_FEATURE_ENTRY_IBPB,	\
-		      __stringify(RESET_CALL_DEPTH_FROM_CALL), X86_FEATURE_CALL_DEPTH
-#endif
+/*
+ * Macro to execute VERW instruction that mitigate transient data sampling
+ * attacks such as MDS. On affected systems a microcode update overloaded VERW
+ * instruction to also clear the CPU buffers. VERW clobbers CFLAGS.ZF.
+ *
+ * Note: Only the memory operand variant of VERW clears the CPU buffers.
+ */
+.macro CLEAR_CPU_BUFFERS
+	ALTERNATIVE "jmp .Lskip_verw_\@", "", X86_FEATURE_CLEAR_CPU_BUF
+	verw _ASM_RIP(mds_verw_sel)
+.Lskip_verw_\@:
 .endm
 
-
-.macro CALL_DEPTH_ACCOUNT
-#ifdef CONFIG_CALL_DEPTH_TRACKING
-	ALTERNATIVE "",							\
-		    __stringify(ASM_INCREMENT_CALL_DEPTH), X86_FEATURE_CALL_DEPTH
-#endif
+#ifdef CONFIG_X86_64
+.macro CLEAR_BRANCH_HISTORY
+	ALTERNATIVE "", "call clear_bhb_loop", X86_FEATURE_CLEAR_BHB_LOOP
 .endm
+
+.macro CLEAR_BRANCH_HISTORY_VMEXIT
+	ALTERNATIVE "", "call clear_bhb_loop", X86_FEATURE_CLEAR_BHB_LOOP_ON_VMEXIT
+.endm
+#else
+#define CLEAR_BRANCH_HISTORY
+#define CLEAR_BRANCH_HISTORY_VMEXIT
+#endif
 
 #else /* __ASSEMBLY__ */
 
@@ -323,59 +238,34 @@
 
 typedef u8 retpoline_thunk_t[RETPOLINE_THUNK_SIZE];
 extern retpoline_thunk_t __x86_indirect_thunk_array[];
-extern retpoline_thunk_t __x86_indirect_call_thunk_array[];
-extern retpoline_thunk_t __x86_indirect_jump_thunk_array[];
 
+#ifdef CONFIG_RETHUNK
 extern void __x86_return_thunk(void);
-extern void zen_untrain_ret(void);
+#else
+static inline void __x86_return_thunk(void) {}
+#endif
+
+extern void retbleed_return_thunk(void);
+extern void srso_return_thunk(void);
+extern void srso_alias_return_thunk(void);
+
+extern void retbleed_untrain_ret(void);
+extern void srso_untrain_ret(void);
+extern void srso_alias_untrain_ret(void);
+
+extern void entry_untrain_ret(void);
 extern void entry_ibpb(void);
 
-#ifdef CONFIG_CALL_THUNKS
+#ifdef CONFIG_X86_64
+extern void clear_bhb_loop(void);
+#endif
+
 extern void (*x86_return_thunk)(void);
-#else
-#define x86_return_thunk	(&__x86_return_thunk)
-#endif
-
-#ifdef CONFIG_CALL_DEPTH_TRACKING
-extern void __x86_return_skl(void);
-
-static inline void x86_set_skl_return_thunk(void)
-{
-	x86_return_thunk = &__x86_return_skl;
-}
-
-#define CALL_DEPTH_ACCOUNT					\
-	ALTERNATIVE("",						\
-		    __stringify(INCREMENT_CALL_DEPTH),		\
-		    X86_FEATURE_CALL_DEPTH)
-
-#ifdef CONFIG_CALL_THUNKS_DEBUG
-DECLARE_PER_CPU(u64, __x86_call_count);
-DECLARE_PER_CPU(u64, __x86_ret_count);
-DECLARE_PER_CPU(u64, __x86_stuffs_count);
-DECLARE_PER_CPU(u64, __x86_ctxsw_count);
-#endif
-#else
-static inline void x86_set_skl_return_thunk(void) {}
-
-#define CALL_DEPTH_ACCOUNT ""
-
-#endif
 
 #ifdef CONFIG_RETPOLINE
 
 #define GEN(reg) \
 	extern retpoline_thunk_t __x86_indirect_thunk_ ## reg;
-#include <asm/GEN-for-each-reg.h>
-#undef GEN
-
-#define GEN(reg)						\
-	extern retpoline_thunk_t __x86_indirect_call_thunk_ ## reg;
-#include <asm/GEN-for-each-reg.h>
-#undef GEN
-
-#define GEN(reg)						\
-	extern retpoline_thunk_t __x86_indirect_jump_thunk_ ## reg;
 #include <asm/GEN-for-each-reg.h>
 #undef GEN
 
@@ -475,11 +365,11 @@ void alternative_msr_write(unsigned int msr, u64 val, unsigned int feature)
 		: "memory");
 }
 
+extern u64 x86_pred_cmd;
+
 static inline void indirect_branch_prediction_barrier(void)
 {
-	u64 val = PRED_CMD_IBPB;
-
-	alternative_msr_write(MSR_IA32_PRED_CMD, val, X86_FEATURE_USE_IBPB);
+	alternative_msr_write(MSR_IA32_PRED_CMD, x86_pred_cmd, X86_FEATURE_USE_IBPB);
 }
 
 /* The Intel SPEC CTRL MSR base value cache */
@@ -516,12 +406,13 @@ DECLARE_STATIC_KEY_FALSE(switch_to_cond_stibp);
 DECLARE_STATIC_KEY_FALSE(switch_mm_cond_ibpb);
 DECLARE_STATIC_KEY_FALSE(switch_mm_always_ibpb);
 
-DECLARE_STATIC_KEY_FALSE(mds_user_clear);
 DECLARE_STATIC_KEY_FALSE(mds_idle_clear);
 
 DECLARE_STATIC_KEY_FALSE(switch_mm_cond_l1d_flush);
 
 DECLARE_STATIC_KEY_FALSE(mmio_stale_data_clear);
+
+extern u16 mds_verw_sel;
 
 #include <asm/segment.h>
 
@@ -546,17 +437,6 @@ static __always_inline void mds_clear_cpu_buffers(void)
 	 * "cc" clobber is required because VERW modifies ZF.
 	 */
 	asm volatile("verw %[ds]" : : [ds] "m" (ds) : "cc");
-}
-
-/**
- * mds_user_clear_cpu_buffers - Mitigation for MDS and TAA vulnerability
- *
- * Clear CPU buffers if the corresponding static key is enabled
- */
-static __always_inline void mds_user_clear_cpu_buffers(void)
-{
-	if (static_branch_likely(&mds_user_clear))
-		mds_clear_cpu_buffers();
 }
 
 /**

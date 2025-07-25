@@ -11,8 +11,77 @@
 #include <asm/efi.h>
 #include <asm/memory.h>
 #include <asm/sections.h>
+#include <asm/sysreg.h>
 
 #include "efistub.h"
+
+static bool system_needs_vamap(void)
+{
+	const struct efi_smbios_type4_record *record;
+	const u32 __aligned(1) *socid;
+	const u8 *version;
+
+	/*
+	 * Ampere eMAG, Altra, and Altra Max machines crash in SetTime() if
+	 * SetVirtualAddressMap() has not been called prior. Most Altra systems
+	 * can be identified by the SMCCC soc ID, which is conveniently exposed
+	 * via the type 4 SMBIOS records. Otherwise, test the processor version
+	 * field. eMAG systems all appear to have the processor version field
+	 * set to "eMAG".
+	 */
+	record = (struct efi_smbios_type4_record *)efi_get_smbios_record(4);
+	if (!record)
+		return false;
+
+	socid = (u32 *)record->processor_id;
+	switch (*socid & 0xffff000f) {
+		static char const altra[] = "Ampere(TM) Altra(TM) Processor";
+		static char const emag[] = "eMAG";
+
+	default:
+		version = efi_get_smbios_string(&record->header, 4,
+						processor_version);
+		if (!version || (strncmp(version, altra, sizeof(altra) - 1) &&
+				 strncmp(version, emag, sizeof(emag) - 1)))
+			break;
+
+		fallthrough;
+
+	case 0x0a160001:	// Altra
+	case 0x0a160002:	// Altra Max
+		efi_warn("Working around broken SetVirtualAddressMap()\n");
+		return true;
+	}
+
+	return false;
+}
+
+efi_status_t check_platform_features(void)
+{
+	u64 tg;
+
+	/*
+	 * If we have 48 bits of VA space for TTBR0 mappings, we can map the
+	 * UEFI runtime regions 1:1 and so calling SetVirtualAddressMap() is
+	 * unnecessary.
+	 */
+	if (VA_BITS_MIN >= 48 && !system_needs_vamap())
+		efi_novamap = true;
+
+	/* UEFI mandates support for 4 KB granularity, no need to check */
+	if (IS_ENABLED(CONFIG_ARM64_4K_PAGES))
+		return EFI_SUCCESS;
+
+	tg = (read_cpuid(ID_AA64MMFR0_EL1) >> ID_AA64MMFR0_EL1_TGRAN_SHIFT) & 0xf;
+	if (tg < ID_AA64MMFR0_EL1_TGRAN_SUPPORTED_MIN || tg > ID_AA64MMFR0_EL1_TGRAN_SUPPORTED_MAX) {
+		if (IS_ENABLED(CONFIG_ARM64_64K_PAGES))
+			efi_err("This 64 KB granular kernel is not supported by your CPU\n");
+		else
+			efi_err("This 16 KB granular kernel is not supported by your CPU\n");
+		return EFI_UNSUPPORTED;
+	}
+	return EFI_SUCCESS;
+}
 
 /*
  * Distro versions of GRUB may ignore the BSS allocation entirely (i.e., fail
@@ -60,7 +129,16 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	efi_status_t status;
 	unsigned long kernel_size, kernel_memsize = 0;
 	u32 phys_seed = 0;
-	u64 min_kimg_align = efi_get_kimg_min_align();
+
+	/*
+	 * Although relocatable kernels can fix up the misalignment with
+	 * respect to MIN_KIMG_ALIGN, the resulting virtual text addresses are
+	 * subtly out of sync with those recorded in the vmlinux when kaslr is
+	 * disabled but the image required relocation anyway. Therefore retain
+	 * 2M alignment if KASLR was explicitly disabled, even if it was not
+	 * going to be activated to begin with.
+	 */
+	u64 min_kimg_align = efi_nokaslr ? MIN_KIMG_ALIGN : EFI_KIMG_ALIGN;
 
 	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE)) {
 		efi_guid_t li_fixed_proto = LINUX_EFI_LOADED_IMAGE_FIXED_GUID;
@@ -103,7 +181,7 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 		 */
 		status = efi_random_alloc(*reserve_size, min_kimg_align,
 					  reserve_addr, phys_seed,
-					  EFI_LOADER_CODE);
+					  EFI_LOADER_CODE, 0, EFI_ALLOC_LIMIT);
 		if (status != EFI_SUCCESS)
 			efi_warn("efi_random_alloc() failed: 0x%lx\n", status);
 	} else {
@@ -121,7 +199,7 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 			 */
 			*image_addr = (u64)_text;
 			*reserve_size = 0;
-			goto clean_image_to_poc;
+			return EFI_SUCCESS;
 		}
 
 		status = efi_allocate_pages_aligned(*reserve_size, reserve_addr,
@@ -137,14 +215,6 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 
 	*image_addr = *reserve_addr;
 	memcpy((void *)*image_addr, _text, kernel_size);
-
-clean_image_to_poc:
-	/*
-	 * Clean the copied Image to the PoC, and ensure it is not shadowed by
-	 * stale icache entries from before relocation.
-	 */
-	dcache_clean_poc(*image_addr, *image_addr + kernel_size);
-	asm("ic ialluis");
 
 	return EFI_SUCCESS;
 }

@@ -324,7 +324,7 @@ static void test_mb_aead_speed(const char *algo, int enc, int secs,
 					  crypto_req_done, &data[i].wait);
 	}
 
-	pr_info("testing speed of multibuffer %s (%s) %s\n", algo,
+	pr_info("\ntesting speed of multibuffer %s (%s) %s\n", algo,
 		get_driver_name(crypto_aead, tfm), e);
 
 	i = 0;
@@ -506,8 +506,8 @@ static int test_aead_cycles(struct aead_request *req, int enc, int blen)
 
 out:
 	if (ret == 0)
-		pr_cont("1 operation in %lu cycles (%d bytes)\n",
-			(cycles + 4) / 8, blen);
+		printk("1 operation in %lu cycles (%d bytes)\n",
+		       (cycles + 4) / 8, blen);
 
 	return ret;
 }
@@ -575,8 +575,8 @@ static void test_aead_speed(const char *algo, int enc, unsigned int secs,
 	}
 
 	crypto_init_wait(&wait);
-	pr_info("testing speed of %s (%s) %s\n", algo,
-		get_driver_name(crypto_aead, tfm), e);
+	printk(KERN_INFO "\ntesting speed of %s (%s) %s\n", algo,
+			get_driver_name(crypto_aead, tfm), e);
 
 	req = aead_request_alloc(tfm, GFP_KERNEL);
 	if (!req) {
@@ -624,8 +624,8 @@ static void test_aead_speed(const char *algo, int enc, unsigned int secs,
 				memset(iv, 0xff, iv_len);
 
 			crypto_aead_clear_flags(tfm, ~0);
-			pr_info("test %u (%d bit key, %d byte blocks): ",
-				i, *keysize * 8, bs);
+			printk(KERN_INFO "test %u (%d bit key, %d byte blocks): ",
+					i, *keysize * 8, bs);
 
 			memset(tvmem[0], 0xff, PAGE_SIZE);
 
@@ -727,8 +727,8 @@ static int test_ahash_jiffies_digest(struct ahash_request *req, int blen,
 			return ret;
 	}
 
-	pr_cont("%6u opers/sec, %9lu bytes/sec\n",
-		bcount / secs, ((long)bcount * blen) / secs);
+	printk("%6u opers/sec, %9lu bytes/sec\n",
+	       bcount / secs, ((long)bcount * blen) / secs);
 
 	return 0;
 }
@@ -877,8 +877,8 @@ static void test_ahash_speed_common(const char *algo, unsigned int secs,
 		return;
 	}
 
-	pr_info("testing speed of async %s (%s)\n", algo,
-		get_driver_name(crypto_ahash, tfm));
+	printk(KERN_INFO "\ntesting speed of async %s (%s)\n", algo,
+			get_driver_name(crypto_ahash, tfm));
 
 	if (crypto_ahash_digestsize(tfm) > MAX_DIGEST_SIZE) {
 		pr_err("digestsize(%u) > %d\n", crypto_ahash_digestsize(tfm),
@@ -1108,7 +1108,7 @@ static void test_mb_skcipher_speed(const char *algo, int enc, int secs,
 		crypto_init_wait(&data[i].wait);
 	}
 
-	pr_info("testing speed of multibuffer %s (%s) %s\n", algo,
+	pr_info("\ntesting speed of multibuffer %s (%s) %s\n", algo,
 		get_driver_name(crypto_skcipher, tfm), e);
 
 	i = 0;
@@ -1315,12 +1315,13 @@ static void test_skcipher_speed(const char *algo, int enc, unsigned int secs,
 		return;
 	}
 
-	pr_info("testing speed of %s %s (%s) %s\n", async ? "async" : "sync",
+	pr_info("\ntesting speed of %s %s (%s) %s\n", async ? "async" : "sync",
 		algo, get_driver_name(crypto_skcipher, tfm), e);
 
 	req = skcipher_request_alloc(tfm, GFP_KERNEL);
 	if (!req) {
-		pr_err("skcipher: Failed to allocate request for %s\n", algo);
+		pr_err("tcrypt: skcipher: Failed to allocate request for %s\n",
+		       algo);
 		goto out;
 	}
 
@@ -1701,10 +1702,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret = min(ret, tcrypt_test("gcm(aria)"));
 		break;
 
-	case 59:
-		ret = min(ret, tcrypt_test("cts(cbc(sm4))"));
-		break;
-
 	case 100:
 		ret = min(ret, tcrypt_test("hmac(md5)"));
 		break;
@@ -1805,10 +1802,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret = min(ret, tcrypt_test("cmac(sm4)"));
 		break;
 
-	case 160:
-		ret = min(ret, tcrypt_test("xcbc(sm4)"));
-		break;
-
 	case 181:
 		ret = min(ret, tcrypt_test("authenc(hmac(sha1),cbc(des))"));
 		break;
@@ -1844,7 +1837,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret = min(ret, tcrypt_test("cbc(sm4)"));
 		ret = min(ret, tcrypt_test("cfb(sm4)"));
 		ret = min(ret, tcrypt_test("ctr(sm4)"));
-		ret = min(ret, tcrypt_test("xts(sm4)"));
 		break;
 	case 192:
 		ret = min(ret, tcrypt_test("ecb(aria)"));
@@ -2108,10 +2100,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				speed_template_16);
 		test_cipher_speed("cbc(sm4)", DECRYPT, sec, NULL, 0,
 				speed_template_16);
-		test_cipher_speed("cts(cbc(sm4))", ENCRYPT, sec, NULL, 0,
-				speed_template_16);
-		test_cipher_speed("cts(cbc(sm4))", DECRYPT, sec, NULL, 0,
-				speed_template_16);
 		test_cipher_speed("cfb(sm4)", ENCRYPT, sec, NULL, 0,
 				speed_template_16);
 		test_cipher_speed("cfb(sm4)", DECRYPT, sec, NULL, 0,
@@ -2120,10 +2108,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				speed_template_16);
 		test_cipher_speed("ctr(sm4)", DECRYPT, sec, NULL, 0,
 				speed_template_16);
-		test_cipher_speed("xts(sm4)", ENCRYPT, sec, NULL, 0,
-				speed_template_32);
-		test_cipher_speed("xts(sm4)", DECRYPT, sec, NULL, 0,
-				speed_template_32);
 		break;
 
 	case 219:
@@ -2637,10 +2621,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				speed_template_16);
 		test_acipher_speed("ctr(sm4)", DECRYPT, sec, NULL, 0,
 				speed_template_16);
-		test_acipher_speed("xts(sm4)", ENCRYPT, sec, NULL, 0,
-				speed_template_32);
-		test_acipher_speed("xts(sm4)", DECRYPT, sec, NULL, 0,
-				speed_template_32);
 		break;
 
 	case 519:
@@ -2896,7 +2876,7 @@ static int __init tcrypt_mod_init(void)
 	err = do_test(alg, type, mask, mode, num_mb);
 
 	if (err) {
-		pr_err("one or more tests failed!\n");
+		printk(KERN_ERR "tcrypt: one or more tests failed!\n");
 		goto err_free_tv;
 	} else {
 		pr_debug("all tests passed\n");

@@ -208,6 +208,7 @@
 
 .text
 
+.align 16
 SYM_FUNC_START_LOCAL(__cast5_enc_blk16)
 	/* input:
 	 *	%rdi: ctx
@@ -281,6 +282,7 @@ SYM_FUNC_START_LOCAL(__cast5_enc_blk16)
 	RET;
 SYM_FUNC_END(__cast5_enc_blk16)
 
+.align 16
 SYM_FUNC_START_LOCAL(__cast5_dec_blk16)
 	/* input:
 	 *	%rdi: ctx

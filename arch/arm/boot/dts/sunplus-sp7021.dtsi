@@ -211,6 +211,7 @@
 			interrupt-names = "dma_w", "master_risc", "slave_risc";
 			clocks = <&clkc CLK_SPI_COMBO_1>;
 			resets = <&rstc RST_SPI_COMBO_1>;
+			spi-max-frequency = <25000000>;
 			status = "disabled";
 		};
 
@@ -224,6 +225,7 @@
 			interrupt-names = "dma_w", "master_risc", "slave_risc";
 			clocks = <&clkc CLK_SPI_COMBO_2>;
 			resets = <&rstc RST_SPI_COMBO_2>;
+			spi-max-frequency = <25000000>;
 			status = "disabled";
 		};
 
@@ -237,6 +239,7 @@
 			interrupt-names = "dma_w", "master_risc", "slave_risc";
 			clocks = <&clkc CLK_SPI_COMBO_3>;
 			resets = <&rstc RST_SPI_COMBO_3>;
+			spi-max-frequency = <25000000>;
 			status = "disabled";
 		};
 

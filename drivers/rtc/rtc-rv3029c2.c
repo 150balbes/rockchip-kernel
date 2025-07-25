@@ -17,7 +17,6 @@
 #include <linux/of.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
-#include <linux/kstrtox.h>
 #include <linux/regmap.h>
 
 /* Register map */

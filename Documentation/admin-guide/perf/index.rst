@@ -19,5 +19,3 @@ Performance monitor support
    arm_dsu_pmu
    thunderx2-pmu
    alibaba_pmu
-   nvidia-pmu
-   meson-ddr-pmu

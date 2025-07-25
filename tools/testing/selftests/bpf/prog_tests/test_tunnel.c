@@ -421,7 +421,7 @@ static void *test_tunnel_run_tests(void *arg)
 	return NULL;
 }
 
-void test_tunnel(void)
+void serial_test_tunnel(void)
 {
 	pthread_t test_thread;
 	int err;

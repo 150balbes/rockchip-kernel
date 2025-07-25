@@ -244,7 +244,8 @@ static int ektf2127_query_dimension(struct i2c_client *client, bool width)
 	return (((buf[3] & 0xf0) << 4) | buf[2]) - 1;
 }
 
-static int ektf2127_probe(struct i2c_client *client)
+static int ektf2127_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct ektf2127_ts *ts;
@@ -351,7 +352,7 @@ static struct i2c_driver ektf2127_driver = {
 		.pm	= &ektf2127_pm_ops,
 		.of_match_table = of_match_ptr(ektf2127_of_match),
 	},
-	.probe_new = ektf2127_probe,
+	.probe = ektf2127_probe,
 	.id_table = ektf2127_i2c_id,
 };
 module_i2c_driver(ektf2127_driver);

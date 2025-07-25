@@ -54,6 +54,9 @@
 
 #define ACP_DSP_TO_HOST_IRQ			0x04
 
+#define ACP_RN_PCI_ID				0x01
+#define ACP_RMB_PCI_ID				0x6F
+
 #define HOST_BRIDGE_CZN				0x1630
 #define HOST_BRIDGE_RMB				0x14B5
 #define ACP_SHA_STAT				0x8000
@@ -68,17 +71,6 @@
 
 #define BOX_SIZE_512				0x200
 #define BOX_SIZE_1024				0x400
-
-#define EXCEPT_MAX_HDR_SIZE			0x400
-#define AMD_STACK_DUMP_SIZE			32
-
-enum clock_source {
-	ACP_CLOCK_96M = 0,
-	ACP_CLOCK_48M,
-	ACP_CLOCK_24M,
-	ACP_CLOCK_ACLK,
-	ACP_CLOCK_MCLK,
-};
 
 struct  acp_atu_grp_pte {
 	u32 low;
@@ -149,7 +141,6 @@ struct acp_dsp_stream {
 	int stream_tag;
 	int active;
 	unsigned int reg_offset;
-	size_t posn_offset;
 };
 
 struct sof_amd_acp_desc {
@@ -211,9 +202,6 @@ int acp_dsp_block_read(struct snd_sof_dev *sdev, enum snd_sof_fw_blk_type blk_ty
 irqreturn_t acp_sof_ipc_irq_thread(int irq, void *context);
 int acp_sof_ipc_msg_data(struct snd_sof_dev *sdev, struct snd_pcm_substream *substream,
 			 void *p, size_t sz);
-int acp_set_stream_data_offset(struct snd_sof_dev *sdev,
-			       struct snd_pcm_substream *substream,
-			       size_t posn_offset);
 int acp_sof_ipc_send_msg(struct snd_sof_dev *sdev,
 			 struct snd_sof_ipc_msg *msg);
 int acp_sof_ipc_get_mailbox_offset(struct snd_sof_dev *sdev);
@@ -256,9 +244,6 @@ int acp_sof_trace_release(struct snd_sof_dev *sdev);
 /* PM Callbacks */
 int amd_sof_acp_suspend(struct snd_sof_dev *sdev, u32 target_state);
 int amd_sof_acp_resume(struct snd_sof_dev *sdev);
-
-void amd_sof_ipc_dump(struct snd_sof_dev *sdev);
-void amd_sof_dump(struct snd_sof_dev *sdev, u32 flags);
 
 static inline const struct sof_amd_acp_desc *get_chip_info(struct snd_sof_pdata *pdata)
 {

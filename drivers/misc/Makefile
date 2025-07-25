@@ -3,6 +3,10 @@
 # Makefile for misc devices that really don't fit anywhere else.
 #
 
+obj-y				+= rk628/
+obj-$(CONFIG_RK803)		+= rk803.o
+obj-y				+= rockchip/
+obj-$(CONFIG_LT7911D_FB_NOTIFIER) += lt7911d-fb-notifier.o
 obj-$(CONFIG_IBM_ASM)		+= ibmasm/
 obj-$(CONFIG_IBMVMC)		+= ibmvmc.o
 obj-$(CONFIG_AD525X_DPOT)	+= ad525x_dpot.o
@@ -23,8 +27,6 @@ obj-$(CONFIG_ENCLOSURE_SERVICES) += enclosure.o
 obj-$(CONFIG_KGDB_TESTS)	+= kgdbts.o
 obj-$(CONFIG_SGI_XP)		+= sgi-xp/
 obj-$(CONFIG_SGI_GRU)		+= sgi-gru/
-obj-$(CONFIG_SMPRO_ERRMON)	+= smpro-errmon.o
-obj-$(CONFIG_SMPRO_MISC)	+= smpro-misc.o
 obj-$(CONFIG_CS5535_MFGPT)	+= cs5535-mfgpt.o
 obj-$(CONFIG_GEHC_ACHC)		+= gehc-achc.o
 obj-$(CONFIG_HP_ILO)		+= hpilo.o

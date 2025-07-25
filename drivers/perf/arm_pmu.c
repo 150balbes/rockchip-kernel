@@ -514,6 +514,9 @@ static int armpmu_event_init(struct perf_event *event)
 	if (has_branch_stack(event))
 		return -EOPNOTSUPP;
 
+	if (armpmu->map_event(event) == -ENOENT)
+		return -ENOENT;
+
 	return __hw_perf_event_init(event);
 }
 
@@ -547,14 +550,15 @@ static void armpmu_disable(struct pmu *pmu)
  * microarchitecture, and aren't suitable for another. Thus, only match CPUs of
  * the same microarchitecture.
  */
-static bool armpmu_filter(struct pmu *pmu, int cpu)
+static int armpmu_filter_match(struct perf_event *event)
 {
-	struct arm_pmu *armpmu = to_arm_pmu(pmu);
-	bool ret;
+	struct arm_pmu *armpmu = to_arm_pmu(event->pmu);
+	unsigned int cpu = smp_processor_id();
+	int ret;
 
 	ret = cpumask_test_cpu(cpu, &armpmu->supported_cpus);
-	if (ret && armpmu->filter)
-		return armpmu->filter(pmu, cpu);
+	if (ret && armpmu->filter_match)
+		return armpmu->filter_match(event);
 
 	return ret;
 }
@@ -857,16 +861,16 @@ static void cpu_pmu_destroy(struct arm_pmu *cpu_pmu)
 					    &cpu_pmu->node);
 }
 
-struct arm_pmu *armpmu_alloc(void)
+static struct arm_pmu *__armpmu_alloc(gfp_t flags)
 {
 	struct arm_pmu *pmu;
 	int cpu;
 
-	pmu = kzalloc(sizeof(*pmu), GFP_KERNEL);
+	pmu = kzalloc(sizeof(*pmu), flags);
 	if (!pmu)
 		goto out;
 
-	pmu->hw_events = alloc_percpu_gfp(struct pmu_hw_events, GFP_KERNEL);
+	pmu->hw_events = alloc_percpu_gfp(struct pmu_hw_events, flags);
 	if (!pmu->hw_events) {
 		pr_info("failed to allocate per-cpu PMU data.\n");
 		goto out_free_pmu;
@@ -881,13 +885,14 @@ struct arm_pmu *armpmu_alloc(void)
 		.start		= armpmu_start,
 		.stop		= armpmu_stop,
 		.read		= armpmu_read,
-		.filter		= armpmu_filter,
+		.filter_match	= armpmu_filter_match,
 		.attr_groups	= pmu->attr_groups,
 		/*
 		 * This is a CPU PMU potentially in a heterogeneous
 		 * configuration (e.g. big.LITTLE). This is not an uncore PMU,
 		 * and we have taken ctx sharing into account (e.g. with our
-		 * pmu::filter callback and pmu::event_init group validation).
+		 * pmu::filter_match callback and pmu::event_init group
+		 * validation).
 		 */
 		.capabilities	= PERF_PMU_CAP_HETEROGENEOUS_CPUS | PERF_PMU_CAP_EXTENDED_REGS,
 	};
@@ -910,6 +915,17 @@ out_free_pmu:
 out:
 	return NULL;
 }
+
+struct arm_pmu *armpmu_alloc(void)
+{
+	return __armpmu_alloc(GFP_KERNEL);
+}
+
+struct arm_pmu *armpmu_alloc_atomic(void)
+{
+	return __armpmu_alloc(GFP_ATOMIC);
+}
+
 
 void armpmu_free(struct arm_pmu *pmu)
 {

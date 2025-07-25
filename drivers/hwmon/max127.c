@@ -303,7 +303,8 @@ static const struct hwmon_chip_info max127_chip_info = {
 	.info = max127_info,
 };
 
-static int max127_probe(struct i2c_client *client)
+static int max127_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int i;
 	struct device *hwmon_dev;
@@ -339,7 +340,7 @@ static struct i2c_driver max127_driver = {
 	.driver = {
 		.name	= "max127",
 	},
-	.probe_new	= max127_probe,
+	.probe		= max127_probe,
 	.id_table	= max127_id,
 };
 

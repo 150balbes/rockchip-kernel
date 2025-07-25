@@ -170,7 +170,9 @@ static void st_lsm6dsx_shub_wait_complete(struct st_lsm6dsx_hw *hw)
  *
  * Read st_lsm6dsx i2c controller register
  */
-int st_lsm6dsx_shub_read_output(struct st_lsm6dsx_hw *hw, u8 *data, int len)
+static int
+st_lsm6dsx_shub_read_output(struct st_lsm6dsx_hw *hw, u8 *data,
+			    int len)
 {
 	const struct st_lsm6dsx_shub_settings *hub_settings;
 	int err;

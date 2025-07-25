@@ -165,12 +165,6 @@ struct resp_res {
 			u64		va;
 			u32		resid;
 		} read;
-		struct {
-			u32		length;
-			u64		va;
-			u8		type;
-			u8		level;
-		} flush;
 	};
 };
 
@@ -310,6 +304,7 @@ struct rxe_mr {
 	u32			lkey;
 	u32			rkey;
 	enum rxe_mr_state	state;
+	enum ib_mr_type		type;
 	u32			offset;
 	int			access;
 

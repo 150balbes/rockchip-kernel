@@ -23,11 +23,6 @@
 #include <objtool/builtin.h>
 #include <arch/elf.h>
 
-int arch_ftrace_match(char *name)
-{
-	return !strcmp(name, "__fentry__");
-}
-
 static int is_x86_64(const struct elf *elf)
 {
 	switch (elf->ehdr.e_machine) {
@@ -76,30 +71,6 @@ unsigned long arch_dest_reloc_offset(int addend)
 unsigned long arch_jump_destination(struct instruction *insn)
 {
 	return insn->offset + insn->len + insn->immediate;
-}
-
-bool arch_pc_relative_reloc(struct reloc *reloc)
-{
-	/*
-	 * All relocation types where P (the address of the target)
-	 * is included in the computation.
-	 */
-	switch (reloc->type) {
-	case R_X86_64_PC8:
-	case R_X86_64_PC16:
-	case R_X86_64_PC32:
-	case R_X86_64_PC64:
-
-	case R_X86_64_PLT32:
-	case R_X86_64_GOTPC32:
-	case R_X86_64_GOTPCREL:
-		return true;
-
-	default:
-		break;
-	}
-
-	return false;
 }
 
 #define ADD_OP(op) \
@@ -826,4 +797,10 @@ bool arch_is_retpoline(struct symbol *sym)
 bool arch_is_rethunk(struct symbol *sym)
 {
 	return !strcmp(sym->name, "__x86_return_thunk");
+}
+
+bool arch_is_embedded_insn(struct symbol *sym)
+{
+	return !strcmp(sym->name, "retbleed_return_thunk") ||
+	       !strcmp(sym->name, "srso_safe_ret");
 }

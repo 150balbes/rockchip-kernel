@@ -1215,7 +1215,6 @@ out:
 static int qed_slowpath_wq_start(struct qed_dev *cdev)
 {
 	struct qed_hwfn *hwfn;
-	char name[NAME_SIZE];
 	int i;
 
 	if (IS_VF(cdev))
@@ -1224,11 +1223,11 @@ static int qed_slowpath_wq_start(struct qed_dev *cdev)
 	for_each_hwfn(cdev, i) {
 		hwfn = &cdev->hwfns[i];
 
-		snprintf(name, NAME_SIZE, "slowpath-%02x:%02x.%02x",
-			 cdev->pdev->bus->number,
-			 PCI_SLOT(cdev->pdev->devfn), hwfn->abs_pf_id);
+		hwfn->slowpath_wq = alloc_workqueue("slowpath-%02x:%02x.%02x",
+					 0, 0, cdev->pdev->bus->number,
+					 PCI_SLOT(cdev->pdev->devfn),
+					 hwfn->abs_pf_id);
 
-		hwfn->slowpath_wq = alloc_workqueue(name, 0, 0);
 		if (!hwfn->slowpath_wq) {
 			DP_NOTICE(hwfn, "Cannot create slowpath workqueue\n");
 			return -ENOMEM;
@@ -3101,7 +3100,7 @@ void qed_get_protocol_stats(struct qed_dev *cdev,
 
 	switch (type) {
 	case QED_MCP_LAN_STATS:
-		qed_get_vport_stats(cdev, &eth_stats);
+		qed_get_vport_stats_context(cdev, &eth_stats, true);
 		stats->lan_stats.ucast_rx_pkts =
 					eth_stats.common.rx_ucast_pkts;
 		stats->lan_stats.ucast_tx_pkts =
@@ -3109,10 +3108,10 @@ void qed_get_protocol_stats(struct qed_dev *cdev,
 		stats->lan_stats.fcs_err = -1;
 		break;
 	case QED_MCP_FCOE_STATS:
-		qed_get_protocol_stats_fcoe(cdev, &stats->fcoe_stats);
+		qed_get_protocol_stats_fcoe(cdev, &stats->fcoe_stats, true);
 		break;
 	case QED_MCP_ISCSI_STATS:
-		qed_get_protocol_stats_iscsi(cdev, &stats->iscsi_stats);
+		qed_get_protocol_stats_iscsi(cdev, &stats->iscsi_stats, true);
 		break;
 	default:
 		DP_VERBOSE(cdev, QED_MSG_SP,

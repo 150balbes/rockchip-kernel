@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2020-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2020-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -47,24 +47,23 @@
  * 1.3:
  * Add a lot of extra new traces. Tweak some existing scheduler related traces
  * to contain extra information information/happen at slightly different times.
- * SCHEDULER_EXIT_PROTM now has group information
+ * SCHEDULER_PROTM_EXIT now has group information
  */
 #define KBASE_KTRACE_VERSION_MAJOR 1
 #define KBASE_KTRACE_VERSION_MINOR 3
 
 /* indicates if the trace message has valid queue-group related info. */
-#define KBASE_KTRACE_FLAG_CSF_GROUP     (((kbase_ktrace_flag_t)1) << 0)
+#define KBASE_KTRACE_FLAG_CSF_GROUP (((kbase_ktrace_flag_t)1) << 0)
 
 /* indicates if the trace message has valid queue related info. */
-#define KBASE_KTRACE_FLAG_CSF_QUEUE     (((kbase_ktrace_flag_t)1) << 1)
+#define KBASE_KTRACE_FLAG_CSF_QUEUE (((kbase_ktrace_flag_t)1) << 1)
 
 /* indicates if the trace message has valid KCPU-queue related info. */
-#define KBASE_KTRACE_FLAG_CSF_KCPU     (((kbase_ktrace_flag_t)1) << 2)
+#define KBASE_KTRACE_FLAG_CSF_KCPU (((kbase_ktrace_flag_t)1) << 2)
 
 /* Collect all the flags together for debug checking */
 #define KBASE_KTRACE_FLAG_BACKEND_ALL \
-		(KBASE_KTRACE_FLAG_CSF_GROUP | KBASE_KTRACE_FLAG_CSF_QUEUE | \
-		 KBASE_KTRACE_FLAG_CSF_KCPU)
+	(KBASE_KTRACE_FLAG_CSF_GROUP | KBASE_KTRACE_FLAG_CSF_QUEUE | KBASE_KTRACE_FLAG_CSF_KCPU)
 
 /**
  * union kbase_ktrace_backend - backend specific part of a trace message

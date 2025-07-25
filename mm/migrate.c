@@ -74,22 +74,13 @@ int isolate_movable_page(struct page *page, isolate_mode_t mode)
 	if (unlikely(!get_page_unless_zero(page)))
 		goto out;
 
-	if (unlikely(PageSlab(page)))
-		goto out_putpage;
-	/* Pairs with smp_wmb() in slab freeing, e.g. SLUB's __free_slab() */
-	smp_rmb();
 	/*
-	 * Check movable flag before taking the page lock because
-	 * we use non-atomic bitops on newly allocated page flags so
-	 * unconditionally grabbing the lock ruins page's owner side.
+	 * Check PageMovable before holding a PG_lock because page's owner
+	 * assumes anybody doesn't touch PG_lock of newly allocated page
+	 * so unconditionally grabbing the lock ruins page's owner side.
 	 */
 	if (unlikely(!__PageMovable(page)))
 		goto out_putpage;
-	/* Pairs with smp_wmb() in slab allocation, e.g. SLUB's alloc_slab_page() */
-	smp_rmb();
-	if (unlikely(PageSlab(page)))
-		goto out_putpage;
-
 	/*
 	 * As movable pages are not isolated from LRU lists, concurrent
 	 * compaction threads can race against page migration functions
@@ -224,6 +215,8 @@ static bool remove_migration_pte(struct folio *folio,
 			pte = maybe_mkwrite(pte, vma);
 		else if (pte_swp_uffd_wp(*pvmw.pte))
 			pte = pte_mkuffd_wp(pte);
+		else
+			pte = pte_wrprotect(pte);
 
 		if (folio_test_anon(folio) && !is_readable_migration_entry(entry))
 			rmap_flags |= RMAP_EXCLUSIVE;
@@ -395,6 +388,7 @@ int folio_migrate_mapping(struct address_space *mapping,
 	int dirty;
 	int expected_count = folio_expected_refs(mapping, folio) + extra_count;
 	long nr = folio_nr_pages(folio);
+	long entries, i;
 
 	if (!mapping) {
 		/* Anonymous page without mapping */
@@ -429,11 +423,17 @@ int folio_migrate_mapping(struct address_space *mapping,
 	if (folio_test_swapbacked(folio)) {
 		__folio_set_swapbacked(newfolio);
 		if (folio_test_swapcache(folio)) {
+			int i;
+
 			folio_set_swapcache(newfolio);
-			newfolio->private = folio_get_private(folio);
+			for (i = 0; i < nr; i++)
+				set_page_private(folio_page(newfolio, i),
+					page_private(folio_page(folio, i)));
 		}
+		entries = nr;
 	} else {
 		VM_BUG_ON_FOLIO(folio_test_swapcache(folio), folio);
+		entries = 1;
 	}
 
 	/* Move dirty while page refs frozen and newpage not yet exposed */
@@ -443,7 +443,11 @@ int folio_migrate_mapping(struct address_space *mapping,
 		folio_set_dirty(newfolio);
 	}
 
-	xas_store(&xas, newfolio);
+	/* Swap cache still stores N entries instead of a high-order entry */
+	for (i = 0; i < entries; i++) {
+		xas_store(&xas, newfolio);
+		xas_next(&xas);
+	}
 
 	/*
 	 * Drop cache reference from old page by unfreezing
@@ -829,7 +833,6 @@ int buffer_migrate_folio_norefs(struct address_space *mapping,
 {
 	return __buffer_migrate_folio(mapping, dst, src, mode, true);
 }
-EXPORT_SYMBOL_GPL(buffer_migrate_folio_norefs);
 #endif
 
 int filemap_migrate_folio(struct address_space *mapping,
@@ -915,8 +918,7 @@ static int fallback_migrate_folio(struct address_space *mapping,
 	 * Buffers may be managed in a filesystem specific way.
 	 * We must have no buffers or drop them.
 	 */
-	if (folio_test_private(src) &&
-	    !filemap_release_folio(src, GFP_KERNEL))
+	if (!filemap_release_folio(src, GFP_KERNEL))
 		return mode == MIGRATE_SYNC ? -EAGAIN : -EBUSY;
 
 	return migrate_folio(mapping, dst, src, mode);
@@ -1160,79 +1162,79 @@ out:
 }
 
 /*
- * Obtain the lock on folio, remove all ptes and migrate the folio
- * to the newly allocated folio in dst.
+ * Obtain the lock on page, remove all ptes and migrate the page
+ * to the newly allocated page in newpage.
  */
 static int unmap_and_move(new_page_t get_new_page,
 				   free_page_t put_new_page,
-				   unsigned long private, struct folio *src,
+				   unsigned long private, struct page *page,
 				   int force, enum migrate_mode mode,
 				   enum migrate_reason reason,
 				   struct list_head *ret)
 {
-	struct folio *dst;
+	struct folio *dst, *src = page_folio(page);
 	int rc = MIGRATEPAGE_SUCCESS;
 	struct page *newpage = NULL;
 
-	if (!thp_migration_supported() && folio_test_transhuge(src))
+	if (!thp_migration_supported() && PageTransHuge(page))
 		return -ENOSYS;
 
-	if (folio_ref_count(src) == 1) {
-		/* Folio was freed from under us. So we are done. */
-		folio_clear_active(src);
-		folio_clear_unevictable(src);
+	if (page_count(page) == 1) {
+		/* Page was freed from under us. So we are done. */
+		ClearPageActive(page);
+		ClearPageUnevictable(page);
 		/* free_pages_prepare() will clear PG_isolated. */
 		goto out;
 	}
 
-	newpage = get_new_page(&src->page, private);
+	newpage = get_new_page(page, private);
 	if (!newpage)
 		return -ENOMEM;
 	dst = page_folio(newpage);
 
-	dst->private = NULL;
+	newpage->private = 0;
 	rc = __unmap_and_move(src, dst, force, mode);
 	if (rc == MIGRATEPAGE_SUCCESS)
-		set_page_owner_migrate_reason(&dst->page, reason);
+		set_page_owner_migrate_reason(newpage, reason);
 
 out:
 	if (rc != -EAGAIN) {
 		/*
-		 * A folio that has been migrated has all references
-		 * removed and will be freed. A folio that has not been
+		 * A page that has been migrated has all references
+		 * removed and will be freed. A page that has not been
 		 * migrated will have kept its references and be restored.
 		 */
-		list_del(&src->lru);
+		list_del(&page->lru);
 	}
 
 	/*
 	 * If migration is successful, releases reference grabbed during
-	 * isolation. Otherwise, restore the folio to right list unless
+	 * isolation. Otherwise, restore the page to right list unless
 	 * we want to retry.
 	 */
 	if (rc == MIGRATEPAGE_SUCCESS) {
 		/*
-		 * Compaction can migrate also non-LRU folios which are
+		 * Compaction can migrate also non-LRU pages which are
 		 * not accounted to NR_ISOLATED_*. They can be recognized
-		 * as __folio_test_movable
+		 * as __PageMovable
 		 */
-		if (likely(!__folio_test_movable(src)))
-			mod_node_page_state(folio_pgdat(src), NR_ISOLATED_ANON +
-					folio_is_file_lru(src), -folio_nr_pages(src));
+		if (likely(!__PageMovable(page)))
+			mod_node_page_state(page_pgdat(page), NR_ISOLATED_ANON +
+					page_is_file_lru(page), -thp_nr_pages(page));
 
 		if (reason != MR_MEMORY_FAILURE)
 			/*
-			 * We release the folio in page_handle_poison.
+			 * We release the page in page_handle_poison.
 			 */
-			folio_put(src);
+			put_page(page);
 	} else {
 		if (rc != -EAGAIN)
-			list_add_tail(&src->lru, ret);
+			list_add_tail(&page->lru, ret);
 
 		if (put_new_page)
-			put_new_page(&dst->page, private);
+			put_new_page(newpage, private);
 		else
-			folio_put(dst);
+			put_page(newpage);
 	}
 
 	return rc;
@@ -1308,7 +1310,7 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 	 * folio_mapping() set, hugetlbfs specific move page routine will not
 	 * be called and we could leak usage counts for subpools.
 	 */
-	if (hugetlb_folio_subpool(src) && !folio_mapping(src)) {
+	if (hugetlb_page_subpool(hpage) && !folio_mapping(src)) {
 		rc = -EBUSY;
 		goto out_unlock;
 	}
@@ -1358,7 +1360,7 @@ put_anon:
 		put_anon_vma(anon_vma);
 
 	if (rc == MIGRATEPAGE_SUCCESS) {
-		move_hugetlb_state(src, dst, reason);
+		move_hugetlb_state(hpage, new_hpage, reason);
 		put_new_page = NULL;
 	}
 
@@ -1383,245 +1385,218 @@ out:
 	return rc;
 }
 
-static inline int try_split_folio(struct folio *folio, struct list_head *split_folios)
+static inline int try_split_thp(struct page *page, struct list_head *split_pages)
 {
 	int rc;
 
-	folio_lock(folio);
-	rc = split_folio_to_list(folio, split_folios);
-	folio_unlock(folio);
+	lock_page(page);
+	rc = split_huge_page_to_list(page, split_pages);
+	unlock_page(page);
 	if (!rc)
-		list_move_tail(&folio->lru, split_folios);
+		list_move_tail(&page->lru, split_pages);
 
 	return rc;
 }
 
 /*
- * migrate_pages - migrate the folios specified in a list, to the free folios
+ * migrate_pages - migrate the pages specified in a list, to the free pages
  *		   supplied as the target for the page migration
  *
- * @from:		The list of folios to be migrated.
- * @get_new_page:	The function used to allocate free folios to be used
- *			as the target of the folio migration.
- * @put_new_page:	The function used to free target folios if migration
+ * @from:		The list of pages to be migrated.
+ * @get_new_page:	The function used to allocate free pages to be used
+ *			as the target of the page migration.
+ * @put_new_page:	The function used to free target pages if migration
  *			fails, or NULL if no special handling is necessary.
  * @private:		Private data to be passed on to get_new_page()
  * @mode:		The migration mode that specifies the constraints for
- *			folio migration, if any.
- * @reason:		The reason for folio migration.
- * @ret_succeeded:	Set to the number of folios migrated successfully if
+ *			page migration, if any.
+ * @reason:		The reason for page migration.
+ * @ret_succeeded:	Set to the number of normal pages migrated successfully if
  *			the caller passes a non-NULL pointer.
  *
- * The function returns after 10 attempts or if no folios are movable any more
- * because the list has become empty or no retryable folios exist any more.
- * It is caller's responsibility to call putback_movable_pages() to return folios
+ * The function returns after 10 attempts or if no pages are movable any more
+ * because the list has become empty or no retryable pages exist any more.
+ * It is caller's responsibility to call putback_movable_pages() to return pages
  * to the LRU or free list only if ret != 0.
  *
- * Returns the number of {normal folio, large folio, hugetlb} that were not
- * migrated, or an error code. The number of large folio splits will be
- * considered as the number of non-migrated large folio, no matter how many
- * split folios of the large folio are migrated successfully.
+ * Returns the number of {normal page, THP, hugetlb} that were not migrated, or
+ * an error code. The number of THP splits will be considered as the number of
+ * non-migrated THP, no matter how many subpages of the THP are migrated successfully.
  */
 int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
 		enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
 {
 	int retry = 1;
-	int large_retry = 1;
 	int thp_retry = 1;
 	int nr_failed = 0;
 	int nr_failed_pages = 0;
 	int nr_retry_pages = 0;
 	int nr_succeeded = 0;
 	int nr_thp_succeeded = 0;
-	int nr_large_failed = 0;
 	int nr_thp_failed = 0;
 	int nr_thp_split = 0;
 	int pass = 0;
-	bool is_large = false;
 	bool is_thp = false;
-	struct folio *folio, *folio2;
-	int rc, nr_pages;
-	LIST_HEAD(ret_folios);
-	LIST_HEAD(split_folios);
+	struct page *page;
+	struct page *page2;
+	int rc, nr_subpages;
+	LIST_HEAD(ret_pages);
+	LIST_HEAD(thp_split_pages);
 	bool nosplit = (reason == MR_NUMA_MISPLACED);
-	bool no_split_folio_counting = false;
+	bool no_subpage_counting = false;
 
 	trace_mm_migrate_pages_start(mode, reason);
 
-split_folio_migration:
-	for (pass = 0; pass < 10 && (retry || large_retry); pass++) {
+thp_subpage_migration:
+	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
 		retry = 0;
-		large_retry = 0;
 		thp_retry = 0;
 		nr_retry_pages = 0;
 
-		list_for_each_entry_safe(folio, folio2, from, lru) {
+		list_for_each_entry_safe(page, page2, from, lru) {
 			/*
-			 * Large folio statistics is based on the source large
-			 * folio. Capture required information that might get
-			 * lost during migration.
+			 * THP statistics is based on the source huge page.
+			 * Capture required information that might get lost
+			 * during migration.
 			 */
-			is_large = folio_test_large(folio) && !folio_test_hugetlb(folio);
-			is_thp = is_large && folio_test_pmd_mappable(folio);
-			nr_pages = folio_nr_pages(folio);
+			is_thp = PageTransHuge(page) && !PageHuge(page);
+			nr_subpages = compound_nr(page);
 			cond_resched();
 
-			if (folio_test_hugetlb(folio))
+			if (PageHuge(page))
 				rc = unmap_and_move_huge_page(get_new_page,
-						put_new_page, private,
-						&folio->page, pass > 2, mode,
-						reason,
-						&ret_folios);
+						put_new_page, private, page,
+						pass > 2, mode, reason,
+						&ret_pages);
 			else
 				rc = unmap_and_move(get_new_page, put_new_page,
-						private, folio, pass > 2, mode,
-						reason, &ret_folios);
+						private, page, pass > 2, mode,
+						reason, &ret_pages);
 			/*
 			 * The rules are:
-			 *	Success: non hugetlb folio will be freed, hugetlb
-			 *		 folio will be put back
+			 *	Success: non hugetlb page will be freed, hugetlb
+			 *		 page will be put back
 			 *	-EAGAIN: stay on the from list
 			 *	-ENOMEM: stay on the from list
 			 *	-ENOSYS: stay on the from list
-			 *	Other errno: put on ret_folios list then splice to
+			 *	Other errno: put on ret_pages list then splice to
 			 *		     from list
 			 */
 			switch(rc) {
 			/*
-			 * Large folio migration might be unsupported or
-			 * the allocation could've failed so we should retry
-			 * on the same folio with the large folio split
-			 * to normal folios.
+			 * THP migration might be unsupported or the
+			 * allocation could've failed so we should
+			 * retry on the same page with the THP split
+			 * to base pages.
 			 *
-			 * Split folios are put in split_folios, and
+			 * Sub-pages are put in thp_split_pages, and
 			 * we will migrate them after the rest of the
 			 * list is processed.
 			 */
 			case -ENOSYS:
-				/* Large folio migration is unsupported */
-				if (is_large) {
-					nr_large_failed++;
-					nr_thp_failed += is_thp;
-					if (!try_split_folio(folio, &split_folios)) {
-						nr_thp_split += is_thp;
+				/* THP migration is unsupported */
+				if (is_thp) {
+					nr_thp_failed++;
+					if (!try_split_thp(page, &thp_split_pages)) {
+						nr_thp_split++;
 						break;
 					}
 				/* Hugetlb migration is unsupported */
-				} else if (!no_split_folio_counting) {
+				} else if (!no_subpage_counting) {
 					nr_failed++;
 				}
 
-				nr_failed_pages += nr_pages;
-				list_move_tail(&folio->lru, &ret_folios);
+				nr_failed_pages += nr_subpages;
+				list_move_tail(&page->lru, &ret_pages);
 				break;
 			case -ENOMEM:
 				/*
 				 * When memory is low, don't bother to try to migrate
-				 * other folios, just exit.
+				 * other pages, just exit.
 				 */
-				if (is_large) {
-					nr_large_failed++;
-					nr_thp_failed += is_thp;
-					/* Large folio NUMA faulting doesn't split to retry. */
-					if (!nosplit) {
-						int ret = try_split_folio(folio, &split_folios);
-
-						if (!ret) {
-							nr_thp_split += is_thp;
-							break;
-						} else if (reason == MR_LONGTERM_PIN &&
-							   ret == -EAGAIN) {
-							/*
-							 * Try again to split large folio to
-							 * mitigate the failure of longterm pinning.
-							 */
-							large_retry++;
-							thp_retry += is_thp;
-							nr_retry_pages += nr_pages;
-							break;
-						}
+				if (is_thp) {
+					nr_thp_failed++;
+					/* THP NUMA faulting doesn't split THP to retry. */
+					if (!nosplit && !try_split_thp(page, &thp_split_pages)) {
+						nr_thp_split++;
+						break;
 					}
-				} else if (!no_split_folio_counting) {
+				} else if (!no_subpage_counting) {
 					nr_failed++;
 				}
 
-				nr_failed_pages += nr_pages + nr_retry_pages;
+				nr_failed_pages += nr_subpages + nr_retry_pages;
 				/*
-				 * There might be some split folios of fail-to-migrate large
-				 * folios left in split_folios list. Move them back to migration
+				 * There might be some subpages of fail-to-migrate THPs
+				 * left in thp_split_pages list. Move them back to migration
 				 * list so that they could be put back to the right list by
-				 * the caller otherwise the folio refcnt will be leaked.
+				 * the caller otherwise the page refcnt will be leaked.
 				 */
-				list_splice_init(&split_folios, from);
+				list_splice_init(&thp_split_pages, from);
 				/* nr_failed isn't updated for not used */
-				nr_large_failed += large_retry;
 				nr_thp_failed += thp_retry;
 				goto out;
 			case -EAGAIN:
-				if (is_large) {
-					large_retry++;
-					thp_retry += is_thp;
-				} else if (!no_split_folio_counting) {
+				if (is_thp)
+					thp_retry++;
+				else if (!no_subpage_counting)
 					retry++;
-				}
-				nr_retry_pages += nr_pages;
+				nr_retry_pages += nr_subpages;
 				break;
 			case MIGRATEPAGE_SUCCESS:
-				nr_succeeded += nr_pages;
-				nr_thp_succeeded += is_thp;
+				nr_succeeded += nr_subpages;
+				if (is_thp)
+					nr_thp_succeeded++;
 				break;
 			default:
 				/*
 				 * Permanent failure (-EBUSY, etc.):
-				 * unlike -EAGAIN case, the failed folio is
-				 * removed from migration folio list and not
+				 * unlike -EAGAIN case, the failed page is
+				 * removed from migration page list and not
 				 * retried in the next outer loop.
 				 */
-				if (is_large) {
-					nr_large_failed++;
-					nr_thp_failed += is_thp;
-				} else if (!no_split_folio_counting) {
+				if (is_thp)
+					nr_thp_failed++;
+				else if (!no_subpage_counting)
 					nr_failed++;
-				}
 
-				nr_failed_pages += nr_pages;
+				nr_failed_pages += nr_subpages;
 				break;
 			}
 		}
 	}
 	nr_failed += retry;
-	nr_large_failed += large_retry;
 	nr_thp_failed += thp_retry;
 	nr_failed_pages += nr_retry_pages;
 	/*
-	 * Try to migrate split folios of fail-to-migrate large folios, no
-	 * nr_failed counting in this round, since all split folios of a
-	 * large folio is counted as 1 failure in the first round.
+	 * Try to migrate subpages of fail-to-migrate THPs, no nr_failed
+	 * counting in this round, since all subpages of a THP is counted
+	 * as 1 failure in the first round.
 	 */
-	if (!list_empty(&split_folios)) {
+	if (!list_empty(&thp_split_pages)) {
 		/*
-		 * Move non-migrated folios (after 10 retries) to ret_folios
+		 * Move non-migrated pages (after 10 retries) to ret_pages
 		 * to avoid migrating them again.
 		 */
-		list_splice_init(from, &ret_folios);
-		list_splice_init(&split_folios, from);
-		no_split_folio_counting = true;
+		list_splice_init(from, &ret_pages);
+		list_splice_init(&thp_split_pages, from);
+		no_subpage_counting = true;
 		retry = 1;
-		goto split_folio_migration;
+		goto thp_subpage_migration;
 	}
 
-	rc = nr_failed + nr_large_failed;
+	rc = nr_failed + nr_thp_failed;
 out:
 	/*
-	 * Put the permanent failure folio back to migration list, they
+	 * Put the permanent failure page back to migration list, they
 	 * will be put back to the right list by the caller.
 	 */
-	list_splice(&ret_folios, from);
+	list_splice(&ret_pages, from);
 
 	/*
-	 * Return 0 in case all split folios of fail-to-migrate large folios
-	 * are migrated successfully.
+	 * Return 0 in case all subpages of fail-to-migrate THPs are
+	 * migrated successfully.
 	 */
 	if (list_empty(from))
 		rc = 0;
@@ -1822,6 +1797,7 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 			 const int __user *nodes,
 			 int __user *status, int flags)
 {
+	compat_uptr_t __user *compat_pages = (void __user *)pages;
 	int current_node = NUMA_NO_NODE;
 	LIST_HEAD(pagelist);
 	int start, i;
@@ -1835,8 +1811,17 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 		int node;
 
 		err = -EFAULT;
-		if (get_user(p, pages + i))
-			goto out_flush;
+		if (in_compat_syscall()) {
+			compat_uptr_t cp;
+
+			if (get_user(cp, compat_pages + i))
+				goto out_flush;
+
+			p = compat_ptr(cp);
+		} else {
+			if (get_user(p, pages + i))
+				goto out_flush;
+		}
 		if (get_user(node, nodes + i))
 			goto out_flush;
 		addr = (unsigned long)untagged_addr(p);
@@ -1923,6 +1908,7 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 
 	for (i = 0; i < nr_pages; i++) {
 		unsigned long addr = (unsigned long)(*pages);
+		unsigned int foll_flags = FOLL_DUMP;
 		struct vm_area_struct *vma;
 		struct page *page;
 		int err = -EFAULT;
@@ -1931,8 +1917,12 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		if (!vma)
 			goto set_status;
 
+		/* Not all huge page follow APIs support 'FOLL_GET' */
+		if (!is_vm_hugetlb_page(vma))
+			foll_flags |= FOLL_GET;
+
 		/* FOLL_DUMP to ignore special (like zero) pages */
-		page = follow_page(vma, addr, FOLL_GET | FOLL_DUMP);
+		page = follow_page(vma, addr, foll_flags);
 
 		err = PTR_ERR(page);
 		if (IS_ERR(page))
@@ -1945,7 +1935,8 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		if (!is_zone_device_page(page))
 			err = page_to_nid(page);
 
-		put_page(page);
+		if (foll_flags & FOLL_GET)
+			put_page(page);
 set_status:
 		*status = err;
 

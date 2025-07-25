@@ -7,7 +7,6 @@
 
 #include <linux/bits.h>
 #include <linux/bitfield.h>
-#include <linux/clk.h>
 #include <linux/completion.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
@@ -89,7 +88,6 @@ struct hisi_i2c_controller {
 	struct i2c_adapter adapter;
 	void __iomem *iobase;
 	struct device *dev;
-	struct clk *clk;
 	int irq;
 
 	/* Intermediates for recording the transfer process */
@@ -316,12 +314,27 @@ static void hisi_i2c_xfer_msg(struct hisi_i2c_controller *ctlr)
 		    max_write == 0)
 			break;
 	}
+
+	/*
+	 * Disable the TX_EMPTY interrupt after finishing all the messages to
+	 * avoid overwhelming the CPU.
+	 */
+	if (ctlr->msg_tx_idx == ctlr->msg_num)
+		hisi_i2c_disable_int(ctlr, HISI_I2C_INT_TX_EMPTY);
 }
 
 static irqreturn_t hisi_i2c_irq(int irq, void *context)
 {
 	struct hisi_i2c_controller *ctlr = context;
 	u32 int_stat;
+
+	/*
+	 * Don't handle the interrupt if cltr->completion is NULL. We may
+	 * reach here because the interrupt is spurious or the transfer is
+	 * started by another port (e.g. firmware) rather than us.
+	 */
+	if (!ctlr->completion)
+		return IRQ_NONE;
 
 	int_stat = readl(ctlr->iobase + HISI_I2C_INT_MSTAT);
 	hisi_i2c_clear_int(ctlr, int_stat);
@@ -341,7 +354,11 @@ static irqreturn_t hisi_i2c_irq(int irq, void *context)
 		hisi_i2c_read_rx_fifo(ctlr);
 
 out:
-	if (int_stat & HISI_I2C_INT_TRANS_CPLT || ctlr->xfer_err) {
+	/*
+	 * Only use TRANS_CPLT to indicate the completion. On error cases we'll
+	 * get two interrupts, INT_ERR first then TRANS_CPLT.
+	 */
+	if (int_stat & HISI_I2C_INT_TRANS_CPLT) {
 		hisi_i2c_disable_int(ctlr, HISI_I2C_INT_ALL);
 		hisi_i2c_clear_int(ctlr, HISI_I2C_INT_ALL);
 		complete(ctlr->completion);
@@ -456,15 +473,10 @@ static int hisi_i2c_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	ctlr->clk = devm_clk_get_optional_enabled(&pdev->dev, NULL);
-	if (IS_ERR_OR_NULL(ctlr->clk)) {
-		ret = device_property_read_u64(dev, "clk_rate", &clk_rate_hz);
-		if (ret) {
-			dev_err(dev, "failed to get clock frequency, ret = %d\n", ret);
-			return ret;
-		}
-	} else {
-		clk_rate_hz = clk_get_rate(ctlr->clk);
+	ret = device_property_read_u64(dev, "clk_rate", &clk_rate_hz);
+	if (ret) {
+		dev_err(dev, "failed to get clock frequency, ret = %d\n", ret);
+		return ret;
 	}
 
 	ctlr->clk_rate_khz = DIV_ROUND_UP_ULL(clk_rate_hz, HZ_PER_KHZ);
@@ -496,18 +508,11 @@ static const struct acpi_device_id hisi_i2c_acpi_ids[] = {
 };
 MODULE_DEVICE_TABLE(acpi, hisi_i2c_acpi_ids);
 
-static const struct of_device_id hisi_i2c_dts_ids[] = {
-	{ .compatible = "hisilicon,ascend910-i2c", },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, hisi_i2c_dts_ids);
-
 static struct platform_driver hisi_i2c_driver = {
 	.probe		= hisi_i2c_probe,
 	.driver		= {
 		.name	= "hisi-i2c",
 		.acpi_match_table = hisi_i2c_acpi_ids,
-		.of_match_table = hisi_i2c_dts_ids,
 	},
 };
 module_platform_driver(hisi_i2c_driver);

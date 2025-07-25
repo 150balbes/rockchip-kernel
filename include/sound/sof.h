@@ -59,10 +59,22 @@ enum sof_ipc_type {
  * SOF Platform data.
  */
 struct snd_sof_pdata {
+	const struct firmware *fw;
 	const char *name;
 	const char *platform;
 
+	/*
+	 * PCI SSID. As PCI does not define 0 as invalid, the subsystem_id_set
+	 * flag indicates that a value has been written to these members.
+	 */
+	unsigned short subsystem_vendor;
+	unsigned short subsystem_device;
+	bool subsystem_id_set;
+
 	struct device *dev;
+
+	/* indicate how many first bytes shouldn't be loaded into DSP memory. */
+	size_t fw_offset;
 
 	/*
 	 * notification callback used if the hardware initialization
@@ -81,9 +93,6 @@ struct snd_sof_pdata {
 	const char *fw_filename;
 	const char *tplg_filename_prefix;
 	const char *tplg_filename;
-
-	/* loadable external libraries available under this directory */
-	const char *fw_lib_prefix;
 
 	/* machine */
 	struct platform_device *pdev_mach;
@@ -130,9 +139,8 @@ struct sof_dev_desc {
 	unsigned int ipc_supported_mask;
 	enum sof_ipc_type ipc_default;
 
-	/* defaults paths for firmware, library and topology files */
+	/* defaults paths for firmware and topology files */
 	const char *default_fw_path[SOF_IPC_TYPE_COUNT];
-	const char *default_lib_path[SOF_IPC_TYPE_COUNT];
 	const char *default_tplg_path[SOF_IPC_TYPE_COUNT];
 
 	/* default firmware name */

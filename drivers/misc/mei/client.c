@@ -322,7 +322,6 @@ void mei_io_cb_free(struct mei_cl_cb *cb)
 
 	list_del(&cb->list);
 	kfree(cb->buf.data);
-	kfree(cb->ext_hdr);
 	kfree(cb);
 }
 
@@ -402,7 +401,6 @@ static struct mei_cl_cb *mei_io_cb_init(struct mei_cl *cl,
 	cb->buf_idx = 0;
 	cb->fop_type = type;
 	cb->vtag = 0;
-	cb->ext_hdr = NULL;
 
 	return cb;
 }
@@ -1742,17 +1740,6 @@ static inline u8 mei_ext_hdr_set_vtag(void *ext, u8 vtag)
 	return vtag_hdr->hdr.length;
 }
 
-static inline bool mei_ext_hdr_is_gsc(struct mei_ext_hdr *ext)
-{
-	return ext && ext->type == MEI_EXT_HDR_GSC;
-}
-
-static inline u8 mei_ext_hdr_set_gsc(struct mei_ext_hdr *ext, struct mei_ext_hdr *gsc_hdr)
-{
-	memcpy(ext, gsc_hdr, mei_ext_hdr_len(gsc_hdr));
-	return ext->length;
-}
-
 /**
  * mei_msg_hdr_init - allocate and initialize mei message header
  *
@@ -1765,17 +1752,14 @@ static struct mei_msg_hdr *mei_msg_hdr_init(const struct mei_cl_cb *cb)
 	size_t hdr_len;
 	struct mei_ext_meta_hdr *meta;
 	struct mei_msg_hdr *mei_hdr;
-	bool is_ext, is_hbm, is_gsc, is_vtag;
-	struct mei_ext_hdr *next_ext;
+	bool is_ext, is_vtag;
 
 	if (!cb)
 		return ERR_PTR(-EINVAL);
 
 	/* Extended header for vtag is attached only on the first fragment */
 	is_vtag = (cb->vtag && cb->buf_idx == 0);
-	is_hbm = cb->cl->me_cl->client_id == 0;
-	is_gsc = ((!is_hbm) && cb->cl->dev->hbm_f_gsc_supported && mei_ext_hdr_is_gsc(cb->ext_hdr));
-	is_ext = is_vtag || is_gsc;
+	is_ext = is_vtag;
 
 	/* Compute extended header size */
 	hdr_len = sizeof(*mei_hdr);
@@ -1786,9 +1770,6 @@ static struct mei_msg_hdr *mei_msg_hdr_init(const struct mei_cl_cb *cb)
 	hdr_len += sizeof(*meta);
 	if (is_vtag)
 		hdr_len += sizeof(struct mei_ext_hdr_vtag);
-
-	if (is_gsc)
-		hdr_len += mei_ext_hdr_len(cb->ext_hdr);
 
 setup_hdr:
 	mei_hdr = kzalloc(hdr_len, GFP_KERNEL);
@@ -1804,20 +1785,10 @@ setup_hdr:
 		goto out;
 
 	meta = (struct mei_ext_meta_hdr *)mei_hdr->extension;
-	meta->size = 0;
-	next_ext = (struct mei_ext_hdr *)meta->hdrs;
 	if (is_vtag) {
 		meta->count++;
-		meta->size += mei_ext_hdr_set_vtag(next_ext, cb->vtag);
-		next_ext = mei_ext_next(next_ext);
+		meta->size += mei_ext_hdr_set_vtag(meta->hdrs, cb->vtag);
 	}
-
-	if (is_gsc) {
-		meta->count++;
-		meta->size += mei_ext_hdr_set_gsc(next_ext, cb->ext_hdr);
-		next_ext = mei_ext_next(next_ext);
-	}
-
 out:
 	mei_hdr->length = hdr_len - sizeof(*mei_hdr);
 	return mei_hdr;
@@ -1841,14 +1812,14 @@ int mei_cl_irq_write(struct mei_cl *cl, struct mei_cl_cb *cb,
 	struct mei_msg_hdr *mei_hdr = NULL;
 	size_t hdr_len;
 	size_t hbuf_len, dr_len;
-	size_t buf_len = 0;
+	size_t buf_len;
 	size_t data_len;
 	int hbuf_slots;
 	u32 dr_slots;
 	u32 dma_len;
 	int rets;
 	bool first_chunk;
-	const void *data = NULL;
+	const void *data;
 
 	if (WARN_ON(!cl || !cl->dev))
 		return -ENODEV;
@@ -1868,10 +1839,8 @@ int mei_cl_irq_write(struct mei_cl *cl, struct mei_cl_cb *cb,
 		return 0;
 	}
 
-	if (buf->data) {
-		buf_len = buf->size - cb->buf_idx;
-		data = buf->data + cb->buf_idx;
-	}
+	buf_len = buf->size - cb->buf_idx;
+	data = buf->data + cb->buf_idx;
 	hbuf_slots = mei_hbuf_empty_slots(dev);
 	if (hbuf_slots < 0) {
 		rets = -EOVERFLOW;
@@ -1888,6 +1857,9 @@ int mei_cl_irq_write(struct mei_cl *cl, struct mei_cl_cb *cb,
 		mei_hdr = NULL;
 		goto err;
 	}
+
+	cl_dbg(dev, cl, "Extended Header %d vtag = %d\n",
+	       mei_hdr->extended, cb->vtag);
 
 	hdr_len = sizeof(*mei_hdr) + mei_hdr->length;
 
@@ -1917,7 +1889,7 @@ int mei_cl_irq_write(struct mei_cl *cl, struct mei_cl_cb *cb,
 	}
 	mei_hdr->length += data_len;
 
-	if (mei_hdr->dma_ring && buf->data)
+	if (mei_hdr->dma_ring)
 		mei_dma_ring_write(dev, buf->data + cb->buf_idx, buf_len);
 	rets = mei_write_message(dev, mei_hdr, hdr_len, data, data_len);
 
@@ -1954,13 +1926,10 @@ err:
  *
  * @cl: host client
  * @cb: write callback with filled data
- * @timeout: send timeout in milliseconds.
- *           effective only for blocking writes: the cb->blocking is set.
- *           set timeout to the MAX_SCHEDULE_TIMEOUT to maixum allowed wait.
  *
  * Return: number of bytes sent on success, <0 on failure.
  */
-ssize_t mei_cl_write(struct mei_cl *cl, struct mei_cl_cb *cb, unsigned long timeout)
+ssize_t mei_cl_write(struct mei_cl *cl, struct mei_cl_cb *cb)
 {
 	struct mei_device *dev;
 	struct mei_msg_data *buf;
@@ -2009,10 +1978,13 @@ ssize_t mei_cl_write(struct mei_cl *cl, struct mei_cl_cb *cb, unsigned long time
 
 	mei_hdr = mei_msg_hdr_init(cb);
 	if (IS_ERR(mei_hdr)) {
-		rets = -PTR_ERR(mei_hdr);
+		rets = PTR_ERR(mei_hdr);
 		mei_hdr = NULL;
 		goto err;
 	}
+
+	cl_dbg(dev, cl, "Extended Header %d vtag = %d\n",
+	       mei_hdr->extended, cb->vtag);
 
 	hdr_len = sizeof(*mei_hdr) + mei_hdr->length;
 
@@ -2030,7 +2002,7 @@ ssize_t mei_cl_write(struct mei_cl *cl, struct mei_cl_cb *cb, unsigned long time
 
 	hbuf_slots = mei_hbuf_empty_slots(dev);
 	if (hbuf_slots < 0) {
-		rets = -EOVERFLOW;
+		buf_len = -EOVERFLOW;
 		goto out;
 	}
 
@@ -2058,7 +2030,7 @@ ssize_t mei_cl_write(struct mei_cl *cl, struct mei_cl_cb *cb, unsigned long time
 
 	mei_hdr->length += data_len;
 
-	if (mei_hdr->dma_ring && buf->data)
+	if (mei_hdr->dma_ring)
 		mei_dma_ring_write(dev, buf->data, buf_len);
 	rets = mei_write_message(dev, mei_hdr, hdr_len, data, data_len);
 
@@ -2084,20 +2056,11 @@ out:
 	if (blocking && cl->writing_state != MEI_WRITE_COMPLETE) {
 
 		mutex_unlock(&dev->device_lock);
-		rets = wait_event_interruptible_timeout(cl->tx_wait,
-							cl->writing_state == MEI_WRITE_COMPLETE ||
-							(!mei_cl_is_connected(cl)),
-							msecs_to_jiffies(timeout));
+		rets = wait_event_interruptible(cl->tx_wait,
+				cl->writing_state == MEI_WRITE_COMPLETE ||
+				(!mei_cl_is_connected(cl)));
 		mutex_lock(&dev->device_lock);
-		/* clean all queue on timeout as something fatal happened */
-		if (rets == 0) {
-			rets = -ETIME;
-			mei_io_tx_list_free_cl(&dev->write_list, cl, NULL);
-			mei_io_tx_list_free_cl(&dev->write_waiting_list, cl, NULL);
-		}
 		/* wait_event_interruptible returns -ERESTARTSYS */
-		if (rets > 0)
-			rets = 0;
 		if (rets) {
 			if (signal_pending(current))
 				rets = -EINTR;

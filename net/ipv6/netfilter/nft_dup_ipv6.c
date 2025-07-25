@@ -50,8 +50,7 @@ static int nft_dup_ipv6_init(const struct nft_ctx *ctx,
 	return err;
 }
 
-static int nft_dup_ipv6_dump(struct sk_buff *skb,
-			     const struct nft_expr *expr, bool reset)
+static int nft_dup_ipv6_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	struct nft_dup_ipv6 *priv = nft_expr_priv(expr);
 

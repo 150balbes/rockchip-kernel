@@ -440,9 +440,10 @@ struct dvb_frontend * mt2060_attach(struct dvb_frontend *fe, struct i2c_adapter 
 
 	return fe;
 }
-EXPORT_SYMBOL(mt2060_attach);
+EXPORT_SYMBOL_GPL(mt2060_attach);
 
-static int mt2060_probe(struct i2c_client *client)
+static int mt2060_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct mt2060_platform_data *pdata = client->dev.platform_data;
 	struct dvb_frontend *fe;
@@ -524,7 +525,7 @@ static struct i2c_driver mt2060_driver = {
 		.name = "mt2060",
 		.suppress_bind_attrs = true,
 	},
-	.probe_new	= mt2060_probe,
+	.probe		= mt2060_probe,
 	.remove		= mt2060_remove,
 	.id_table	= mt2060_id_table,
 };

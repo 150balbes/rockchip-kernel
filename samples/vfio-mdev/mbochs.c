@@ -594,6 +594,7 @@ static void mbochs_release_dev(struct vfio_device *vdev)
 	atomic_add(mdev_state->type->mbytes, &mbochs_avail_mbytes);
 	kfree(mdev_state->pages);
 	kfree(mdev_state->vconfig);
+	vfio_free_device(vdev);
 }
 
 static void mbochs_remove(struct mdev_device *mdev)
@@ -1430,7 +1431,7 @@ static int __init mbochs_dev_init(void)
 
 	ret = device_register(&mbochs_dev);
 	if (ret)
-		goto err_put;
+		goto err_class;
 
 	ret = mdev_register_parent(&mbochs_parent, &mbochs_dev, &mbochs_driver,
 				   mbochs_mdev_types,
@@ -1441,9 +1442,8 @@ static int __init mbochs_dev_init(void)
 	return 0;
 
 err_device:
-	device_del(&mbochs_dev);
-err_put:
-	put_device(&mbochs_dev);
+	device_unregister(&mbochs_dev);
+err_class:
 	class_destroy(mbochs_class);
 err_driver:
 	mdev_unregister_driver(&mbochs_driver);

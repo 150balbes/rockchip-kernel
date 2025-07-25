@@ -18,8 +18,9 @@ then
 	exit 1
 fi
 
-T="`mktemp -d ${TMPDIR-/tmp}/kvm-end-run-stats.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/kvm-end-run-stats.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
 RCUTORTURE="`pwd`/tools/testing/selftests/rcutorture"; export RCUTORTURE
 PATH=${RCUTORTURE}/bin:$PATH; export PATH

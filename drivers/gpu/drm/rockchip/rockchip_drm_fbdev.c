@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
+ * Copyright (C) Rockchip Electronics Co., Ltd.
  * Author:Mark Yao <mark.yao@rock-chips.com>
  */
 
@@ -22,7 +22,7 @@ static int rockchip_fbdev_mmap(struct fb_info *info,
 	struct drm_fb_helper *helper = info->par;
 	struct rockchip_drm_private *private = helper->dev->dev_private;
 
-	return rockchip_gem_mmap_buf(private->fbdev_bo, vma);
+	return drm_gem_mmap_obj(private->fbdev_bo, private->fbdev_bo->size, vma);
 }
 
 static const struct fb_ops rockchip_drm_fbdev_ops = {
@@ -64,7 +64,7 @@ static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 
 	private->fbdev_bo = &rk_obj->base;
 
-	fbi = drm_fb_helper_alloc_info(helper);
+	fbi = drm_fb_helper_alloc_fbi(helper);
 	if (IS_ERR(fbi)) {
 		DRM_DEV_ERROR(dev->dev, "Failed to create framebuffer info.\n");
 		ret = PTR_ERR(fbi);
@@ -88,6 +88,7 @@ static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 	offset = fbi->var.xoffset * bytes_per_pixel;
 	offset += fbi->var.yoffset * fb->pitches[0];
 
+	dev->mode_config.fb_base = 0;
 	fbi->screen_base = rk_obj->kvaddr + offset;
 	fbi->screen_size = rk_obj->base.size;
 	fbi->fix.smem_len = rk_obj->base.size;
@@ -155,7 +156,7 @@ void rockchip_drm_fbdev_fini(struct drm_device *dev)
 	if (!helper)
 		return;
 
-	drm_fb_helper_unregister_info(helper);
+	drm_fb_helper_unregister_fbi(helper);
 
 	if (helper->fb)
 		drm_framebuffer_put(helper->fb);

@@ -22,7 +22,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&button_backlight_default>;
 
-		led-keypad-backlight {
+		button-backlight {
 			gpios = <&pmi8998_gpio 5 GPIO_ACTIVE_HIGH>;
 			color = <LED_COLOR_ID_WHITE>;
 			function = LED_FUNCTION_KBD_BACKLIGHT;
@@ -33,9 +33,11 @@
 
 &pmi8998_gpio {
 	button_backlight_default: button-backlight-state {
-		pins = "gpio5";
-		function = "gpio";
-		bias-pull-down;
-		qcom,drive-strength = <PMIC_GPIO_STRENGTH_NO>;
+		pinconf {
+			pins = "gpio5";
+			function = "normal";
+			bias-pull-down;
+			qcom,drive-strength = <PMIC_GPIO_STRENGTH_NO>;
+		};
 	};
 };

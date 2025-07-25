@@ -17,19 +17,19 @@
 		compatible = "gpio-leds";
 		pinctrl-names = "default";
 		pinctrl-0 = <&led_pins>;
-		led-gpio148 {
+		gpio148 {
 			label = "overo:red:gpio148";
 			gpios = <&gpio5 20 GPIO_ACTIVE_HIGH>;		/* gpio 148 */
 		};
-		led-gpio150 {
+		gpio150 {
 			label = "overo:yellow:gpio150";
 			gpios = <&gpio5 22 GPIO_ACTIVE_HIGH>;		/* gpio 150 */
 		};
-		led-gpio151 {
+		gpio151 {
 			label = "overo:blue:gpio151";
 			gpios = <&gpio5 23 GPIO_ACTIVE_HIGH>;		/* gpio 151 */
 		};
-		led-gpio170 {
+		gpio170 {
 			label = "overo:green:gpio170";
 			gpios = <&gpio6 10 GPIO_ACTIVE_HIGH>;		/* gpio 170 */
 		};

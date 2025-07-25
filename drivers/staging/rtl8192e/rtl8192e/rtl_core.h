@@ -234,6 +234,15 @@ struct rt_stats {
 	u32	CurrentShowTxate;
 };
 
+struct channel_access_setting {
+	u16 SIFS_Timer;
+	u16 DIFS_Timer;
+	u16 SlotTimeTimer;
+	u16 EIFS_Timer;
+	u16 CWminIndex;
+	u16 CWmaxIndex;
+};
+
 struct init_gain {
 	u8	xaagccore1;
 	u8	xbagccore1;
@@ -300,7 +309,9 @@ struct r8192_priv {
 
 	bool		bfirst_init;
 	bool		bfirst_after_down;
+	bool		initialized_at_probe;
 	bool		being_init_adapter;
+	bool		bDriverIsGoingToUnload;
 
 	int		irq;
 	short	irq_enabled;
@@ -312,10 +323,15 @@ struct r8192_priv {
 	struct delayed_work		txpower_tracking_wq;
 	struct delayed_work		rfpath_check_wq;
 	struct delayed_work		gpio_change_rf_wq;
+
+	struct channel_access_setting ChannelAccessSetting;
+
 	struct rtl819x_ops			*ops;
 	struct rtllib_device			*rtllib;
 
 	struct work_struct				reset_wq;
+
+	struct log_int_8190 InterruptLog;
 
 	enum rt_customer_id CustomerID;
 
@@ -324,6 +340,8 @@ struct r8192_priv {
 	enum ht_channel_width CurrentChannelBW;
 	struct bb_reg_definition PHYRegDef[4];
 	struct rate_adaptive rate_adaptive;
+
+	enum acm_method AcmMethod;
 
 	struct rt_firmware			*pFirmware;
 	enum rtl819x_loopback LoopbackMode;
@@ -392,6 +410,8 @@ struct r8192_priv {
 	short	chan;
 	short	sens;
 	short	max_sens;
+
+	u8 ScanDelay;
 	bool ps_force;
 
 	u32 irq_mask[2];
@@ -450,9 +470,13 @@ struct r8192_priv {
 
 	bool bTXPowerDataReadFromEEPORM;
 
-	u16 reg_chnl_plan;
+	u16 RegChannelPlan;
 	u16 ChannelPlan;
-	u8 hw_rf_off_action;
+
+	bool RegRfOff;
+	bool isRFOff;
+	bool bInPowerSaveMode;
+	u8 bHwRfOffAction;
 
 	bool rf_change_in_progress;
 	bool SetRFPowerStateInProgress;
@@ -466,7 +490,7 @@ struct r8192_priv {
 	u8 CCKPresentAttentuation_20Mdefault;
 	u8 CCKPresentAttentuation_40Mdefault;
 	s8 CCKPresentAttentuation_difference;
-	s8 cck_present_attn;
+	s8 CCKPresentAttentuation;
 	long undecorated_smoothed_pwdb;
 
 	u32 MCSTxPowerLevelOriginalOffset[6];
@@ -519,9 +543,11 @@ struct r8192_priv {
 
 	u32		reset_count;
 
-	enum reset_type rst_progress;
+	enum reset_type ResetProgress;
+	bool		bForcedSilentReset;
+	bool		bDisableNormalResetCheck;
 	u16		TxCounter;
-	u16		rx_ctr;
+	u16		RxCounter;
 	bool		bResetInProgress;
 	bool		force_reset;
 	bool		force_lps;

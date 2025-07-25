@@ -18,16 +18,18 @@
 
 static int fsm_io_helper(struct vfio_ccw_private *private)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch;
 	union orb *orb;
 	int ccode;
 	__u8 lpm;
 	unsigned long flags;
 	int ret;
 
+	sch = private->sch;
+
 	spin_lock_irqsave(sch->lock, flags);
 
-	orb = cp_get_orb(&private->cp, (u32)virt_to_phys(sch), sch->lpm);
+	orb = cp_get_orb(&private->cp, (u32)(addr_t)sch, sch->lpm);
 	if (!orb) {
 		ret = -EIO;
 		goto out;
@@ -78,10 +80,12 @@ out:
 
 static int fsm_do_halt(struct vfio_ccw_private *private)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch;
 	unsigned long flags;
 	int ccode;
 	int ret;
+
+	sch = private->sch;
 
 	spin_lock_irqsave(sch->lock, flags);
 
@@ -117,10 +121,12 @@ static int fsm_do_halt(struct vfio_ccw_private *private)
 
 static int fsm_do_clear(struct vfio_ccw_private *private)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch;
 	unsigned long flags;
 	int ccode;
 	int ret;
+
+	sch = private->sch;
 
 	spin_lock_irqsave(sch->lock, flags);
 
@@ -154,7 +160,7 @@ static int fsm_do_clear(struct vfio_ccw_private *private)
 static void fsm_notoper(struct vfio_ccw_private *private,
 			enum vfio_ccw_event event)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch = private->sch;
 
 	VFIO_CCW_MSG_EVENT(2, "sch %x.%x.%04x: notoper event %x state %x\n",
 			   sch->schid.cssid,
@@ -222,7 +228,7 @@ static void fsm_async_retry(struct vfio_ccw_private *private,
 static void fsm_disabled_irq(struct vfio_ccw_private *private,
 			     enum vfio_ccw_event event)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch = private->sch;
 
 	/*
 	 * An interrupt in a disabled state means a previous disable was not
@@ -232,9 +238,7 @@ static void fsm_disabled_irq(struct vfio_ccw_private *private,
 }
 inline struct subchannel_id get_schid(struct vfio_ccw_private *p)
 {
-	struct subchannel *sch = to_subchannel(p->vdev.dev->parent);
-
-	return sch->schid;
+	return p->sch->schid;
 }
 
 /*
@@ -356,11 +360,10 @@ static void fsm_async_request(struct vfio_ccw_private *private,
 static void fsm_irq(struct vfio_ccw_private *private,
 		    enum vfio_ccw_event event)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
 	struct irb *irb = this_cpu_ptr(&cio_irb);
 
 	VFIO_CCW_TRACE_EVENT(6, "IRQ");
-	VFIO_CCW_TRACE_EVENT(6, dev_name(&sch->dev));
+	VFIO_CCW_TRACE_EVENT(6, dev_name(&private->sch->dev));
 
 	memcpy(&private->irb, irb, sizeof(*irb));
 
@@ -373,7 +376,7 @@ static void fsm_irq(struct vfio_ccw_private *private,
 static void fsm_open(struct vfio_ccw_private *private,
 		     enum vfio_ccw_event event)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch = private->sch;
 	int ret;
 
 	spin_lock_irq(sch->lock);
@@ -394,7 +397,7 @@ err_unlock:
 static void fsm_close(struct vfio_ccw_private *private,
 		      enum vfio_ccw_event event)
 {
-	struct subchannel *sch = to_subchannel(private->vdev.dev->parent);
+	struct subchannel *sch = private->sch;
 	int ret;
 
 	spin_lock_irq(sch->lock);

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2020-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2020-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -23,98 +23,15 @@
 #define _UAPI_BASE_CSF_KERNEL_H_
 
 #include <linux/types.h>
+#include "../mali_base_common_kernel.h"
 
-/* Memory allocation, access/hint flags.
+/* Memory allocation, access/hint flags & mask specific to CSF GPU.
  *
  * See base_mem_alloc_flags.
  */
 
-/* IN */
-/* Read access CPU side
- */
-#define BASE_MEM_PROT_CPU_RD ((base_mem_alloc_flags)1 << 0)
-
-/* Write access CPU side
- */
-#define BASE_MEM_PROT_CPU_WR ((base_mem_alloc_flags)1 << 1)
-
-/* Read access GPU side
- */
-#define BASE_MEM_PROT_GPU_RD ((base_mem_alloc_flags)1 << 2)
-
-/* Write access GPU side
- */
-#define BASE_MEM_PROT_GPU_WR ((base_mem_alloc_flags)1 << 3)
-
-/* Execute allowed on the GPU side
- */
-#define BASE_MEM_PROT_GPU_EX ((base_mem_alloc_flags)1 << 4)
-
-/* Will be permanently mapped in kernel space.
- * Flag is only allowed on allocations originating from kbase.
- */
-#define BASEP_MEM_PERMANENT_KERNEL_MAPPING ((base_mem_alloc_flags)1 << 5)
-
-/* The allocation will completely reside within the same 4GB chunk in the GPU
- * virtual space.
- * Since this flag is primarily required only for the TLS memory which will
- * not be used to contain executable code and also not used for Tiler heap,
- * it can't be used along with BASE_MEM_PROT_GPU_EX and TILER_ALIGN_TOP flags.
- */
-#define BASE_MEM_GPU_VA_SAME_4GB_PAGE ((base_mem_alloc_flags)1 << 6)
-
-/* Userspace is not allowed to free this memory.
- * Flag is only allowed on allocations originating from kbase.
- */
-#define BASEP_MEM_NO_USER_FREE ((base_mem_alloc_flags)1 << 7)
-
 /* Must be FIXED memory. */
 #define BASE_MEM_FIXED ((base_mem_alloc_flags)1 << 8)
-
-/* Grow backing store on GPU Page Fault
- */
-#define BASE_MEM_GROW_ON_GPF ((base_mem_alloc_flags)1 << 9)
-
-/* Page coherence Outer shareable, if available
- */
-#define BASE_MEM_COHERENT_SYSTEM ((base_mem_alloc_flags)1 << 10)
-
-/* Page coherence Inner shareable
- */
-#define BASE_MEM_COHERENT_LOCAL ((base_mem_alloc_flags)1 << 11)
-
-/* IN/OUT */
-/* Should be cached on the CPU, returned if actually cached
- */
-#define BASE_MEM_CACHED_CPU ((base_mem_alloc_flags)1 << 12)
-
-/* IN/OUT */
-/* Must have same VA on both the GPU and the CPU
- */
-#define BASE_MEM_SAME_VA ((base_mem_alloc_flags)1 << 13)
-
-/* OUT */
-/* Must call mmap to acquire a GPU address for the alloc
- */
-#define BASE_MEM_NEED_MMAP ((base_mem_alloc_flags)1 << 14)
-
-/* IN */
-/* Page coherence Outer shareable, required.
- */
-#define BASE_MEM_COHERENT_SYSTEM_REQUIRED ((base_mem_alloc_flags)1 << 15)
-
-/* Protected memory
- */
-#define BASE_MEM_PROTECTED ((base_mem_alloc_flags)1 << 16)
-
-/* Not needed physical memory
- */
-#define BASE_MEM_DONT_NEED ((base_mem_alloc_flags)1 << 17)
-
-/* Must use shared CPU/GPU zone (SAME_VA zone) but doesn't require the
- * addresses to be the same
- */
-#define BASE_MEM_IMPORT_SHARED ((base_mem_alloc_flags)1 << 18)
 
 /* CSF event memory
  *
@@ -129,109 +46,49 @@
  */
 #define BASE_MEM_CSF_EVENT ((base_mem_alloc_flags)1 << 19)
 
-#define BASE_MEM_RESERVED_BIT_20 ((base_mem_alloc_flags)1 << 20)
+/* Unused bit for CSF, only used in JM for BASE_MEM_TILER_ALIGN_TOP */
+#define BASE_MEM_UNUSED_BIT_20 ((base_mem_alloc_flags)1 << 20)
 
-/* Should be uncached on the GPU, will work only for GPUs using AARCH64 mmu
- * mode. Some components within the GPU might only be able to access memory
- * that is GPU cacheable. Refer to the specific GPU implementation for more
- * details. The 3 shareability flags will be ignored for GPU uncached memory.
- * If used while importing USER_BUFFER type memory, then the import will fail
- * if the memory is not aligned to GPU and CPU cache line width.
- */
-#define BASE_MEM_UNCACHED_GPU ((base_mem_alloc_flags)1 << 21)
-
-/*
- * Bits [22:25] for group_id (0~15).
- *
- * base_mem_group_id_set() should be used to pack a memory group ID into a
- * base_mem_alloc_flags value instead of accessing the bits directly.
- * base_mem_group_id_get() should be used to extract the memory group ID from
- * a base_mem_alloc_flags value.
- */
-#define BASEP_MEM_GROUP_ID_SHIFT 22
-#define BASE_MEM_GROUP_ID_MASK \
-	((base_mem_alloc_flags)0xF << BASEP_MEM_GROUP_ID_SHIFT)
-
-/* Must do CPU cache maintenance when imported memory is mapped/unmapped
- * on GPU. Currently applicable to dma-buf type only.
- */
-#define BASE_MEM_IMPORT_SYNC_ON_MAP_UNMAP ((base_mem_alloc_flags)1 << 26)
-
-/* OUT */
-/* Kernel side cache sync ops required */
-#define BASE_MEM_KERNEL_SYNC ((base_mem_alloc_flags)1 << 28)
+/* Unused bit for CSF, only used in JM for BASE_MEM_FLAG_MAP_FIXED */
+#define BASE_MEM_UNUSED_BIT_27 ((base_mem_alloc_flags)1 << 27)
 
 /* Must be FIXABLE memory: its GPU VA will be determined at a later point,
  * at which time it will be at a fixed GPU VA.
  */
 #define BASE_MEM_FIXABLE ((base_mem_alloc_flags)1 << 29)
 
-/* Number of bits used as flags for base memory management
- *
- * Must be kept in sync with the base_mem_alloc_flags flags
+/* Note that the number of bits used for base_mem_alloc_flags
+ * must be less than BASE_MEM_FLAGS_NR_BITS !!!
  */
-#define BASE_MEM_FLAGS_NR_BITS 30
 
-/* A mask of all the flags which are only valid for allocations within kbase,
- * and may not be passed from user space.
+/* A mask of all the flags which are only valid within kbase,
+ * and may not be passed to/from user space.
  */
-#define BASEP_MEM_FLAGS_KERNEL_ONLY \
-	(BASEP_MEM_PERMANENT_KERNEL_MAPPING | BASEP_MEM_NO_USER_FREE)
+#define BASEP_MEM_FLAGS_KERNEL_ONLY (BASEP_MEM_PERMANENT_KERNEL_MAPPING | BASEP_MEM_NO_USER_FREE)
 
-/* A mask for all output bits, excluding IN/OUT bits.
+/* A mask of flags that, when provied, cause other flags to be
+ * enabled but are not enabled themselves
  */
-#define BASE_MEM_FLAGS_OUTPUT_MASK BASE_MEM_NEED_MMAP
+#define BASE_MEM_FLAGS_ACTION_MODIFIERS (BASE_MEM_COHERENT_SYSTEM_REQUIRED | BASE_MEM_IMPORT_SHARED)
 
-/* A mask for all input bits, including IN/OUT bits.
+/* A mask of all currently reserved flags */
+#define BASE_MEM_FLAGS_RESERVED ((base_mem_alloc_flags)0)
+
+/* A mask of all bits that are not used by a flag on CSF */
+#define BASE_MEM_FLAGS_UNUSED (BASE_MEM_UNUSED_BIT_20 | BASE_MEM_UNUSED_BIT_27)
+
+/* Special base mem handles specific to CSF.
  */
-#define BASE_MEM_FLAGS_INPUT_MASK \
-	(((1 << BASE_MEM_FLAGS_NR_BITS) - 1) & ~BASE_MEM_FLAGS_OUTPUT_MASK)
-
-/* A mask of all currently reserved flags
- */
-#define BASE_MEM_FLAGS_RESERVED BASE_MEM_RESERVED_BIT_20
-
-#define BASEP_MEM_INVALID_HANDLE (0ul)
-#define BASE_MEM_MMU_DUMP_HANDLE (1ul << LOCAL_PAGE_SHIFT)
-#define BASE_MEM_TRACE_BUFFER_HANDLE (2ul << LOCAL_PAGE_SHIFT)
-#define BASE_MEM_MAP_TRACKING_HANDLE (3ul << LOCAL_PAGE_SHIFT)
-#define BASEP_MEM_WRITE_ALLOC_PAGES_HANDLE (4ul << LOCAL_PAGE_SHIFT)
-/* reserved handles ..-47<<PAGE_SHIFT> for future special handles */
 #define BASEP_MEM_CSF_USER_REG_PAGE_HANDLE (47ul << LOCAL_PAGE_SHIFT)
 #define BASEP_MEM_CSF_USER_IO_PAGES_HANDLE (48ul << LOCAL_PAGE_SHIFT)
-#define BASE_MEM_COOKIE_BASE (64ul << LOCAL_PAGE_SHIFT)
-#define BASE_MEM_FIRST_FREE_ADDRESS                                            \
-	((BITS_PER_LONG << LOCAL_PAGE_SHIFT) + BASE_MEM_COOKIE_BASE)
 
 #define KBASE_CSF_NUM_USER_IO_PAGES_HANDLE \
-	((BASE_MEM_COOKIE_BASE - BASEP_MEM_CSF_USER_IO_PAGES_HANDLE) >> \
-	 LOCAL_PAGE_SHIFT)
+	((BASE_MEM_COOKIE_BASE - BASEP_MEM_CSF_USER_IO_PAGES_HANDLE) >> LOCAL_PAGE_SHIFT)
 
 /* Valid set of just-in-time memory allocation flags */
 #define BASE_JIT_ALLOC_VALID_FLAGS ((__u8)0)
 
-/* Flags to pass to ::base_context_init.
- * Flags can be ORed together to enable multiple things.
- *
- * These share the same space as BASEP_CONTEXT_FLAG_*, and so must
- * not collide with them.
- */
-typedef __u32 base_context_create_flags;
-
-/* No flags set */
-#define BASE_CONTEXT_CREATE_FLAG_NONE ((base_context_create_flags)0)
-
-/* Base context is embedded in a cctx object (flag used for CINSTR
- * software counter macros)
- */
-#define BASE_CONTEXT_CCTX_EMBEDDED ((base_context_create_flags)1 << 0)
-
-/* Base context is a 'System Monitor' context for Hardware counters.
- *
- * One important side effect of this is that job submission is disabled.
- */
-#define BASE_CONTEXT_SYSTEM_MONITOR_SUBMIT_DISABLED \
-	((base_context_create_flags)1 << 1)
+/* flags for base context specific to CSF */
 
 /* Base context creates a CSF event notification thread.
  *
@@ -240,50 +97,24 @@ typedef __u32 base_context_create_flags;
  */
 #define BASE_CONTEXT_CSF_EVENT_THREAD ((base_context_create_flags)1 << 2)
 
-/* Bit-shift used to encode a memory group ID in base_context_create_flags
- */
-#define BASEP_CONTEXT_MMU_GROUP_ID_SHIFT (3)
-
-/* Bitmask used to encode a memory group ID in base_context_create_flags
- */
-#define BASEP_CONTEXT_MMU_GROUP_ID_MASK \
-	((base_context_create_flags)0xF << BASEP_CONTEXT_MMU_GROUP_ID_SHIFT)
-
-/* Bitpattern describing the base_context_create_flags that can be
- * passed to the kernel
- */
-#define BASEP_CONTEXT_CREATE_KERNEL_FLAGS \
-	(BASE_CONTEXT_SYSTEM_MONITOR_SUBMIT_DISABLED | \
-	 BASEP_CONTEXT_MMU_GROUP_ID_MASK)
-
 /* Bitpattern describing the ::base_context_create_flags that can be
  * passed to base_context_init()
  */
-#define BASEP_CONTEXT_CREATE_ALLOWED_FLAGS \
-	(BASE_CONTEXT_CCTX_EMBEDDED | \
-	 BASE_CONTEXT_CSF_EVENT_THREAD | \
+#define BASEP_CONTEXT_CREATE_ALLOWED_FLAGS                            \
+	(BASE_CONTEXT_CCTX_EMBEDDED | BASE_CONTEXT_CSF_EVENT_THREAD | \
 	 BASEP_CONTEXT_CREATE_KERNEL_FLAGS)
 
-/* Enable additional tracepoints for latency measurements (TL_ATOM_READY,
- * TL_ATOM_DONE, TL_ATOM_PRIO_CHANGE, TL_ATOM_EVENT_POST)
- */
-#define BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS (1 << 0)
-
-/* Indicate that job dumping is enabled. This could affect certain timers
- * to account for the performance impact.
- */
-#define BASE_TLSTREAM_JOB_DUMPING_ENABLED (1 << 1)
+/* Flags for base tracepoint specific to CSF */
 
 /* Enable KBase tracepoints for CSF builds */
-#define BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS (1 << 2)
+#define BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS (1U << 2)
 
 /* Enable additional CSF Firmware side tracepoints */
-#define BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS (1 << 3)
+#define BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS (1U << 3)
 
-#define BASE_TLSTREAM_FLAGS_MASK (BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS | \
-		BASE_TLSTREAM_JOB_DUMPING_ENABLED | \
-		BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS | \
-		BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS)
+#define BASE_TLSTREAM_FLAGS_MASK                                                        \
+	(BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS | BASE_TLSTREAM_JOB_DUMPING_ENABLED | \
+	 BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS | BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS)
 
 /* Number of pages mapped into the process address space for a bound GPU
  * command queue. A pair of input/output pages and a Hw doorbell page
@@ -293,9 +124,21 @@ typedef __u32 base_context_create_flags;
 
 #define BASE_QUEUE_MAX_PRIORITY (15U)
 
-/* CQS Sync object is an array of __u32 event_mem[2], error field index is 1 */
-#define BASEP_EVENT_VAL_INDEX (0U)
-#define BASEP_EVENT_ERR_INDEX (1U)
+/* Sync32 object fields definition */
+#define BASEP_EVENT32_VAL_OFFSET (0U)
+#define BASEP_EVENT32_ERR_OFFSET (4U)
+#define BASEP_EVENT32_SIZE_BYTES (8U)
+
+/* Sync64 object fields definition */
+#define BASEP_EVENT64_VAL_OFFSET (0U)
+#define BASEP_EVENT64_ERR_OFFSET (8U)
+#define BASEP_EVENT64_SIZE_BYTES (16U)
+
+/* Sync32 object alignment, equal to its size */
+#define BASEP_EVENT32_ALIGN_BYTES (8U)
+
+/* Sync64 object alignment, equal to its size */
+#define BASEP_EVENT64_ALIGN_BYTES (16U)
 
 /* The upper limit for number of objects that could be waited/set per command.
  * This limit is now enforced as internally the error inherit inputs are
@@ -303,6 +146,13 @@ typedef __u32 base_context_create_flags;
  * field.
  */
 #define BASEP_KCPU_CQS_MAX_NUM_OBJS ((size_t)32)
+
+/* CSF CSI EXCEPTION_HANDLER_FLAGS */
+#define BASE_CSF_TILER_OOM_EXCEPTION_FLAG (1u << 0)
+#define BASE_CSF_EXCEPTION_HANDLER_FLAGS_MASK (BASE_CSF_TILER_OOM_EXCEPTION_FLAG)
+
+/* Initial value for LATEST_FLUSH register */
+#define POWER_DOWN_LATEST_FLUSH_VALUE ((__u32)1)
 
 /**
  * enum base_kcpu_command_type - Kernel CPU queue command type.
@@ -318,7 +168,7 @@ typedef __u32 base_context_create_flags;
  * @BASE_KCPU_COMMAND_TYPE_JIT_ALLOC:          jit_alloc,
  * @BASE_KCPU_COMMAND_TYPE_JIT_FREE:           jit_free,
  * @BASE_KCPU_COMMAND_TYPE_GROUP_SUSPEND:      group_suspend,
- * @BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER:      error_barrier,
+ * @BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER:      error_barrier
  */
 enum base_kcpu_command_type {
 	BASE_KCPU_COMMAND_TYPE_FENCE_SIGNAL,
@@ -635,7 +485,26 @@ struct base_gpu_queue_error_fatal_payload {
 };
 
 /**
- * enum base_gpu_queue_group_error_type - GPU Fatal error type.
+ * struct base_gpu_queue_error_fault_payload - Recoverable fault
+ *        error information related to GPU command queue.
+ *
+ * @sideband:     Additional information about this recoverable fault.
+ * @status:       Recoverable fault information.
+ *                This consists of exception type (least significant byte) and
+ *                data (remaining bytes). One example of exception type is
+ *                INSTR_INVALID_PC (0x50).
+ * @csi_index:    Index of the CSF interface the queue is bound to.
+ * @padding:      Padding to make multiple of 64bits
+ */
+struct base_gpu_queue_error_fault_payload {
+	__u64 sideband;
+	__u32 status;
+	__u8 csi_index;
+	__u8 padding[3];
+};
+
+/**
+ * enum base_gpu_queue_group_error_type - GPU error type.
  *
  * @BASE_GPU_QUEUE_GROUP_ERROR_FATAL:       Fatal error associated with GPU
  *                                          command queue group.
@@ -645,7 +514,9 @@ struct base_gpu_queue_error_fatal_payload {
  *                                          progress timeout.
  * @BASE_GPU_QUEUE_GROUP_ERROR_TILER_HEAP_OOM: Fatal error due to running out
  *                                             of tiler heap memory.
- * @BASE_GPU_QUEUE_GROUP_ERROR_FATAL_COUNT: The number of fatal error types
+ * @BASE_GPU_QUEUE_GROUP_QUEUE_ERROR_FAULT: Fault error associated with GPU
+ *                                          command queue.
+ * @BASE_GPU_QUEUE_GROUP_ERROR_FATAL_COUNT: The number of GPU error types
  *
  * This type is used for &struct_base_gpu_queue_group_error.error_type.
  */
@@ -654,6 +525,7 @@ enum base_gpu_queue_group_error_type {
 	BASE_GPU_QUEUE_GROUP_QUEUE_ERROR_FATAL,
 	BASE_GPU_QUEUE_GROUP_ERROR_TIMEOUT,
 	BASE_GPU_QUEUE_GROUP_ERROR_TILER_HEAP_OOM,
+	BASE_GPU_QUEUE_GROUP_QUEUE_ERROR_FAULT,
 	BASE_GPU_QUEUE_GROUP_ERROR_FATAL_COUNT
 };
 
@@ -673,6 +545,7 @@ struct base_gpu_queue_group_error {
 	union {
 		struct base_gpu_queue_group_error_fatal_payload fatal_group;
 		struct base_gpu_queue_error_fatal_payload fatal_queue;
+		struct base_gpu_queue_error_fault_payload fault_queue;
 	} payload;
 };
 
@@ -680,8 +553,7 @@ struct base_gpu_queue_group_error {
  * enum base_csf_notification_type - Notification type
  *
  * @BASE_CSF_NOTIFICATION_EVENT:                 Notification with kernel event
- * @BASE_CSF_NOTIFICATION_GPU_QUEUE_GROUP_ERROR: Notification with GPU fatal
- *                                               error
+ * @BASE_CSF_NOTIFICATION_GPU_QUEUE_GROUP_ERROR: Notification with GPU error
  * @BASE_CSF_NOTIFICATION_CPU_QUEUE_DUMP:        Notification with dumping cpu
  *                                               queue
  * @BASE_CSF_NOTIFICATION_COUNT:                 The number of notification type
@@ -721,6 +593,49 @@ struct base_csf_notification {
 
 		__u8 align[56];
 	} payload;
+};
+
+/**
+ * struct mali_base_gpu_core_props - GPU core props info
+ *
+ * @product_id: Pro specific value.
+ * @version_status: Status of the GPU release. No defined values, but starts at
+ *   0 and increases by one for each release status (alpha, beta, EAC, etc.).
+ *   4 bit values (0-15).
+ * @minor_revision: Minor release number of the GPU. "P" part of an "RnPn"
+ *   release number.
+ *   8 bit values (0-255).
+ * @major_revision: Major release number of the GPU. "R" part of an "RnPn"
+ *   release number.
+ *   4 bit values (0-15).
+ * @padding: padding to align to 8-byte
+ * @gpu_freq_khz_max: The maximum GPU frequency. Reported to applications by
+ *   clGetDeviceInfo()
+ * @log2_program_counter_size: Size of the shader program counter, in bits.
+ * @texture_features: TEXTURE_FEATURES_x registers, as exposed by the GPU. This
+ *   is a bitpattern where a set bit indicates that the format is supported.
+ *   Before using a texture format, it is recommended that the corresponding
+ *   bit be checked.
+ * @paddings: Padding bytes.
+ * @gpu_available_memory_size: Theoretical maximum memory available to the GPU.
+ *   It is unlikely that a client will be able to allocate all of this memory
+ *   for their own purposes, but this at least provides an upper bound on the
+ *   memory available to the GPU.
+ *   This is required for OpenCL's clGetDeviceInfo() call when
+ *   CL_DEVICE_GLOBAL_MEM_SIZE is requested, for OpenCL GPU devices. The
+ *   client will not be expecting to allocate anywhere near this value.
+ */
+struct mali_base_gpu_core_props {
+	__u32 product_id;
+	__u16 version_status;
+	__u16 minor_revision;
+	__u16 major_revision;
+	__u16 padding;
+	__u32 gpu_freq_khz_max;
+	__u32 log2_program_counter_size;
+	__u32 texture_features[BASE_GPU_NUM_TEXTURE_FEATURES_REGISTERS];
+	__u8 paddings[4];
+	__u64 gpu_available_memory_size;
 };
 
 #endif /* _UAPI_BASE_CSF_KERNEL_H_ */

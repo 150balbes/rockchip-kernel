@@ -161,9 +161,9 @@ static int img_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 	val |= BIT(pwm->hwpwm);
 	img_pwm_writel(imgchip, PWM_CTRL_CFG, val);
 
-	regmap_clear_bits(imgchip->periph_regs, PERIP_PWM_PDM_CONTROL,
-			  PERIP_PWM_PDM_CONTROL_CH_MASK <<
-			  PERIP_PWM_PDM_CONTROL_CH_SHIFT(pwm->hwpwm));
+	regmap_update_bits(imgchip->periph_regs, PERIP_PWM_PDM_CONTROL,
+			   PERIP_PWM_PDM_CONTROL_CH_MASK <<
+			   PERIP_PWM_PDM_CONTROL_CH_SHIFT(pwm->hwpwm), 0);
 
 	return 0;
 }
@@ -289,9 +289,9 @@ static int img_pwm_probe(struct platform_device *pdev)
 		return PTR_ERR(imgchip->sys_clk);
 	}
 
-	imgchip->pwm_clk = devm_clk_get(&pdev->dev, "imgchip");
+	imgchip->pwm_clk = devm_clk_get(&pdev->dev, "pwm");
 	if (IS_ERR(imgchip->pwm_clk)) {
-		dev_err(&pdev->dev, "failed to get imgchip clock\n");
+		dev_err(&pdev->dev, "failed to get pwm clock\n");
 		return PTR_ERR(imgchip->pwm_clk);
 	}
 
@@ -397,10 +397,11 @@ static int img_pwm_resume(struct device *dev)
 
 	for (i = 0; i < imgchip->chip.npwm; i++)
 		if (imgchip->suspend_ctrl_cfg & BIT(i))
-			regmap_clear_bits(imgchip->periph_regs,
-					  PERIP_PWM_PDM_CONTROL,
-					  PERIP_PWM_PDM_CONTROL_CH_MASK <<
-					  PERIP_PWM_PDM_CONTROL_CH_SHIFT(i));
+			regmap_update_bits(imgchip->periph_regs,
+					   PERIP_PWM_PDM_CONTROL,
+					   PERIP_PWM_PDM_CONTROL_CH_MASK <<
+					   PERIP_PWM_PDM_CONTROL_CH_SHIFT(i),
+					   0);
 
 	if (pm_runtime_status_suspended(dev))
 		img_pwm_runtime_suspend(dev);

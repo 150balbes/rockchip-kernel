@@ -34,18 +34,19 @@ fi
 shift
 
 # Pathnames:
-# T:	  /tmp/kvm-remote.sh.NNNNNN where "NNNNNN" is set by mktemp
-# resdir: /tmp/kvm-remote.sh.NNNNNN/res
-# rundir: /tmp/kvm-remote.sh.NNNNNN/res/$ds ("-remote" suffix)
+# T:	  /tmp/kvm-remote.sh.$$
+# resdir: /tmp/kvm-remote.sh.$$/res
+# rundir: /tmp/kvm-remote.sh.$$/res/$ds ("-remote" suffix)
 # oldrun: `pwd`/tools/testing/.../res/$otherds
 #
 # Pathname segments:
-# TD:	  kvm-remote.sh.NNNNNN
+# TD:	  kvm-remote.sh.$$
 # ds:	  yyyy.mm.dd-hh.mm.ss-remote
 
-T="`mktemp -d ${TMPDIR-/tmp}/kvm-remote.sh.XXXXXX`"
+TD=kvm-remote.sh.$$
+T=${TMPDIR-/tmp}/$TD
 trap 'rm -rf $T' 0
-TD="`basename "$T"`"
+mkdir $T
 
 resdir="$T/res"
 ds=`date +%Y.%m.%d-%H.%M.%S`-remote

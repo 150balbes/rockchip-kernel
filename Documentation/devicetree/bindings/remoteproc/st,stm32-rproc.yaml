@@ -4,7 +4,7 @@
 $id: "http://devicetree.org/schemas/remoteproc/st,stm32-rproc.yaml#"
 $schema: "http://devicetree.org/meta-schemas/core.yaml#"
 
-title: STMicroelectronics STM32 remote processor controller
+title: STMicroelectronics STM32 remote processor controller bindings
 
 description:
   This document defines the binding for the remoteproc component that loads and

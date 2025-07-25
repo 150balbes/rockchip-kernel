@@ -38,14 +38,13 @@ The media subsystem
 
 	remote-controller
 
-	cec
-
 	dvb
 
 	cardlist
 
 	v4l-drivers
 	dvb-drivers
+	cec-drivers
 
 **Copyright** |copy| 1999-2020 : LinuxTV Developers
 

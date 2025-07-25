@@ -297,7 +297,8 @@ static int sbrmi_get_max_pwr_limit(struct sbrmi_data *data)
 	return ret;
 }
 
-static int sbrmi_probe(struct i2c_client *client)
+static int sbrmi_probe(struct i2c_client *client,
+		       const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -347,7 +348,7 @@ static struct i2c_driver sbrmi_driver = {
 		.name = "sbrmi",
 		.of_match_table = of_match_ptr(sbrmi_of_match),
 	},
-	.probe_new = sbrmi_probe,
+	.probe = sbrmi_probe,
 	.id_table = sbrmi_id,
 };
 

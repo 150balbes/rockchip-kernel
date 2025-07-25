@@ -22,6 +22,7 @@
 #include "atomisp_compat_css20.h"
 
 #include "../../include/linux/atomisp.h"
+#include <media/videobuf-vmalloc.h>
 
 struct atomisp_device;
 struct atomisp_sub_device;
@@ -41,6 +42,10 @@ int atomisp_css_init(struct atomisp_device *isp);
 
 void atomisp_css_uninit(struct atomisp_device *isp);
 
+void atomisp_css_suspend(struct atomisp_device *isp);
+
+int atomisp_css_resume(struct atomisp_device *isp);
+
 void atomisp_css_init_struct(struct atomisp_sub_device *asd);
 
 int atomisp_css_irq_translate(struct atomisp_device *isp,
@@ -56,7 +61,7 @@ int atomisp_css_irq_enable(struct atomisp_device *isp,
 			   enum ia_css_irq_info info, bool enable);
 
 int atomisp_q_video_buffer_to_css(struct atomisp_sub_device *asd,
-				  struct ia_css_frame *frame,
+				  struct videobuf_vmalloc_memory *vm_mem,
 				  enum atomisp_input_stream_id stream_id,
 				  enum ia_css_buffer_type css_buf_type,
 				  enum ia_css_pipe_id css_pipe_id);
@@ -252,6 +257,13 @@ int atomisp_css_yuvpp_configure_output(struct atomisp_sub_device *asd,
 				       unsigned int width, unsigned int height,
 				       unsigned int padded_width,
 				       enum ia_css_frame_format format);
+
+int atomisp_css_yuvpp_configure_viewfinder(
+    struct atomisp_sub_device *asd,
+    unsigned int stream_index,
+    unsigned int width, unsigned int height,
+    unsigned int min_width,
+    enum ia_css_frame_format format);
 
 int atomisp_css_yuvpp_get_output_frame_info(
     struct atomisp_sub_device *asd,

@@ -9,9 +9,6 @@ title: UniPhier AIO audio system
 maintainers:
   - <alsa-devel@alsa-project.org>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     enum:
@@ -73,7 +70,7 @@ patternProperties:
     $ref: audio-graph-port.yaml#
     unevaluatedProperties: false
 
-unevaluatedProperties: false
+additionalProperties: false
 
 required:
   - compatible

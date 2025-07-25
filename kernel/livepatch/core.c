@@ -125,24 +125,6 @@ struct klp_find_arg {
 	unsigned long pos;
 };
 
-static int klp_match_callback(void *data, unsigned long addr)
-{
-	struct klp_find_arg *args = data;
-
-	args->addr = addr;
-	args->count++;
-
-	/*
-	 * Finish the search when the symbol is found for the desired position
-	 * or the position is not defined for a non-unique symbol.
-	 */
-	if ((args->pos && (args->count == args->pos)) ||
-	    (!args->pos && (args->count > 1)))
-		return 1;
-
-	return 0;
-}
-
 static int klp_find_callback(void *data, const char *name,
 			     struct module *mod, unsigned long addr)
 {
@@ -157,7 +139,18 @@ static int klp_find_callback(void *data, const char *name,
 	if (args->objname && strcmp(args->objname, mod->name))
 		return 0;
 
-	return klp_match_callback(data, addr);
+	args->addr = addr;
+	args->count++;
+
+	/*
+	 * Finish the search when the symbol is found for the desired position
+	 * or the position is not defined for a non-unique symbol.
+	 */
+	if ((args->pos && (args->count == args->pos)) ||
+	    (!args->pos && (args->count > 1)))
+		return 1;
+
+	return 0;
 }
 
 static int klp_find_object_symbol(const char *objname, const char *name,
@@ -174,7 +167,7 @@ static int klp_find_object_symbol(const char *objname, const char *name,
 	if (objname)
 		module_kallsyms_on_each_symbol(klp_find_callback, &args);
 	else
-		kallsyms_on_each_match_symbol(klp_match_callback, name, &args);
+		kallsyms_on_each_symbol(klp_find_callback, &args);
 
 	/*
 	 * Ensure an address was found. If sympos is 0, ensure symbol is unique;
@@ -251,7 +244,7 @@ static int klp_resolve_symbols(Elf_Shdr *sechdrs, const char *strtab,
 		 * symbols are exported and normal relas can be used instead.
 		 */
 		if (!sec_vmlinux && sym_vmlinux) {
-			pr_err("invalid access to vmlinux symbol '%s' from module-specific livepatch relocation section",
+			pr_err("invalid access to vmlinux symbol '%s' from module-specific livepatch relocation section\n",
 			       sym_name);
 			return -EINVAL;
 		}

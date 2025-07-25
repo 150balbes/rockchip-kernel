@@ -13,9 +13,8 @@
 #include "path.h"
 #include "topology.h"
 
-static int __maybe_unused
-apl_enable_logs(struct avs_dev *adev, enum avs_log_enable enable, u32 aging_period,
-		u32 fifo_full_period, unsigned long resource_mask, u32 *priorities)
+static int apl_enable_logs(struct avs_dev *adev, enum avs_log_enable enable, u32 aging_period,
+			   u32 fifo_full_period, unsigned long resource_mask, u32 *priorities)
 {
 	struct apl_log_state_info *info;
 	u32 size, num_cores = adev->hw_cfg.dsp_cores;
@@ -51,6 +50,7 @@ apl_enable_logs(struct avs_dev *adev, enum avs_log_enable enable, u32 aging_peri
 static int apl_log_buffer_status(struct avs_dev *adev, union avs_notify_msg *msg)
 {
 	struct apl_log_buffer_layout layout;
+	unsigned long flags;
 	void __iomem *addr, *buf;
 
 	addr = avs_log_buffer_addr(adev, msg->log.core);
@@ -59,20 +59,26 @@ static int apl_log_buffer_status(struct avs_dev *adev, union avs_notify_msg *msg
 
 	memcpy_fromio(&layout, addr, sizeof(layout));
 
-	if (!avs_logging_fw(adev))
+	spin_lock_irqsave(&adev->dbg.trace_lock, flags);
+	if (!kfifo_initialized(&adev->dbg.trace_fifo))
 		/* consume the logs regardless of consumer presence */
 		goto update_read_ptr;
 
 	buf = apl_log_payload_addr(addr);
 
 	if (layout.read_ptr > layout.write_ptr) {
-		avs_dump_fw_log(adev, buf + layout.read_ptr,
-				apl_log_payload_size(adev) - layout.read_ptr);
+		__kfifo_fromio_locked(&adev->dbg.trace_fifo, buf + layout.read_ptr,
+				      apl_log_payload_size(adev) - layout.read_ptr,
+				      &adev->dbg.fifo_lock);
 		layout.read_ptr = 0;
 	}
-	avs_dump_fw_log_wakeup(adev, buf + layout.read_ptr, layout.write_ptr - layout.read_ptr);
+	__kfifo_fromio_locked(&adev->dbg.trace_fifo, buf + layout.read_ptr,
+			      layout.write_ptr - layout.read_ptr, &adev->dbg.fifo_lock);
+
+	wake_up(&adev->dbg.trace_waitq);
 
 update_read_ptr:
+	spin_unlock_irqrestore(&adev->dbg.trace_lock, flags);
 	writel(layout.write_ptr, addr);
 	return 0;
 }
@@ -127,14 +133,12 @@ static int apl_coredump(struct avs_dev *adev, union avs_notify_msg *msg)
 	buf = apl_log_payload_addr(addr);
 	memcpy_fromio(&layout, addr, sizeof(layout));
 	if (!apl_is_entry_stackdump(buf + layout.read_ptr)) {
-		union avs_notify_msg lbs_msg = AVS_NOTIFICATION(LOG_BUFFER_STATUS);
-
 		/*
 		 * DSP awaits the remaining logs to be
 		 * gathered before dumping stack
 		 */
-		lbs_msg.log.core = msg->ext.coredump.core_id;
-		avs_log_buffer_status_locked(adev, &lbs_msg);
+		msg->log.core = msg->ext.coredump.core_id;
+		avs_dsp_op(adev, log_buffer_status, msg);
 	}
 
 	pos = dump + AVS_FW_REGS_SIZE;
@@ -169,6 +173,7 @@ static bool apl_lp_streaming(struct avs_dev *adev)
 {
 	struct avs_path *path;
 
+	spin_lock(&adev->path_list_lock);
 	/* Any gateway without buffer allocated in LP area disqualifies D0IX. */
 	list_for_each_entry(path, &adev->path_list, node) {
 		struct avs_path_pipeline *ppl;
@@ -188,11 +193,14 @@ static bool apl_lp_streaming(struct avs_dev *adev)
 				if (cfg->copier.dma_type == INVALID_OBJECT_ID)
 					continue;
 
-				if (!mod->gtw_attrs.lp_buffer_alloc)
+				if (!mod->gtw_attrs.lp_buffer_alloc) {
+					spin_unlock(&adev->path_list_lock);
 					return false;
+				}
 			}
 		}
 	}
+	spin_unlock(&adev->path_list_lock);
 
 	return true;
 }
@@ -237,10 +245,10 @@ const struct avs_dsp_ops apl_dsp_ops = {
 	.load_basefw = avs_hda_load_basefw,
 	.load_lib = avs_hda_load_library,
 	.transfer_mods = avs_hda_transfer_modules,
+	.enable_logs = apl_enable_logs,
 	.log_buffer_offset = skl_log_buffer_offset,
 	.log_buffer_status = apl_log_buffer_status,
 	.coredump = apl_coredump,
 	.d0ix_toggle = apl_d0ix_toggle,
 	.set_d0ix = apl_set_d0ix,
-	AVS_SET_ENABLE_LOGS_OP(apl)
 };

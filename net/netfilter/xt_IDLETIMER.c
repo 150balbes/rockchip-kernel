@@ -413,7 +413,7 @@ static void idletimer_tg_destroy(const struct xt_tgdtor_param *par)
 		pr_debug("deleting timer %s\n", info->label);
 
 		list_del(&info->timer->entry);
-		timer_shutdown_sync(&info->timer->timer);
+		del_timer_sync(&info->timer->timer);
 		cancel_work_sync(&info->timer->work);
 		sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);
 		kfree(info->timer->attr.attr.name);
@@ -441,7 +441,7 @@ static void idletimer_tg_destroy_v1(const struct xt_tgdtor_param *par)
 		if (info->timer->timer_type & XT_IDLETIMER_ALARM) {
 			alarm_cancel(&info->timer->alarm);
 		} else {
-			timer_shutdown_sync(&info->timer->timer);
+			del_timer_sync(&info->timer->timer);
 		}
 		cancel_work_sync(&info->timer->work);
 		sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);

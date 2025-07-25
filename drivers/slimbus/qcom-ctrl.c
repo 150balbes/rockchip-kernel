@@ -488,6 +488,7 @@ static int qcom_slim_probe(struct platform_device *pdev)
 {
 	struct qcom_slim_ctrl *ctrl;
 	struct slim_controller *sctrl;
+	struct resource *slim_mem;
 	int ret, ver;
 
 	ctrl = devm_kzalloc(&pdev->dev, sizeof(*ctrl), GFP_KERNEL);
@@ -518,7 +519,8 @@ static int qcom_slim_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, ctrl);
 	dev_set_drvdata(ctrl->dev, ctrl);
 
-	ctrl->base = devm_platform_ioremap_resource_byname(pdev, "ctrl");
+	slim_mem = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ctrl");
+	ctrl->base = devm_ioremap_resource(ctrl->dev, slim_mem);
 	if (IS_ERR(ctrl->base))
 		return PTR_ERR(ctrl->base);
 
@@ -716,6 +718,7 @@ static const struct dev_pm_ops qcom_slim_dev_pm_ops = {
 
 static const struct of_device_id qcom_slim_dt_match[] = {
 	{ .compatible = "qcom,slim", },
+	{ .compatible = "qcom,apq8064-slim", },
 	{}
 };
 

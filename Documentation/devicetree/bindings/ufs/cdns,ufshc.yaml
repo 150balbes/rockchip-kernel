@@ -49,8 +49,6 @@ properties:
   reg:
     maxItems: 1
 
-  dma-coherent: true
-
 required:
   - compatible
   - clocks

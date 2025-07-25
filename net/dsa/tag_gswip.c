@@ -10,9 +10,7 @@
 #include <linux/skbuff.h>
 #include <net/dsa.h>
 
-#include "tag.h"
-
-#define GSWIP_NAME			"gswip"
+#include "dsa_priv.h"
 
 #define GSWIP_TX_HEADER_LEN		4
 
@@ -100,7 +98,7 @@ static struct sk_buff *gswip_tag_rcv(struct sk_buff *skb,
 }
 
 static const struct dsa_device_ops gswip_netdev_ops = {
-	.name = GSWIP_NAME,
+	.name = "gswip",
 	.proto	= DSA_TAG_PROTO_GSWIP,
 	.xmit = gswip_tag_xmit,
 	.rcv = gswip_tag_rcv,
@@ -108,6 +106,6 @@ static const struct dsa_device_ops gswip_netdev_ops = {
 };
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_GSWIP, GSWIP_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_GSWIP);
 
 module_dsa_tag_driver(gswip_netdev_ops);

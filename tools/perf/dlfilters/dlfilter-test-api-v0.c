@@ -119,7 +119,7 @@ struct perf_dlfilter_fns perf_dlfilter_fns;
 static int verbose;
 
 #define pr_debug(fmt, ...) do { \
-		if (verbose > 0) \
+		if (verbose) \
 			fprintf(stderr, fmt, ##__VA_ARGS__); \
 	} while (0)
 

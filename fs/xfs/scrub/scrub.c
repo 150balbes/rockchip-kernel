@@ -171,10 +171,8 @@ xchk_teardown(
 	}
 	if (sc->sm->sm_flags & XFS_SCRUB_IFLAG_REPAIR)
 		mnt_drop_write_file(sc->file);
-	if (sc->flags & XCHK_REAPING_DISABLED)
-		xchk_start_reaping(sc);
 	if (sc->buf) {
-		kvfree(sc->buf);
+		kmem_free(sc->buf);
 		sc->buf = NULL;
 	}
 	return error;
@@ -467,7 +465,7 @@ xfs_scrub_metadata(
 	xfs_warn_mount(mp, XFS_OPSTATE_WARNED_SCRUB,
  "EXPERIMENTAL online scrub feature in use. Use at your own risk!");
 
-	sc = kzalloc(sizeof(struct xfs_scrub), XCHK_GFP_FLAGS);
+	sc = kmem_zalloc(sizeof(struct xfs_scrub), KM_NOFS | KM_MAYFAIL);
 	if (!sc) {
 		error = -ENOMEM;
 		goto out;
@@ -557,7 +555,7 @@ out_nofix:
 out_teardown:
 	error = xchk_teardown(sc, error);
 out_sc:
-	kfree(sc);
+	kmem_free(sc);
 out:
 	trace_xchk_done(XFS_I(file_inode(file)), sm, error);
 	if (error == -EFSCORRUPTED || error == -EFSBADCRC) {

@@ -14,8 +14,6 @@
 
 #define DRV_NAME	"cros-ec-rtc"
 
-#define SECS_PER_DAY	(24 * 60 * 60)
-
 /**
  * struct cros_ec_rtc - Driver data for EC RTC
  *
@@ -45,8 +43,13 @@ static int cros_ec_rtc_get(struct cros_ec_device *cros_ec, u32 command,
 	msg.msg.insize = sizeof(msg.data);
 
 	ret = cros_ec_cmd_xfer_status(cros_ec, &msg.msg);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(cros_ec->dev,
+			"error getting %s from EC: %d\n",
+			command == EC_CMD_RTC_GET_VALUE ? "time" : "alarm",
+			ret);
 		return ret;
+	}
 
 	*response = msg.data.time;
 
@@ -56,7 +59,7 @@ static int cros_ec_rtc_get(struct cros_ec_device *cros_ec, u32 command,
 static int cros_ec_rtc_set(struct cros_ec_device *cros_ec, u32 command,
 			   u32 param)
 {
-	int ret;
+	int ret = 0;
 	struct {
 		struct cros_ec_command msg;
 		struct ec_response_rtc data;
@@ -68,8 +71,13 @@ static int cros_ec_rtc_set(struct cros_ec_device *cros_ec, u32 command,
 	msg.data.time = param;
 
 	ret = cros_ec_cmd_xfer_status(cros_ec, &msg.msg);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(cros_ec->dev, "error setting %s on EC: %d\n",
+			command == EC_CMD_RTC_SET_VALUE ? "time" : "alarm",
+			ret);
 		return ret;
+	}
+
 	return 0;
 }
 
@@ -182,21 +190,8 @@ static int cros_ec_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 	ret = cros_ec_rtc_set(cros_ec, EC_CMD_RTC_SET_ALARM, alarm_offset);
 	if (ret < 0) {
-		if (ret == -EINVAL && alarm_offset >= SECS_PER_DAY) {
-			/*
-			 * RTC chips on some older Chromebooks can only handle
-			 * alarms up to 24h in the future. Try to set an alarm
-			 * below that limit to avoid suspend failures.
-			 */
-			ret = cros_ec_rtc_set(cros_ec, EC_CMD_RTC_SET_ALARM,
-					      SECS_PER_DAY - 1);
-		}
-
-		if (ret < 0) {
-			dev_err(dev, "error setting alarm in %u seconds: %d\n",
-				alarm_offset, ret);
-			return ret;
-		}
+		dev_err(dev, "error setting alarm: %d\n", ret);
+		return ret;
 	}
 
 	return 0;

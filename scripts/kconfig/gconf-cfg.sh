@@ -1,9 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 
-cflags=$1
-libs=$2
-
 PKG="gtk+-2.0 gmodule-2.0 libglade-2.0"
 
 if [ -z "$(command -v ${HOSTPKG_CONFIG})" ]; then
@@ -29,5 +26,5 @@ if ! ${HOSTPKG_CONFIG} --atleast-version=2.0.0 gtk+-2.0; then
 	exit 1
 fi
 
-${HOSTPKG_CONFIG} --cflags ${PKG} > ${cflags}
-${HOSTPKG_CONFIG} --libs ${PKG} > ${libs}
+echo cflags=\"$(${HOSTPKG_CONFIG} --cflags $PKG)\"
+echo libs=\"$(${HOSTPKG_CONFIG} --libs $PKG)\"

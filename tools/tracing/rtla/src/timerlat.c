@@ -14,7 +14,7 @@
 
 #include "timerlat.h"
 
-static void timerlat_usage(int err)
+static void timerlat_usage(void)
 {
 	int i;
 
@@ -34,7 +34,7 @@ static void timerlat_usage(int err)
 
 	for (i = 0; msg[i]; i++)
 		fprintf(stderr, "%s\n", msg[i]);
-	exit(err);
+	exit(1);
 }
 
 int timerlat_main(int argc, char *argv[])
@@ -52,7 +52,8 @@ int timerlat_main(int argc, char *argv[])
 	}
 
 	if ((strcmp(argv[1], "-h") == 0) || (strcmp(argv[1], "--help") == 0)) {
-		timerlat_usage(0);
+		timerlat_usage();
+		exit(0);
 	} else if (strncmp(argv[1], "-", 1) == 0) {
 		/* the user skipped the tool, call the default one */
 		timerlat_top_main(argc, argv);
@@ -66,6 +67,6 @@ int timerlat_main(int argc, char *argv[])
 	}
 
 usage:
-	timerlat_usage(1);
+	timerlat_usage();
 	exit(1);
 }

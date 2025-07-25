@@ -48,6 +48,8 @@ int iwl_mvm_ftm_add_pasn_sta(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	if (!pasn)
 		return -ENOBUFS;
 
+	iwl_mvm_ftm_remove_pasn_sta(mvm, addr);
+
 	pasn->cipher = iwl_mvm_cipher_to_location_cipher(cipher);
 
 	switch (pasn->cipher) {
@@ -1010,10 +1012,11 @@ static int iwl_mvm_ftm_range_resp_valid(struct iwl_mvm *mvm, u8 request_id,
 static void iwl_mvm_ftm_rtt_smoothing(struct iwl_mvm *mvm,
 				      struct cfg80211_pmsr_result *res)
 {
-	struct iwl_mvm_smooth_entry *resp = NULL, *iter;
+	struct iwl_mvm_smooth_entry *resp;
 	s64 rtt_avg, rtt = res->ftm.rtt_avg;
 	u32 undershoot, overshoot;
 	u8 alpha;
+	bool found;
 
 	if (!IWL_MVM_FTM_INITIATOR_ENABLE_SMOOTH)
 		return;
@@ -1027,14 +1030,15 @@ static void iwl_mvm_ftm_rtt_smoothing(struct iwl_mvm *mvm,
 		return;
 	}
 
-	list_for_each_entry(iter, &mvm->ftm_initiator.smooth.resp, list) {
-		if (!memcmp(res->addr, iter->addr, ETH_ALEN)) {
-			resp = iter;
+	found = false;
+	list_for_each_entry(resp, &mvm->ftm_initiator.smooth.resp, list) {
+		if (!memcmp(res->addr, resp->addr, ETH_ALEN)) {
+			found = true;
 			break;
 		}
 	}
 
-	if (!resp) {
+	if (!found) {
 		resp = kzalloc(sizeof(*resp), GFP_KERNEL);
 		if (!resp)
 			return;

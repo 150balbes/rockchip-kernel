@@ -74,8 +74,8 @@
 static DEFINE_SPINLOCK(pdc_lock);
 #endif
 
-unsigned long pdc_result[NUM_PDC_RESULT]  __aligned(8);
-unsigned long pdc_result2[NUM_PDC_RESULT] __aligned(8);
+extern unsigned long pdc_result[NUM_PDC_RESULT];
+extern unsigned long pdc_result2[NUM_PDC_RESULT];
 
 #ifdef CONFIG_64BIT
 #define WIDE_FIRMWARE 0x1
@@ -123,10 +123,10 @@ static unsigned long f_extend(unsigned long address)
 #ifdef CONFIG_64BIT
 	if(unlikely(parisc_narrow_firmware)) {
 		if((address & 0xff000000) == 0xf0000000)
-			return 0xf0f0f0f000000000UL | (u32)address;
+			return (0xfffffff0UL << 32) | (u32)address;
 
 		if((address & 0xf0000000) == 0xf0000000)
-			return 0xffffffff00000000UL | (u32)address;
+			return (0xffffffffUL << 32) | (u32)address;
 	}
 #endif
 	return address;
@@ -527,14 +527,14 @@ int pdc_model_info(struct pdc_model *model)
  * Using OS_ID_HPUX will return the equivalent of the 'modelname' command
  * on HP/UX.
  */
-int pdc_model_sysmodel(unsigned int os_id, char *name)
+int pdc_model_sysmodel(char *name)
 {
         int retval;
 	unsigned long flags;
 
         spin_lock_irqsave(&pdc_lock, flags);
         retval = mem_pdc_call(PDC_MODEL, PDC_MODEL_SYSMODEL, __pa(pdc_result),
-                              os_id, __pa(name));
+                              OS_ID_HPUX, __pa(name));
         convert_to_wide(pdc_result);
 
         if (retval == PDC_OK) {
@@ -1232,15 +1232,18 @@ int __init pdc_soft_power_info(unsigned long *power_reg)
 }
 
 /*
- * pdc_soft_power_button - Control the soft power button behaviour
- * @sw_control: 0 for hardware control, 1 for software control 
+ * pdc_soft_power_button{_panic} - Control the soft power button behaviour
+ * @sw_control: 0 for hardware control, 1 for software control
  *
  *
  * This PDC function places the soft power button under software or
  * hardware control.
- * Under software control the OS may control to when to allow to shut 
- * down the system. Under hardware control pressing the power button 
+ * Under software control the OS may control to when to allow to shut
+ * down the system. Under hardware control pressing the power button
  * powers off the system immediately.
+ *
+ * The _panic version relies on spin_trylock to prevent deadlock
+ * on panic path.
  */
 int pdc_soft_power_button(int sw_control)
 {
@@ -1248,6 +1251,22 @@ int pdc_soft_power_button(int sw_control)
 	unsigned long flags;
 
 	spin_lock_irqsave(&pdc_lock, flags);
+	retval = mem_pdc_call(PDC_SOFT_POWER, PDC_SOFT_POWER_ENABLE, __pa(pdc_result), sw_control);
+	spin_unlock_irqrestore(&pdc_lock, flags);
+
+	return retval;
+}
+
+int pdc_soft_power_button_panic(int sw_control)
+{
+	int retval;
+	unsigned long flags;
+
+	if (!spin_trylock_irqsave(&pdc_lock, flags)) {
+		pr_emerg("Couldn't enable soft power button\n");
+		return -EBUSY; /* ignored by the panic notifier */
+	}
+
 	retval = mem_pdc_call(PDC_SOFT_POWER, PDC_SOFT_POWER_ENABLE, __pa(pdc_result), sw_control);
 	spin_unlock_irqrestore(&pdc_lock, flags);
 
@@ -1303,7 +1322,7 @@ static char iodc_dbuf[4096] __page_aligned_bss;
  */
 int pdc_iodc_print(const unsigned char *str, unsigned count)
 {
-	unsigned int i;
+	unsigned int i, found = 0;
 	unsigned long flags;
 
 	count = min_t(unsigned int, count, sizeof(iodc_dbuf));
@@ -1315,6 +1334,7 @@ int pdc_iodc_print(const unsigned char *str, unsigned count)
 			iodc_dbuf[i+0] = '\r';
 			iodc_dbuf[i+1] = '\n';
 			i += 2;
+			found = 1;
 			goto print;
 		default:
 			iodc_dbuf[i] = str[i];
@@ -1330,7 +1350,7 @@ print:
 		__pa(pdc_result), 0, __pa(iodc_dbuf), i, 0);
 	spin_unlock_irqrestore(&pdc_lock, flags);
 
-	return i;
+	return i - found;
 }
 
 #if !defined(BOOTLOADER)

@@ -15,8 +15,6 @@
 
 #include "vlock.h"
 
-.arch armv7-a
-
 .if MCPM_SYNC_CLUSTER_CPUS
 .error "cpus must be the first member of struct mcpm_sync_struct"
 .endif

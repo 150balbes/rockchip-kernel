@@ -136,7 +136,6 @@
 #include <net/tcp.h>
 
 #include "dlm_internal.h"
-#include "lockspace.h"
 #include "lowcomms.h"
 #include "config.h"
 #include "memory.h"
@@ -306,11 +305,11 @@ static void dlm_send_queue_flush(struct midcomms_node *node)
 	pr_debug("flush midcomms send queue of node %d\n", node->nodeid);
 
 	rcu_read_lock();
-	spin_lock_bh(&node->send_queue_lock);
+	spin_lock(&node->send_queue_lock);
 	list_for_each_entry_rcu(mh, &node->send_queue, list) {
 		dlm_mhandle_delete(node, mh);
 	}
-	spin_unlock_bh(&node->send_queue_lock);
+	spin_unlock(&node->send_queue_lock);
 	rcu_read_unlock();
 }
 
@@ -375,7 +374,7 @@ static int dlm_send_ack(int nodeid, uint32_t seq)
 	struct dlm_msg *msg;
 	char *ppc;
 
-	msg = dlm_lowcomms_new_msg(nodeid, mb_len, GFP_NOFS, &ppc,
+	msg = dlm_lowcomms_new_msg(nodeid, mb_len, GFP_ATOMIC, &ppc,
 				   NULL, NULL);
 	if (!msg)
 		return -ENOMEM;
@@ -402,10 +401,11 @@ static int dlm_send_fin(struct midcomms_node *node,
 	struct dlm_mhandle *mh;
 	char *ppc;
 
-	mh = dlm_midcomms_get_mhandle(node->nodeid, mb_len, GFP_NOFS, &ppc);
+	mh = dlm_midcomms_get_mhandle(node->nodeid, mb_len, GFP_ATOMIC, &ppc);
 	if (!mh)
 		return -ENOMEM;
 
+	set_bit(DLM_NODE_FLAG_STOP_TX, &node->flags);
 	mh->ack_rcv = ack_rcv;
 
 	m_header = (struct dlm_header *)ppc;
@@ -417,7 +417,6 @@ static int dlm_send_fin(struct midcomms_node *node,
 
 	pr_debug("sending fin msg to node %d\n", node->nodeid);
 	dlm_midcomms_commit_mhandle(mh, NULL, 0);
-	set_bit(DLM_NODE_FLAG_STOP_TX, &node->flags);
 
 	return 0;
 }
@@ -437,7 +436,7 @@ static void dlm_receive_ack(struct midcomms_node *node, uint32_t seq)
 		}
 	}
 
-	spin_lock_bh(&node->send_queue_lock);
+	spin_lock(&node->send_queue_lock);
 	list_for_each_entry_rcu(mh, &node->send_queue, list) {
 		if (before(mh->seq, seq)) {
 			dlm_mhandle_delete(node, mh);
@@ -446,7 +445,7 @@ static void dlm_receive_ack(struct midcomms_node *node, uint32_t seq)
 			break;
 		}
 	}
-	spin_unlock_bh(&node->send_queue_lock);
+	spin_unlock(&node->send_queue_lock);
 	rcu_read_unlock();
 }
 
@@ -479,10 +478,10 @@ static void dlm_receive_buffer_3_2_trace(uint32_t seq, union dlm_packet *p)
 {
 	switch (p->header.h_cmd) {
 	case DLM_MSG:
-		trace_dlm_recv_message(dlm_our_nodeid(), seq, &p->message);
+		trace_dlm_recv_message(seq, &p->message);
 		break;
 	case DLM_RCOM:
-		trace_dlm_recv_rcom(dlm_our_nodeid(), seq, &p->rcom);
+		trace_dlm_recv_rcom(seq, &p->rcom);
 		break;
 	default:
 		break;
@@ -498,15 +497,14 @@ static void dlm_midcomms_receive_buffer(union dlm_packet *p,
 
 		switch (p->header.h_cmd) {
 		case DLM_FIN:
-			/* send ack before fin */
-			dlm_send_ack(node->nodeid, node->seq_next);
-
 			spin_lock(&node->state_lock);
 			pr_debug("receive fin msg from node %d with state %s\n",
 				 node->nodeid, dlm_state_str(node->state));
 
 			switch (node->state) {
 			case DLM_ESTABLISHED:
+				dlm_send_ack(node->nodeid, node->seq_next);
+
 				node->state = DLM_CLOSE_WAIT;
 				pr_debug("switch node %d to state %s\n",
 					 node->nodeid, dlm_state_str(node->state));
@@ -518,16 +516,19 @@ static void dlm_midcomms_receive_buffer(union dlm_packet *p,
 					node->state = DLM_LAST_ACK;
 					pr_debug("switch node %d to state %s case 1\n",
 						 node->nodeid, dlm_state_str(node->state));
-					spin_unlock(&node->state_lock);
-					goto send_fin;
+					set_bit(DLM_NODE_FLAG_STOP_RX, &node->flags);
+					dlm_send_fin(node, dlm_pas_fin_ack_rcv);
 				}
 				break;
 			case DLM_FIN_WAIT1:
+				dlm_send_ack(node->nodeid, node->seq_next);
 				node->state = DLM_CLOSING;
+				set_bit(DLM_NODE_FLAG_STOP_RX, &node->flags);
 				pr_debug("switch node %d to state %s\n",
 					 node->nodeid, dlm_state_str(node->state));
 				break;
 			case DLM_FIN_WAIT2:
+				dlm_send_ack(node->nodeid, node->seq_next);
 				midcomms_node_reset(node);
 				pr_debug("switch node %d to state %s\n",
 					 node->nodeid, dlm_state_str(node->state));
@@ -544,8 +545,6 @@ static void dlm_midcomms_receive_buffer(union dlm_packet *p,
 				return;
 			}
 			spin_unlock(&node->state_lock);
-
-			set_bit(DLM_NODE_FLAG_STOP_RX, &node->flags);
 			break;
 		default:
 			WARN_ON_ONCE(test_bit(DLM_NODE_FLAG_STOP_RX, &node->flags));
@@ -564,12 +563,6 @@ static void dlm_midcomms_receive_buffer(union dlm_packet *p,
 		log_print_ratelimited("ignore dlm msg because seq mismatch, seq: %u, expected: %u, nodeid: %d",
 				      seq, node->seq_next, node->nodeid);
 	}
-
-	return;
-
-send_fin:
-	set_bit(DLM_NODE_FLAG_STOP_RX, &node->flags);
-	dlm_send_fin(node, dlm_pas_fin_ack_rcv);
 }
 
 static struct midcomms_node *
@@ -890,7 +883,12 @@ static void dlm_midcomms_receive_buffer_3_1(union dlm_packet *p, int nodeid)
 	dlm_receive_buffer(p, nodeid);
 }
 
-int dlm_validate_incoming_buffer(int nodeid, unsigned char *buf, int len)
+/*
+ * Called from the low-level comms layer to process a buffer of
+ * commands.
+ */
+
+int dlm_process_incoming_buffer(int nodeid, unsigned char *buf, int len)
 {
 	const unsigned char *ptr = buf;
 	const struct dlm_header *hd;
@@ -922,32 +920,6 @@ int dlm_validate_incoming_buffer(int nodeid, unsigned char *buf, int len)
 		/* caller will take care that leftover
 		 * will be parsed next call with more data
 		 */
-		if (msglen > len)
-			break;
-
-		ret += msglen;
-		len -= msglen;
-		ptr += msglen;
-	}
-
-	return ret;
-}
-
-/*
- * Called from the low-level comms layer to process a buffer of
- * commands.
- */
-int dlm_process_incoming_buffer(int nodeid, unsigned char *buf, int len)
-{
-	const unsigned char *ptr = buf;
-	const struct dlm_header *hd;
-	uint16_t msglen;
-	int ret = 0;
-
-	while (len >= sizeof(struct dlm_header)) {
-		hd = (struct dlm_header *)ptr;
-
-		msglen = le16_to_cpu(hd->h_length);
 		if (msglen > len)
 			break;
 
@@ -1067,9 +1039,9 @@ static void midcomms_new_msg_cb(void *data)
 
 	atomic_inc(&mh->node->send_queue_cnt);
 
-	spin_lock_bh(&mh->node->send_queue_lock);
+	spin_lock(&mh->node->send_queue_lock);
 	list_add_tail_rcu(&mh->list, &mh->node->send_queue);
-	spin_unlock_bh(&mh->node->send_queue_lock);
+	spin_unlock(&mh->node->send_queue_lock);
 
 	mh->seq = mh->node->seq_send++;
 }
@@ -1118,7 +1090,7 @@ struct dlm_mhandle *dlm_midcomms_get_mhandle(int nodeid, int len,
 	/* this is a bug, however we going on and hope it will be resolved */
 	WARN_ON_ONCE(test_bit(DLM_NODE_FLAG_STOP_TX, &node->flags));
 
-	mh = dlm_allocate_mhandle(allocation);
+	mh = dlm_allocate_mhandle();
 	if (!mh)
 		goto err;
 
@@ -1172,13 +1144,11 @@ static void dlm_midcomms_commit_msg_3_2_trace(const struct dlm_mhandle *mh,
 {
 	switch (mh->inner_p->header.h_cmd) {
 	case DLM_MSG:
-		trace_dlm_send_message(mh->node->nodeid, mh->seq,
-				       &mh->inner_p->message,
+		trace_dlm_send_message(mh->seq, &mh->inner_p->message,
 				       name, namelen);
 		break;
 	case DLM_RCOM:
-		trace_dlm_send_rcom(mh->node->nodeid, mh->seq,
-				    &mh->inner_p->rcom);
+		trace_dlm_send_rcom(mh->seq, &mh->inner_p->rcom);
 		break;
 	default:
 		/* nothing to trace */
@@ -1214,8 +1184,15 @@ void dlm_midcomms_commit_mhandle(struct dlm_mhandle *mh,
 		dlm_free_mhandle(mh);
 		break;
 	case DLM_VERSION_3_2:
+		/* held rcu read lock here, because we sending the
+		 * dlm message out, when we do that we could receive
+		 * an ack back which releases the mhandle and we
+		 * get a use after free.
+		 */
+		rcu_read_lock();
 		dlm_midcomms_commit_msg_3_2(mh, name, namelen);
 		srcu_read_unlock(&nodes_srcu, mh->idx);
+		rcu_read_unlock();
 		break;
 	default:
 		srcu_read_unlock(&nodes_srcu, mh->idx);
@@ -1362,11 +1339,11 @@ void dlm_midcomms_remove_member(int nodeid)
 		case DLM_CLOSE_WAIT:
 			/* passive shutdown DLM_LAST_ACK case 2 */
 			node->state = DLM_LAST_ACK;
-			spin_unlock(&node->state_lock);
-
 			pr_debug("switch node %d to state %s case 2\n",
 				 node->nodeid, dlm_state_str(node->state));
-			goto send_fin;
+			set_bit(DLM_NODE_FLAG_STOP_RX, &node->flags);
+			dlm_send_fin(node, dlm_pas_fin_ack_rcv);
+			break;
 		case DLM_LAST_ACK:
 			/* probably receive fin caught it, do nothing */
 			break;
@@ -1382,12 +1359,6 @@ void dlm_midcomms_remove_member(int nodeid)
 	spin_unlock(&node->state_lock);
 
 	srcu_read_unlock(&nodes_srcu, idx);
-	return;
-
-send_fin:
-	set_bit(DLM_NODE_FLAG_STOP_RX, &node->flags);
-	dlm_send_fin(node, dlm_pas_fin_ack_rcv);
-	srcu_read_unlock(&nodes_srcu, idx);
 }
 
 static void midcomms_node_release(struct rcu_head *rcu)
@@ -1395,6 +1366,7 @@ static void midcomms_node_release(struct rcu_head *rcu)
 	struct midcomms_node *node = container_of(rcu, struct midcomms_node, rcu);
 
 	WARN_ON_ONCE(atomic_read(&node->send_queue_cnt));
+	dlm_send_queue_flush(node);
 	kfree(node);
 }
 
@@ -1418,6 +1390,7 @@ static void midcomms_shutdown(struct midcomms_node *node)
 		node->state = DLM_FIN_WAIT1;
 		pr_debug("switch node %d to state %s case 2\n",
 			 node->nodeid, dlm_state_str(node->state));
+		dlm_send_fin(node, dlm_act_fin_ack_rcv);
 		break;
 	case DLM_CLOSED:
 		/* we have what we want */
@@ -1431,12 +1404,8 @@ static void midcomms_shutdown(struct midcomms_node *node)
 	}
 	spin_unlock(&node->state_lock);
 
-	if (node->state == DLM_FIN_WAIT1) {
-		dlm_send_fin(node, dlm_act_fin_ack_rcv);
-
-		if (DLM_DEBUG_FENCE_TERMINATION)
-			msleep(5000);
-	}
+	if (DLM_DEBUG_FENCE_TERMINATION)
+		msleep(5000);
 
 	/* wait for other side dlm + fin */
 	ret = wait_event_timeout(node->shutdown_wait,
@@ -1447,21 +1416,17 @@ static void midcomms_shutdown(struct midcomms_node *node)
 		pr_debug("active shutdown timed out for node %d with state %s\n",
 			 node->nodeid, dlm_state_str(node->state));
 		midcomms_node_reset(node);
-		dlm_lowcomms_shutdown_node(node->nodeid, true);
 		return;
 	}
 
 	pr_debug("active shutdown done for node %d with state %s\n",
 		 node->nodeid, dlm_state_str(node->state));
-	dlm_lowcomms_shutdown_node(node->nodeid, false);
 }
 
 void dlm_midcomms_shutdown(void)
 {
 	struct midcomms_node *node;
 	int i, idx;
-
-	dlm_lowcomms_shutdown();
 
 	mutex_lock(&close_lock);
 	idx = srcu_read_lock(&nodes_srcu);
@@ -1480,6 +1445,8 @@ void dlm_midcomms_shutdown(void)
 	}
 	srcu_read_unlock(&nodes_srcu, idx);
 	mutex_unlock(&close_lock);
+
+	dlm_lowcomms_shutdown();
 }
 
 int dlm_midcomms_close(int nodeid)
@@ -1489,8 +1456,6 @@ int dlm_midcomms_close(int nodeid)
 
 	if (nodeid == dlm_our_nodeid())
 		return 0;
-
-	dlm_stop_lockspaces_check();
 
 	idx = srcu_read_lock(&nodes_srcu);
 	/* Abort pending close/remove operation */

@@ -42,7 +42,6 @@
 
 #include "i915_debugfs.h"
 #include "i915_drv.h"
-#include "i915_reg.h"
 #include "intel_atomic.h"
 #include "intel_connector.h"
 #include "intel_ddi.h"
@@ -1988,8 +1987,9 @@ intel_hdmi_mode_valid(struct drm_connector *connector,
 	bool has_hdmi_sink = intel_has_hdmi_sink(hdmi, connector->state);
 	bool ycbcr_420_only;
 
-	if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
-		return MODE_NO_DBLESCAN;
+	status = intel_cpu_transcoder_mode_valid(dev_priv, mode);
+	if (status != MODE_OK)
+		return status;
 
 	if ((mode->flags & DRM_MODE_FLAG_3D_MASK) == DRM_MODE_FLAG_3D_FRAME_PACKING)
 		clock *= 2;
@@ -2056,6 +2056,13 @@ static bool hdmi_bpc_possible(const struct intel_crtc_state *crtc_state, int bpc
 		&crtc_state->hw.adjusted_mode;
 
 	if (!intel_hdmi_source_bpc_possible(dev_priv, bpc))
+		return false;
+
+	/*
+	 * HDMI deep color affects the clocks, so it's only possible
+	 * when not cloning with other encoder types.
+	 */
+	if (bpc > 8 && crtc_state->output_types != BIT(INTEL_OUTPUT_HDMI))
 		return false;
 
 	/* Display Wa_1405510057:icl,ehl */
@@ -2184,13 +2191,9 @@ static bool intel_hdmi_has_audio(struct intel_encoder *encoder,
 }
 
 static enum intel_output_format
-intel_hdmi_output_format(const struct intel_crtc_state *crtc_state,
-			 struct intel_connector *connector,
+intel_hdmi_output_format(struct intel_connector *connector,
 			 bool ycbcr_420_output)
 {
-	if (!crtc_state->has_hdmi_sink)
-		return INTEL_OUTPUT_FORMAT_RGB;
-
 	if (connector->base.ycbcr_420_allowed && ycbcr_420_output)
 		return INTEL_OUTPUT_FORMAT_YCBCR420;
 	else
@@ -2209,8 +2212,7 @@ static int intel_hdmi_compute_output_format(struct intel_encoder *encoder,
 	bool ycbcr_420_only = drm_mode_is_420_only(info, adjusted_mode);
 	int ret;
 
-	crtc_state->output_format =
-		intel_hdmi_output_format(crtc_state, connector, ycbcr_420_only);
+	crtc_state->output_format = intel_hdmi_output_format(connector, ycbcr_420_only);
 
 	if (ycbcr_420_only && !intel_hdmi_is_ycbcr420(crtc_state)) {
 		drm_dbg_kms(&i915->drm,
@@ -2225,17 +2227,11 @@ static int intel_hdmi_compute_output_format(struct intel_encoder *encoder,
 		    !drm_mode_is_420_also(info, adjusted_mode))
 			return ret;
 
-		crtc_state->output_format = intel_hdmi_output_format(crtc_state, connector, true);
+		crtc_state->output_format = intel_hdmi_output_format(connector, true);
 		ret = intel_hdmi_compute_clock(encoder, crtc_state, respect_downstream_limits);
 	}
 
 	return ret;
-}
-
-static bool intel_hdmi_is_cloned(const struct intel_crtc_state *crtc_state)
-{
-	return crtc_state->uapi.encoder_mask &&
-		!is_power_of_2(crtc_state->uapi.encoder_mask);
 }
 
 int intel_hdmi_compute_config(struct intel_encoder *encoder,
@@ -2253,15 +2249,17 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 		return -EINVAL;
 
 	pipe_config->output_format = INTEL_OUTPUT_FORMAT_RGB;
-	pipe_config->has_hdmi_sink =
-		intel_has_hdmi_sink(intel_hdmi, conn_state) &&
-		!intel_hdmi_is_cloned(pipe_config);
+	pipe_config->has_hdmi_sink = intel_has_hdmi_sink(intel_hdmi,
+							 conn_state);
 
 	if (pipe_config->has_hdmi_sink)
 		pipe_config->has_infoframe = true;
 
 	if (adjusted_mode->flags & DRM_MODE_FLAG_DBLCLK)
 		pipe_config->pixel_multiplier = 2;
+
+	if (HAS_PCH_SPLIT(dev_priv) && !HAS_DDI(dev_priv))
+		pipe_config->has_pch_encoder = true;
 
 	pipe_config->has_audio =
 		intel_hdmi_has_audio(encoder, pipe_config, conn_state);
@@ -2358,7 +2356,7 @@ intel_hdmi_unset_edid(struct drm_connector *connector)
 }
 
 static void
-intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector)
+intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector, bool has_edid)
 {
 	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
@@ -2374,10 +2372,16 @@ intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector)
 	 * CONFIG1 pin, but no such luck on our hardware.
 	 *
 	 * The only method left to us is to check the VBT to see
-	 * if the port is a dual mode capable DP port.
+	 * if the port is a dual mode capable DP port. But let's
+	 * only do that when we sucesfully read the EDID, to avoid
+	 * confusing log messages about DP dual mode adaptors when
+	 * there's nothing connected to the port.
 	 */
 	if (type == DRM_DP_DUAL_MODE_UNKNOWN) {
-		if (!connector->force &&
+		/* An overridden EDID imply that we want this port for testing.
+		 * Make sure not to set limits for that port.
+		 */
+		if (has_edid && !connector->override_edid &&
 		    intel_bios_is_port_dp_dual_mode(dev_priv, port)) {
 			drm_dbg_kms(&dev_priv->drm,
 				    "Assuming DP dual mode adaptor presence based on VBT\n");
@@ -2432,17 +2436,17 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 		intel_gmbus_force_bit(i2c, false);
 	}
 
+	intel_hdmi_dp_dual_mode_detect(connector, edid != NULL);
+
+	intel_display_power_put(dev_priv, POWER_DOMAIN_GMBUS, wakeref);
+
 	to_intel_connector(connector)->detect_edid = edid;
 	if (edid && edid->input & DRM_EDID_INPUT_DIGITAL) {
 		intel_hdmi->has_audio = drm_detect_monitor_audio(edid);
 		intel_hdmi->has_hdmi_sink = drm_detect_hdmi_monitor(edid);
 
-		intel_hdmi_dp_dual_mode_detect(connector);
-
 		connected = true;
 	}
-
-	intel_display_power_put(dev_priv, POWER_DOMAIN_GMBUS, wakeref);
 
 	cec_notifier_set_phys_addr_from_edid(intel_hdmi->cec_notifier, edid);
 
@@ -2953,8 +2957,9 @@ void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 				    ddc);
 	drm_connector_helper_add(connector, &intel_hdmi_connector_helper_funcs);
 
-	connector->interlace_allowed = true;
-	connector->stereo_allowed = true;
+	connector->interlace_allowed = 1;
+	connector->doublescan_allowed = 0;
+	connector->stereo_allowed = 1;
 
 	if (DISPLAY_VER(dev_priv) >= 10)
 		connector->ycbcr_420_allowed = true;

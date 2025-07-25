@@ -21,7 +21,6 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/pm_wakeirq.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <asm/unaligned.h>
@@ -135,6 +134,8 @@ struct raydium_data {
 	u8 pkg_size;
 
 	enum raydium_boot_mode boot_mode;
+
+	bool wake_irq_enabled;
 };
 
 /*
@@ -1065,7 +1066,8 @@ static void raydium_i2c_power_off(void *_data)
 	}
 }
 
-static int raydium_i2c_probe(struct i2c_client *client)
+static int raydium_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	union i2c_smbus_data dummy;
 	struct raydium_data *ts;
@@ -1222,6 +1224,8 @@ static int __maybe_unused raydium_i2c_suspend(struct device *dev)
 
 	if (device_may_wakeup(dev)) {
 		raydium_enter_sleep(client);
+
+		ts->wake_irq_enabled = (enable_irq_wake(client->irq) == 0);
 	} else {
 		raydium_i2c_power_off(ts);
 	}
@@ -1235,6 +1239,8 @@ static int __maybe_unused raydium_i2c_resume(struct device *dev)
 	struct raydium_data *ts = i2c_get_clientdata(client);
 
 	if (device_may_wakeup(dev)) {
+		if (ts->wake_irq_enabled)
+			disable_irq_wake(client->irq);
 		raydium_i2c_sw_reset(client);
 	} else {
 		raydium_i2c_power_on(ts);
@@ -1273,7 +1279,7 @@ MODULE_DEVICE_TABLE(of, raydium_of_match);
 #endif
 
 static struct i2c_driver raydium_i2c_driver = {
-	.probe_new = raydium_i2c_probe,
+	.probe = raydium_i2c_probe,
 	.id_table = raydium_i2c_id,
 	.driver = {
 		.name = "raydium_ts",

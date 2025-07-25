@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: MIT
 #ifndef YELLOW_CARP_OFFSET_H
 #define YELLOW_CARP_OFFSET_H
 

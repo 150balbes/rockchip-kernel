@@ -10,6 +10,7 @@
 #include <linux/module.h>
 
 #include <linux/interrupt.h>
+#include <linux/msi.h>
 #include <linux/kthread.h>
 #include <linux/workqueue.h>
 #include <linux/iommu.h>
@@ -602,11 +603,8 @@ static int dpaa2_switch_port_link_state_update(struct net_device *netdev)
 
 	/* When we manage the MAC/PHY using phylink there is no need
 	 * to manually update the netif_carrier.
-	 * We can avoid locking because we are called from the "link changed"
-	 * IRQ handler, which is the same as the "endpoint changed" IRQ handler
-	 * (the writer to port_priv->mac), so we cannot race with it.
 	 */
-	if (dpaa2_mac_is_type_phy(port_priv->mac))
+	if (dpaa2_switch_port_is_type_phy(port_priv))
 		return 0;
 
 	/* Interrupts are received even though no one issued an 'ifconfig up'
@@ -686,8 +684,6 @@ static int dpaa2_switch_port_open(struct net_device *netdev)
 	struct ethsw_core *ethsw = port_priv->ethsw_data;
 	int err;
 
-	mutex_lock(&port_priv->mac_lock);
-
 	if (!dpaa2_switch_port_is_type_phy(port_priv)) {
 		/* Explicitly set carrier off, otherwise
 		 * netif_carrier_ok() will return true and cause 'ip link show'
@@ -701,17 +697,16 @@ static int dpaa2_switch_port_open(struct net_device *netdev)
 			     port_priv->ethsw_data->dpsw_handle,
 			     port_priv->idx);
 	if (err) {
-		mutex_unlock(&port_priv->mac_lock);
 		netdev_err(netdev, "dpsw_if_enable err %d\n", err);
 		return err;
 	}
 
 	dpaa2_switch_enable_ctrl_if_napi(ethsw);
 
-	if (dpaa2_switch_port_is_type_phy(port_priv))
+	if (dpaa2_switch_port_is_type_phy(port_priv)) {
 		dpaa2_mac_start(port_priv->mac);
-
-	mutex_unlock(&port_priv->mac_lock);
+		phylink_start(port_priv->mac->phylink);
+	}
 
 	return 0;
 }
@@ -722,16 +717,13 @@ static int dpaa2_switch_port_stop(struct net_device *netdev)
 	struct ethsw_core *ethsw = port_priv->ethsw_data;
 	int err;
 
-	mutex_lock(&port_priv->mac_lock);
-
 	if (dpaa2_switch_port_is_type_phy(port_priv)) {
+		phylink_stop(port_priv->mac->phylink);
 		dpaa2_mac_stop(port_priv->mac);
 	} else {
 		netif_tx_stop_all_queues(netdev);
 		netif_carrier_off(netdev);
 	}
-
-	mutex_unlock(&port_priv->mac_lock);
 
 	err = dpsw_if_disable(port_priv->ethsw_data->mc_io, 0,
 			      port_priv->ethsw_data->dpsw_handle,
@@ -1461,8 +1453,9 @@ static int dpaa2_switch_port_connect_mac(struct ethsw_port_priv *port_priv)
 	err = dpaa2_mac_open(mac);
 	if (err)
 		goto err_free_mac;
+	port_priv->mac = mac;
 
-	if (dpaa2_mac_is_type_phy(mac)) {
+	if (dpaa2_switch_port_is_type_phy(port_priv)) {
 		err = dpaa2_mac_connect(mac);
 		if (err) {
 			netdev_err(port_priv->netdev,
@@ -1472,14 +1465,11 @@ static int dpaa2_switch_port_connect_mac(struct ethsw_port_priv *port_priv)
 		}
 	}
 
-	mutex_lock(&port_priv->mac_lock);
-	port_priv->mac = mac;
-	mutex_unlock(&port_priv->mac_lock);
-
 	return 0;
 
 err_close_mac:
 	dpaa2_mac_close(mac);
+	port_priv->mac = NULL;
 err_free_mac:
 	kfree(mac);
 	return err;
@@ -1487,21 +1477,15 @@ err_free_mac:
 
 static void dpaa2_switch_port_disconnect_mac(struct ethsw_port_priv *port_priv)
 {
-	struct dpaa2_mac *mac;
+	if (dpaa2_switch_port_is_type_phy(port_priv))
+		dpaa2_mac_disconnect(port_priv->mac);
 
-	mutex_lock(&port_priv->mac_lock);
-	mac = port_priv->mac;
-	port_priv->mac = NULL;
-	mutex_unlock(&port_priv->mac_lock);
-
-	if (!mac)
+	if (!dpaa2_switch_port_has_mac(port_priv))
 		return;
 
-	if (dpaa2_mac_is_type_phy(mac))
-		dpaa2_mac_disconnect(mac);
-
-	dpaa2_mac_close(mac);
-	kfree(mac);
+	dpaa2_mac_close(port_priv->mac);
+	kfree(port_priv->mac);
+	port_priv->mac = NULL;
 }
 
 static irqreturn_t dpaa2_switch_irq0_handler_thread(int irq_num, void *arg)
@@ -1511,7 +1495,6 @@ static irqreturn_t dpaa2_switch_irq0_handler_thread(int irq_num, void *arg)
 	struct ethsw_port_priv *port_priv;
 	u32 status = ~0;
 	int err, if_id;
-	bool had_mac;
 
 	err = dpsw_get_irq_status(ethsw->mc_io, 0, ethsw->dpsw_handle,
 				  DPSW_IRQ_INDEX_IF, &status);
@@ -1529,15 +1512,12 @@ static irqreturn_t dpaa2_switch_irq0_handler_thread(int irq_num, void *arg)
 	}
 
 	if (status & DPSW_IRQ_EVENT_ENDPOINT_CHANGED) {
-		/* We can avoid locking because the "endpoint changed" IRQ
-		 * handler is the only one who changes priv->mac at runtime,
-		 * so we are not racing with anyone.
-		 */
-		had_mac = !!port_priv->mac;
-		if (had_mac)
+		rtnl_lock();
+		if (dpaa2_switch_port_has_mac(port_priv))
 			dpaa2_switch_port_disconnect_mac(port_priv);
 		else
 			dpaa2_switch_port_connect_mac(port_priv);
+		rtnl_unlock();
 	}
 
 out:
@@ -1998,9 +1978,6 @@ static int dpaa2_switch_port_attr_set_event(struct net_device *netdev,
 	return notifier_from_errno(err);
 }
 
-static struct notifier_block dpaa2_switch_port_switchdev_nb;
-static struct notifier_block dpaa2_switch_port_switchdev_blocking_nb;
-
 static int dpaa2_switch_port_bridge_join(struct net_device *netdev,
 					 struct net_device *upper_dev,
 					 struct netlink_ext_ack *extack)
@@ -2043,9 +2020,7 @@ static int dpaa2_switch_port_bridge_join(struct net_device *netdev,
 		goto err_egress_flood;
 
 	err = switchdev_bridge_port_offload(netdev, netdev, NULL,
-					    &dpaa2_switch_port_switchdev_nb,
-					    &dpaa2_switch_port_switchdev_blocking_nb,
-					    false, extack);
+					    NULL, NULL, false, extack);
 	if (err)
 		goto err_switchdev_offload;
 
@@ -2079,9 +2054,7 @@ static int dpaa2_switch_port_restore_rxvlan(struct net_device *vdev, int vid, vo
 
 static void dpaa2_switch_port_pre_bridge_leave(struct net_device *netdev)
 {
-	switchdev_bridge_port_unoffload(netdev, NULL,
-					&dpaa2_switch_port_switchdev_nb,
-					&dpaa2_switch_port_switchdev_blocking_nb);
+	switchdev_bridge_port_unoffload(netdev, NULL, NULL, NULL);
 }
 
 static int dpaa2_switch_port_bridge_leave(struct net_device *netdev)
@@ -2955,7 +2928,9 @@ static void dpaa2_switch_remove_port(struct ethsw_core *ethsw,
 {
 	struct ethsw_port_priv *port_priv = ethsw->ports[port_idx];
 
+	rtnl_lock();
 	dpaa2_switch_port_disconnect_mac(port_priv);
+	rtnl_unlock();
 	free_netdev(port_priv->netdev);
 	ethsw->ports[port_idx] = NULL;
 }
@@ -3273,8 +3248,6 @@ static int dpaa2_switch_probe_port(struct ethsw_core *ethsw,
 	port_priv = netdev_priv(port_netdev);
 	port_priv->netdev = port_netdev;
 	port_priv->ethsw_data = ethsw;
-
-	mutex_init(&port_priv->mac_lock);
 
 	port_priv->idx = port_idx;
 	port_priv->stp_state = BR_STATE_FORWARDING;

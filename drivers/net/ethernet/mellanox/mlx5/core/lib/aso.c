@@ -98,7 +98,7 @@ static int create_aso_cq(struct mlx5_aso_cq *cq, void *cqc_data)
 	mlx5_fill_page_frag_array(&cq->wq_ctrl.buf,
 				  (__be64 *)MLX5_ADDR_OF(create_cq_in, in, pas));
 
-	MLX5_SET(cqc,   cqc, cq_period_mode, DIM_CQ_PERIOD_MODE_START_FROM_EQE);
+	MLX5_SET(cqc,   cqc, cq_period_mode, MLX5_CQ_PERIOD_MODE_START_FROM_EQE);
 	MLX5_SET(cqc,   cqc, c_eqn_or_apu_element, eqn);
 	MLX5_SET(cqc,   cqc, uar_page,      mdev->priv.uar->index);
 	MLX5_SET(cqc,   cqc, log_page_size, cq->wq_ctrl.buf.page_shift -
@@ -334,6 +334,9 @@ err_cq:
 
 void mlx5_aso_destroy(struct mlx5_aso *aso)
 {
+	if (IS_ERR_OR_NULL(aso))
+		return;
+
 	mlx5_aso_destroy_sq(aso);
 	mlx5_aso_destroy_cq(&aso->cq);
 	kfree(aso);
@@ -353,15 +356,12 @@ void mlx5_aso_build_wqe(struct mlx5_aso *aso, u8 ds_cnt,
 	cseg->general_id = cpu_to_be32(obj_id);
 }
 
-struct mlx5_aso_wqe *mlx5_aso_get_wqe(struct mlx5_aso *aso)
+void *mlx5_aso_get_wqe(struct mlx5_aso *aso)
 {
-	struct mlx5_aso_wqe *wqe;
 	u16 pi;
 
 	pi = mlx5_wq_cyc_ctr2ix(&aso->wq, aso->pc);
-	wqe = mlx5_wq_cyc_get_wqe(&aso->wq, pi);
-	memset(wqe, 0, sizeof(*wqe));
-	return wqe;
+	return mlx5_wq_cyc_get_wqe(&aso->wq, pi);
 }
 
 void mlx5_aso_post_wqe(struct mlx5_aso *aso, bool with_data,

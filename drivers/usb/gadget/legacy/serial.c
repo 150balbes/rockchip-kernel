@@ -9,7 +9,6 @@
 
 #include <linux/kernel.h>
 #include <linux/device.h>
-#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
@@ -110,7 +109,7 @@ static int enable_set(const char *s, const struct kernel_param *kp)
 	if (!s)	/* called for no-arg enable == default */
 		return 0;
 
-	ret = kstrtobool(s, &do_enable);
+	ret = strtobool(s, &do_enable);
 	if (ret || enable == do_enable)
 		return ret;
 

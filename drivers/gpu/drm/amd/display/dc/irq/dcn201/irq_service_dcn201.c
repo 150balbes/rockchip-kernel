@@ -28,19 +28,20 @@
 #include "include/logger_interface.h"
 
 #include "../dce110/irq_service_dce110.h"
-#include "irq_service_dcn201.h"
 
 #include "dcn/dcn_2_0_3_offset.h"
 #include "dcn/dcn_2_0_3_sh_mask.h"
 
 #include "cyan_skillfish_ip_offset.h"
 #include "soc15_hw_ip.h"
+
+#include "irq_service_dcn201.h"
+
 #include "ivsrcid/dcn/irqsrcs_dcn_1_0.h"
 
-enum dc_irq_source to_dal_irq_source_dcn201(
-		struct irq_service *irq_service,
-		uint32_t src_id,
-		uint32_t ext_id)
+static enum dc_irq_source to_dal_irq_source_dcn201(struct irq_service *irq_service,
+						   uint32_t src_id,
+						   uint32_t ext_id)
 {
 	switch (src_id) {
 	case DCN_1_0__SRCID__DC_D1_OTG_VSTARTUP:
@@ -78,6 +79,7 @@ enum dc_irq_source to_dal_irq_source_dcn201(
 	default:
 		return DC_IRQ_SOURCE_INVALID;
 	}
+	return DC_IRQ_SOURCE_INVALID;
 }
 
 static bool hpd_ack(
@@ -132,11 +134,6 @@ static const struct irq_source_info_funcs vline0_irq_info_funcs = {
 	.ack = NULL
 };
 static const struct irq_source_info_funcs vupdate_no_lock_irq_info_funcs = {
-	.set = NULL,
-	.ack = NULL
-};
-
-static const struct irq_source_info_funcs dmub_outbox_irq_info_funcs = {
 	.set = NULL,
 	.ack = NULL
 };

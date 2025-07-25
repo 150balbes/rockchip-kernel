@@ -10,7 +10,6 @@
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
 #include "xfs_btree.h"
-#include "scrub/scrub.h"
 #include "scrub/bitmap.h"
 
 /*
@@ -26,7 +25,7 @@ xbitmap_set(
 {
 	struct xbitmap_range	*bmr;
 
-	bmr = kmalloc(sizeof(struct xbitmap_range), XCHK_GFP_FLAGS);
+	bmr = kmem_alloc(sizeof(struct xbitmap_range), KM_MAYFAIL);
 	if (!bmr)
 		return -ENOMEM;
 
@@ -48,7 +47,7 @@ xbitmap_destroy(
 
 	for_each_xbitmap_extent(bmr, n, bitmap) {
 		list_del(&bmr->list);
-		kfree(bmr);
+		kmem_free(bmr);
 	}
 }
 
@@ -175,15 +174,15 @@ xbitmap_disunion(
 			/* Total overlap, just delete ex. */
 			lp = lp->next;
 			list_del(&br->list);
-			kfree(br);
+			kmem_free(br);
 			break;
 		case 0:
 			/*
 			 * Deleting from the middle: add the new right extent
 			 * and then shrink the left extent.
 			 */
-			new_br = kmalloc(sizeof(struct xbitmap_range),
-					XCHK_GFP_FLAGS);
+			new_br = kmem_alloc(sizeof(struct xbitmap_range),
+					KM_MAYFAIL);
 			if (!new_br) {
 				error = -ENOMEM;
 				goto out;

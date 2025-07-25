@@ -14,14 +14,10 @@
 #ifndef PINCTRL_DEVINFO_H
 #define PINCTRL_DEVINFO_H
 
-struct device;
-
 #ifdef CONFIG_PINCTRL
 
 /* The device core acts as a consumer toward pinctrl */
 #include <linux/pinctrl/consumer.h>
-
-struct pinctrl;
 
 /**
  * struct dev_pin_info - pin state container for devices
@@ -45,6 +41,8 @@ extern int pinctrl_bind_pins(struct device *dev);
 extern int pinctrl_init_done(struct device *dev);
 
 #else
+
+struct device;
 
 /* Stubs if we're not using pinctrl */
 

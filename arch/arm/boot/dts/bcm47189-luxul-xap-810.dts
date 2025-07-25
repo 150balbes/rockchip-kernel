@@ -20,26 +20,26 @@
 		reg = <0x00000000 0x08000000>;
 	};
 
-	leds-0 {
+	leds {
 		compatible = "gpio-leds";
 
-		led-5ghz {
+		5ghz {
 			label = "bcm53xx:blue:5ghz";
 			gpios = <&chipcommon 11 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "default-off";
 		};
 
-		led-system {
+		system {
 			label = "bcm53xx:green:system";
 			gpios = <&chipcommon 15 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "timer";
 		};
 	};
 
-	leds-1 {
+	pcie0_leds {
 		compatible = "gpio-leds";
 
-		led-2ghz {
+		2ghz {
 			label = "bcm53xx:blue:2ghz";
 			gpios = <&pcie0_chipcommon 3 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "default-off";
@@ -80,6 +80,19 @@
 				gpio-controller;
 				#gpio-cells = <2>;
 			};
+		};
+	};
+};
+
+&gmac0 {
+	phy-mode = "rgmii";
+	phy-handle = <&bcm54210e>;
+
+	mdio {
+		/delete-node/ switch@1e;
+
+		bcm54210e: ethernet-phy@0 {
+			reg = <0>;
 		};
 	};
 };

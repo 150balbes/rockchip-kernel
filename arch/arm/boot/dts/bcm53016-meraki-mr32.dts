@@ -58,7 +58,7 @@
 	pwm-leds {
 		compatible = "pwm-leds";
 
-		led-0 {
+		red {
 			/* SYS-LED 1 - Tricolor */
 			function = LED_FUNCTION_INDICATOR;
 			color = <LED_COLOR_ID_RED>;
@@ -66,7 +66,7 @@
 			max-brightness = <255>;
 		};
 
-		led-1 {
+		green {
 			/* SYS-LED 1 - Tricolor */
 			function = LED_FUNCTION_POWER;
 			color = <LED_COLOR_ID_GREEN>;
@@ -74,7 +74,7 @@
 			max-brightness = <255>;
 		};
 
-		led-2 {
+		blue {
 			/* SYS-LED 1 - Tricolor */
 			function = LED_FUNCTION_INDICATOR;
 			color = <LED_COLOR_ID_BLUE>;
@@ -187,7 +187,7 @@
 
 			fixed-link {
 				speed = <1000>;
-				duplex-full;
+				full-duplex;
 			};
 		};
 	};

@@ -46,11 +46,8 @@ properties:
     const: 2
 
   interrupts:
-    description: Interrupt outputs to the system interrupt controller (sysirq).
-    minItems: 1
-    items:
-      - description: EINT interrupt
-      - description: EINT event_b interrupt
+    description: The interrupt outputs to sysirq.
+    maxItems: 1
 
 # PIN CONFIGURATION NODES
 patternProperties:

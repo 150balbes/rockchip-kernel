@@ -90,8 +90,6 @@ DEFINE_STATIC_CALL_NULL(x86_pmu_swap_task_ctx, *x86_pmu.swap_task_ctx);
 DEFINE_STATIC_CALL_NULL(x86_pmu_drain_pebs,   *x86_pmu.drain_pebs);
 DEFINE_STATIC_CALL_NULL(x86_pmu_pebs_aliases, *x86_pmu.pebs_aliases);
 
-DEFINE_STATIC_CALL_NULL(x86_pmu_filter, *x86_pmu.filter);
-
 /*
  * This one is magic, it will get called even when PMU init fails (because
  * there is no PMU), in which case it should simply return NULL.
@@ -1646,6 +1644,7 @@ static void x86_pmu_del(struct perf_event *event, int flags)
 	while (++i < cpuc->n_events) {
 		cpuc->event_list[i-1] = cpuc->event_list[i];
 		cpuc->event_constraint[i-1] = cpuc->event_constraint[i];
+		cpuc->assign[i-1] = cpuc->assign[i];
 	}
 	cpuc->event_constraint[i-1] = NULL;
 	--cpuc->n_events;
@@ -2033,7 +2032,6 @@ static void x86_pmu_static_call_update(void)
 	static_call_update(x86_pmu_pebs_aliases, x86_pmu.pebs_aliases);
 
 	static_call_update(x86_pmu_guest_get_msrs, x86_pmu.guest_get_msrs);
-	static_call_update(x86_pmu_filter, x86_pmu.filter);
 }
 
 static void _x86_pmu_read(struct perf_event *event)
@@ -2053,6 +2051,23 @@ void x86_pmu_show_pmu_cap(int num_counters, int num_counters_fixed,
 			hweight64((((1ULL << num_counters_fixed) - 1)
 					<< INTEL_PMC_IDX_FIXED) & intel_ctrl));
 	pr_info("... event mask:             %016Lx\n", intel_ctrl);
+}
+
+/*
+ * The generic code is not hybrid friendly. The hybrid_pmu->pmu
+ * of the first registered PMU is unconditionally assigned to
+ * each possible cpuctx->ctx.pmu.
+ * Update the correct hybrid PMU to the cpuctx->ctx.pmu.
+ */
+void x86_pmu_update_cpu_context(struct pmu *pmu, int cpu)
+{
+	struct perf_cpu_context *cpuctx;
+
+	if (!pmu->pmu_cpu_context)
+		return;
+
+	cpuctx = per_cpu_ptr(pmu->pmu_cpu_context, cpu);
+	cpuctx->ctx.pmu = pmu;
 }
 
 static int __init init_hw_perf_events(void)
@@ -2161,8 +2176,12 @@ static int __init init_hw_perf_events(void)
 		if (err)
 			goto out2;
 	} else {
+		u8 cpu_type = get_this_hybrid_cpu_type();
 		struct x86_hybrid_pmu *hybrid_pmu;
 		int i, j;
+
+		if (!cpu_type && x86_pmu.get_hybrid_cpu_type)
+			cpu_type = x86_pmu.get_hybrid_cpu_type();
 
 		for (i = 0; i < x86_pmu.num_hybrid_pmus; i++) {
 			hybrid_pmu = &x86_pmu.hybrid_pmu[i];
@@ -2177,6 +2196,9 @@ static int __init init_hw_perf_events(void)
 						(hybrid_pmu->cpu_type == hybrid_big) ? PERF_TYPE_RAW : -1);
 			if (err)
 				break;
+
+			if (cpu_type == hybrid_pmu->cpu_type)
+				x86_pmu_update_cpu_context(&hybrid_pmu->pmu, raw_smp_processor_id());
 		}
 
 		if (i < x86_pmu.num_hybrid_pmus) {
@@ -2625,15 +2647,15 @@ static const struct attribute_group *x86_pmu_attr_groups[] = {
 	NULL,
 };
 
-static void x86_pmu_sched_task(struct perf_event_pmu_context *pmu_ctx, bool sched_in)
+static void x86_pmu_sched_task(struct perf_event_context *ctx, bool sched_in)
 {
-	static_call_cond(x86_pmu_sched_task)(pmu_ctx, sched_in);
+	static_call_cond(x86_pmu_sched_task)(ctx, sched_in);
 }
 
-static void x86_pmu_swap_task_ctx(struct perf_event_pmu_context *prev_epc,
-				  struct perf_event_pmu_context *next_epc)
+static void x86_pmu_swap_task_ctx(struct perf_event_context *prev,
+				  struct perf_event_context *next)
 {
-	static_call_cond(x86_pmu_swap_task_ctx)(prev_epc, next_epc);
+	static_call_cond(x86_pmu_swap_task_ctx)(prev, next);
 }
 
 void perf_check_microcode(void)
@@ -2668,13 +2690,12 @@ static int x86_pmu_aux_output_match(struct perf_event *event)
 	return 0;
 }
 
-static bool x86_pmu_filter(struct pmu *pmu, int cpu)
+static int x86_pmu_filter_match(struct perf_event *event)
 {
-	bool ret = false;
+	if (x86_pmu.filter_match)
+		return x86_pmu.filter_match(event);
 
-	static_call_cond(x86_pmu_filter)(pmu, cpu, &ret);
-
-	return ret;
+	return 1;
 }
 
 static struct pmu pmu = {
@@ -2705,7 +2726,7 @@ static struct pmu pmu = {
 
 	.aux_output_match	= x86_pmu_aux_output_match,
 
-	.filter			= x86_pmu_filter,
+	.filter_match		= x86_pmu_filter_match,
 };
 
 void arch_perf_update_userpage(struct perf_event *event,
@@ -2974,17 +2995,19 @@ unsigned long perf_misc_flags(struct pt_regs *regs)
 
 void perf_get_x86_pmu_capability(struct x86_pmu_capability *cap)
 {
-	if (!x86_pmu_initialized()) {
+	/* This API doesn't currently support enumerating hybrid PMUs. */
+	if (WARN_ON_ONCE(cpu_feature_enabled(X86_FEATURE_HYBRID_CPU)) ||
+	    !x86_pmu_initialized()) {
 		memset(cap, 0, sizeof(*cap));
 		return;
 	}
 
-	cap->version		= x86_pmu.version;
 	/*
-	 * KVM doesn't support the hybrid PMU yet.
-	 * Return the common value in global x86_pmu,
-	 * which available for all cores.
+	 * Note, hybrid CPU models get tracked as having hybrid PMUs even when
+	 * all E-cores are disabled via BIOS.  When E-cores are disabled, the
+	 * base PMU holds the correct number of counters for P-cores.
 	 */
+	cap->version		= x86_pmu.version;
 	cap->num_counters_gp	= x86_pmu.num_counters;
 	cap->num_counters_fixed	= x86_pmu.num_counters_fixed;
 	cap->bit_width_gp	= x86_pmu.cntval_bits;

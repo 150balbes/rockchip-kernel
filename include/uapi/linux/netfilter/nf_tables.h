@@ -97,7 +97,6 @@ enum nft_verdicts {
  * @NFT_MSG_NEWFLOWTABLE: add new flow table (enum nft_flowtable_attributes)
  * @NFT_MSG_GETFLOWTABLE: get flow table (enum nft_flowtable_attributes)
  * @NFT_MSG_DELFLOWTABLE: delete flow table (enum nft_flowtable_attributes)
- * @NFT_MSG_GETRULE_RESET: get rules and reset stateful expressions (enum nft_obj_attributes)
  */
 enum nf_tables_msg_types {
 	NFT_MSG_NEWTABLE,
@@ -125,7 +124,6 @@ enum nf_tables_msg_types {
 	NFT_MSG_NEWFLOWTABLE,
 	NFT_MSG_GETFLOWTABLE,
 	NFT_MSG_DELFLOWTABLE,
-	NFT_MSG_GETRULE_RESET,
 	NFT_MSG_MAX,
 };
 
@@ -268,9 +266,11 @@ enum nft_rule_attributes {
 /**
  * enum nft_rule_compat_flags - nf_tables rule compat flags
  *
+ * @NFT_RULE_COMPAT_F_UNUSED: unused
  * @NFT_RULE_COMPAT_F_INV: invert the check result
  */
 enum nft_rule_compat_flags {
+	NFT_RULE_COMPAT_F_UNUSED = (1 << 0),
 	NFT_RULE_COMPAT_F_INV	= (1 << 1),
 	NFT_RULE_COMPAT_F_MASK	= NFT_RULE_COMPAT_F_INV,
 };
@@ -762,7 +762,6 @@ enum nft_payload_bases {
 	NFT_PAYLOAD_NETWORK_HEADER,
 	NFT_PAYLOAD_TRANSPORT_HEADER,
 	NFT_PAYLOAD_INNER_HEADER,
-	NFT_PAYLOAD_TUN_HEADER,
 };
 
 /**
@@ -781,32 +780,6 @@ enum nft_payload_csum_types {
 enum nft_payload_csum_flags {
 	NFT_PAYLOAD_L4CSUM_PSEUDOHDR = (1 << 0),
 };
-
-enum nft_inner_type {
-	NFT_INNER_UNSPEC	= 0,
-	NFT_INNER_VXLAN,
-	NFT_INNER_GENEVE,
-};
-
-enum nft_inner_flags {
-	NFT_INNER_HDRSIZE	= (1 << 0),
-	NFT_INNER_LL		= (1 << 1),
-	NFT_INNER_NH		= (1 << 2),
-	NFT_INNER_TH		= (1 << 3),
-};
-#define NFT_INNER_MASK		(NFT_INNER_HDRSIZE | NFT_INNER_LL | \
-				 NFT_INNER_NH | NFT_INNER_TH)
-
-enum nft_inner_attributes {
-	NFTA_INNER_UNSPEC,
-	NFTA_INNER_NUM,
-	NFTA_INNER_TYPE,
-	NFTA_INNER_FLAGS,
-	NFTA_INNER_HDRSIZE,
-	NFTA_INNER_EXPR,
-	__NFTA_INNER_MAX
-};
-#define NFTA_INNER_MAX	(__NFTA_INNER_MAX - 1)
 
 /**
  * enum nft_payload_attributes - nf_tables payload expression netlink attributes
@@ -845,12 +818,14 @@ enum nft_exthdr_flags {
  * @NFT_EXTHDR_OP_TCP: match against tcp options
  * @NFT_EXTHDR_OP_IPV4: match against ipv4 options
  * @NFT_EXTHDR_OP_SCTP: match against sctp chunks
+ * @NFT_EXTHDR_OP_DCCP: match against dccp otions
  */
 enum nft_exthdr_op {
 	NFT_EXTHDR_OP_IPV6,
 	NFT_EXTHDR_OP_TCPOPT,
 	NFT_EXTHDR_OP_IPV4,
 	NFT_EXTHDR_OP_SCTP,
+	NFT_EXTHDR_OP_DCCP,
 	__NFT_EXTHDR_OP_MAX
 };
 #define NFT_EXTHDR_OP_MAX	(__NFT_EXTHDR_OP_MAX - 1)

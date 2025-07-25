@@ -35,7 +35,6 @@
 #include <drm/drm_aperture.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_generic.h>
 #include <drm/drm_file.h>
 
 #include "virtgpu_drv.h"
@@ -94,6 +93,7 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 			goto err_free;
 	}
 
+	dma_set_max_seg_size(dev->dev, dma_max_mapping_size(dev->dev) ?: UINT_MAX);
 	ret = virtio_gpu_init(vdev, dev);
 	if (ret)
 		goto err_free;

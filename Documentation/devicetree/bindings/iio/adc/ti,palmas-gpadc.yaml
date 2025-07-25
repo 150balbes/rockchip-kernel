@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/iio/adc/ti,palmas-gpadc.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Palmas general purpose ADC IP block
+title: Palmas general purpose ADC IP block devicetree bindings
 
 maintainers:
   - Tony Lindgren <tony@atomide.com>

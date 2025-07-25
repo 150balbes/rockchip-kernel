@@ -74,6 +74,12 @@ struct btrfs_raid_bio {
 	/* How many sectors there are for each stripe */
 	u8 stripe_nsectors;
 
+	/* First bad stripe, -1 means no corruption */
+	s8 faila;
+
+	/* Second bad stripe (for RAID6 use) */
+	s8 failb;
+
 	/* Stripe number that we're scrubbing  */
 	u8 scrubp;
 
@@ -87,7 +93,9 @@ struct btrfs_raid_bio {
 
 	atomic_t stripes_pending;
 
-	wait_queue_head_t io_wait;
+	atomic_t error;
+
+	struct work_struct end_io_work;
 
 	/* Bitmap to record which horizontal stripe has data */
 	unsigned long dbitmap;
@@ -118,29 +126,6 @@ struct btrfs_raid_bio {
 
 	/* Allocated with real_stripes-many pointers for finish_*() calls */
 	void **finish_pointers;
-
-	/*
-	 * The bitmap recording where IO errors happened.
-	 * Each bit is corresponding to one sector in either bio_sectors[] or
-	 * stripe_sectors[] array.
-	 *
-	 * The reason we don't use another bit in sector_ptr is, we have two
-	 * arrays of sectors, and a lot of IO can use sectors in both arrays.
-	 * Thus making it much harder to iterate.
-	 */
-	unsigned long *error_bitmap;
-
-	/*
-	 * Checksum buffer if the rbio is for data.  The buffer should cover
-	 * all data sectors (exlcuding P/Q sectors).
-	 */
-	u8 *csum_buf;
-
-	/*
-	 * Each bit represents if the corresponding sector has data csum found.
-	 * Should only cover data sectors (excluding P/Q sectors).
-	 */
-	unsigned long *csum_bitmap;
 };
 
 /*

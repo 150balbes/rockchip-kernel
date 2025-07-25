@@ -236,6 +236,7 @@ static struct kvm_vm *test_vm_create(struct kvm_vcpu **vcpu)
 
 	vm = vm_create_with_one_vcpu(vcpu, guest_code);
 
+	ucall_init(vm, NULL);
 	steal_time_init(*vcpu);
 
 	return vm;
@@ -305,6 +306,8 @@ static void test_run(void)
 
 int main(void)
 {
+	setbuf(stdout, NULL);
+
 	test_run();
 	return 0;
 }

@@ -2,7 +2,6 @@
 /* Copyright(c) 2014 - 2022 Intel Corporation */
 #ifndef QAT_BL_H
 #define QAT_BL_H
-#include <linux/crypto.h>
 #include <linux/scatterlist.h>
 #include <linux/types.h>
 
@@ -52,16 +51,5 @@ int qat_bl_sgl_to_bufl(struct adf_accel_dev *accel_dev,
 		       struct qat_request_buffs *buf,
 		       struct qat_sgl_to_bufl_params *params,
 		       gfp_t flags);
-
-static inline gfp_t qat_algs_alloc_flags(struct crypto_async_request *req)
-{
-	return req->flags & CRYPTO_TFM_REQ_MAY_SLEEP ? GFP_KERNEL : GFP_ATOMIC;
-}
-
-int qat_bl_realloc_map_new_dst(struct adf_accel_dev *accel_dev,
-			       struct scatterlist **newd,
-			       unsigned int dlen,
-			       struct qat_request_buffs *qat_bufs,
-			       gfp_t gfp);
 
 #endif

@@ -261,8 +261,8 @@ static int ili251x_read_touch_data(struct i2c_client *client, u8 *data)
 	if (!error && data[0] == 2) {
 		error = i2c_master_recv(client, data + ILI251X_DATA_SIZE1,
 					ILI251X_DATA_SIZE2);
-		if (error >= 0 && error != ILI251X_DATA_SIZE2)
-			error = -EIO;
+		if (error >= 0)
+			error = error == ILI251X_DATA_SIZE2 ? 0 : -EIO;
 	}
 
 	return error;
@@ -297,6 +297,7 @@ static const struct ili2xxx_chip ili251x_chip = {
 	.parse_touch_data	= ili251x_touchdata_to_coords,
 	.continue_polling	= ili251x_check_continue_polling,
 	.max_touches		= 10,
+	.resolution		= 16383,
 	.has_calibrate_reg	= true,
 	.has_firmware_proto	= true,
 	.has_pressure_reg	= true,
@@ -913,9 +914,9 @@ static void ili210x_stop(void *data)
 	priv->stop = true;
 }
 
-static int ili210x_i2c_probe(struct i2c_client *client)
+static int ili210x_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct device *dev = &client->dev;
 	const struct ili2xxx_chip *chip;
 	struct ili210x *priv;
@@ -968,6 +969,7 @@ static int ili210x_i2c_probe(struct i2c_client *client)
 
 	/* Setup input device */
 	input->name = "ILI210x Touchscreen";
+	input->phys = devm_kasprintf(dev, GFP_KERNEL, "ili210x-%s/input0", dev_name(dev));
 	input->id.bustype = BUS_I2C;
 
 	/* Multi touch */
@@ -1043,7 +1045,7 @@ static struct i2c_driver ili210x_ts_driver = {
 		.of_match_table = ili210x_dt_ids,
 	},
 	.id_table = ili210x_i2c_id,
-	.probe_new = ili210x_i2c_probe,
+	.probe = ili210x_i2c_probe,
 };
 
 module_i2c_driver(ili210x_ts_driver);

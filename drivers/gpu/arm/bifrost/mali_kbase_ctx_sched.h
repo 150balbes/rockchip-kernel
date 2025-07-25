@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2017-2018, 2020-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2017-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -22,7 +22,10 @@
 #ifndef _KBASE_CTX_SCHED_H_
 #define _KBASE_CTX_SCHED_H_
 
-#include <mali_kbase.h>
+#include <linux/types.h>
+
+struct kbase_context;
+struct kbase_device;
 
 /**
  * DOC: The Context Scheduler manages address space assignment and reference
@@ -58,6 +61,17 @@ int kbase_ctx_sched_init(struct kbase_device *kbdev);
  * destroyed.
  */
 void kbase_ctx_sched_term(struct kbase_device *kbdev);
+
+/**
+ * kbase_ctx_sched_init_ctx - Initialize per-context data fields for scheduling
+ * @kctx: The context to initialize
+ *
+ * This must be called during context initialization before any other context
+ * scheduling functions are called on @kctx
+ *
+ * Return: 0
+ */
+int kbase_ctx_sched_init_ctx(struct kbase_context *kctx);
 
 /**
  * kbase_ctx_sched_retain_ctx - Retain a reference to the @ref kbase_context
@@ -113,9 +127,6 @@ void kbase_ctx_sched_release_ctx(struct kbase_context *kctx);
  * This function should be called when a context is being destroyed. The
  * context must no longer have any reference. If it has been assigned an
  * address space before then the AS will be unprogrammed.
- *
- * The kbase_device::mmu_hw_mutex and kbase_device::hwaccess_lock locks must be
- * held whilst calling this function.
  */
 void kbase_ctx_sched_remove_ctx(struct kbase_context *kctx);
 
@@ -151,8 +162,7 @@ void kbase_ctx_sched_restore_all_as(struct kbase_device *kbdev);
  * as being busy or return NULL on failure, indicating that no context was found
  * in as_nr.
  */
-struct kbase_context *kbase_ctx_sched_as_to_ctx_refcount(
-		struct kbase_device *kbdev, size_t as_nr);
+struct kbase_context *kbase_ctx_sched_as_to_ctx_refcount(struct kbase_device *kbdev, size_t as_nr);
 
 /**
  * kbase_ctx_sched_as_to_ctx - Lookup a context based on its current address
@@ -163,8 +173,7 @@ struct kbase_context *kbase_ctx_sched_as_to_ctx_refcount(
  * Return: a valid struct kbase_context on success or NULL on failure,
  * indicating that no context was found in as_nr.
  */
-struct kbase_context *kbase_ctx_sched_as_to_ctx(struct kbase_device *kbdev,
-		size_t as_nr);
+struct kbase_context *kbase_ctx_sched_as_to_ctx(struct kbase_device *kbdev, size_t as_nr);
 
 /**
  * kbase_ctx_sched_as_to_ctx_nolock - Lookup a context based on its current
@@ -178,8 +187,7 @@ struct kbase_context *kbase_ctx_sched_as_to_ctx(struct kbase_device *kbdev,
  * Return: a valid struct kbase_context on success or NULL on failure,
  * indicating that no context was found in as_nr.
  */
-struct kbase_context *kbase_ctx_sched_as_to_ctx_nolock(
-		struct kbase_device *kbdev, size_t as_nr);
+struct kbase_context *kbase_ctx_sched_as_to_ctx_nolock(struct kbase_device *kbdev, size_t as_nr);
 
 /**
  * kbase_ctx_sched_inc_refcount_nolock - Refcount a context as being busy,

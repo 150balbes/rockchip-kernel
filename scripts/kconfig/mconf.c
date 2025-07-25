@@ -440,8 +440,9 @@ again:
 
 		res = get_relations_str(sym_arr, &head);
 		set_subtitle();
-		dres = show_textbox_ext("Search Results", str_get(&res), 0, 0,
-					keys, &vscroll, &hscroll, &update_text,
+		dres = show_textbox_ext("Search Results", (char *)
+					str_get(&res), 0, 0, keys, &vscroll,
+					&hscroll, &update_text, (void *)
 					&data);
 		again = false;
 		for (i = 0; i < JUMP_NB && keys[i]; i++)

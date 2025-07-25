@@ -54,7 +54,7 @@ int o2nm_configured_node_map(unsigned long *map, unsigned bytes)
 		return -EINVAL;
 
 	read_lock(&cluster->cl_nodes_lock);
-	bitmap_copy(map, cluster->cl_nodes_bitmap, O2NM_MAX_NODES);
+	memcpy(map, cluster->cl_nodes_bitmap, sizeof(cluster->cl_nodes_bitmap));
 	read_unlock(&cluster->cl_nodes_lock);
 
 	return 0;

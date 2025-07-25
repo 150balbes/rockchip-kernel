@@ -8,8 +8,7 @@
  */
 #ifndef _CRYPTO_SCOMP_INT_H
 #define _CRYPTO_SCOMP_INT_H
-
-#include <crypto/algapi.h>
+#include <linux/crypto.h>
 
 #define SCOMP_SCRATCH_SIZE	131072
 

@@ -418,7 +418,6 @@
 	wcd_rx: codec@0,4 {
 		compatible = "sdw20217010d00";
 		reg = <0 4>;
-		#sound-dai-cells = <1>;
 		qcom,rx-port-mapping = <1 2 3 4 5>;
 	};
 };
@@ -427,7 +426,6 @@
 	wcd_tx: codec@0,3 {
 		compatible = "sdw20217010d00";
 		reg = <0 3>;
-		#sound-dai-cells = <1>;
 		qcom,tx-port-mapping = <1 2 3 4>;
 	};
 };
@@ -595,7 +593,7 @@ mos_bt_uart: &uart7 {
 };
 
 &tlmm {
-	mos_bt_en: mos-bt-en-state {
+	mos_bt_en: mos-bt-en-pins {
 		pins = "gpio85";
 		function = "gpio";
 		drive-strength = <2>;
@@ -603,7 +601,7 @@ mos_bt_uart: &uart7 {
 	};
 
 	/* For mos_bt_uart */
-	qup_uart7_sleep_cts: qup-uart7-sleep-cts-state {
+	qup_uart7_sleep_cts: qup-uart7-sleep-cts-pins {
 		pins = "gpio28";
 		function = "gpio";
 		/*
@@ -617,7 +615,7 @@ mos_bt_uart: &uart7 {
 	};
 
 	/* For mos_bt_uart */
-	qup_uart7_sleep_rts: qup-uart7-sleep-rts-state {
+	qup_uart7_sleep_rts: qup-uart7-sleep-rts-pins {
 		pins = "gpio29";
 		function = "gpio";
 		/*
@@ -630,7 +628,7 @@ mos_bt_uart: &uart7 {
 	};
 
 	/* For mos_bt_uart */
-	qup_uart7_sleep_rx: qup-uart7-sleep-rx-state {
+	qup_uart7_sleep_rx: qup-uart7-sleep-rx-pins {
 		pins = "gpio31";
 		function = "gpio";
 		/*
@@ -642,7 +640,7 @@ mos_bt_uart: &uart7 {
 	};
 
 	/* For mos_bt_uart */
-	qup_uart7_sleep_tx: qup-uart7-sleep-tx-state {
+	qup_uart7_sleep_tx: qup-uart7-sleep-tx-pins {
 		pins = "gpio30";
 		function = "gpio";
 		/*
@@ -652,32 +650,32 @@ mos_bt_uart: &uart7 {
 		bias-pull-up;
 	};
 
-	ts_int_conn: ts-int-conn-state {
+	ts_int_conn: ts-int-conn-pins {
 		pins = "gpio55";
 		function = "gpio";
 		bias-pull-up;
 	};
 
-	ts_rst_conn: ts-rst-conn-state {
+	ts_rst_conn: ts-rst-conn-pins {
 		pins = "gpio54";
 		function = "gpio";
 		drive-strength = <2>;
 	};
 
-	us_euro_hs_sel: us-euro-hs-sel-state {
+	us_euro_hs_sel: us-euro-hs-sel {
 		pins = "gpio81";
 		function = "gpio";
 		bias-pull-down;
 		drive-strength = <2>;
 	};
 
-	wcd_reset_n: wcd-reset-n-state {
+	wcd_reset_n: wcd-reset-n {
 		pins = "gpio83";
 		function = "gpio";
 		drive-strength = <8>;
 	};
 
-	wcd_reset_n_sleep: wcd-reset-n-sleep-state {
+	wcd_reset_n_sleep: wcd-reset-n-sleep {
 		pins = "gpio83";
 		function = "gpio";
 		drive-strength = <8>;

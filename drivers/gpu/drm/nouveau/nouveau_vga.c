@@ -7,6 +7,7 @@
 
 #include "nouveau_drv.h"
 #include "nouveau_acpi.h"
+#include "nouveau_fbcon.h"
 #include "nouveau_vga.h"
 
 static unsigned int

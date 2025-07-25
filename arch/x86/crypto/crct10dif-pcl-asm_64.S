@@ -94,6 +94,7 @@
 #
 # Assumes len >= 16.
 #
+.align 16
 SYM_FUNC_START(crc_t10dif_pcl)
 
 	movdqa	.Lbswap_mask(%rip), BSWAP_MASK

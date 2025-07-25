@@ -232,8 +232,7 @@ static int nft_bitwise_dump_shift(struct sk_buff *skb,
 	return 0;
 }
 
-static int nft_bitwise_dump(struct sk_buff *skb,
-			    const struct nft_expr *expr, bool reset)
+static int nft_bitwise_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_bitwise *priv = nft_expr_priv(expr);
 	int err = 0;
@@ -323,7 +322,7 @@ static bool nft_bitwise_reduce(struct nft_regs_track *track,
 	dreg = priv->dreg;
 	regcount = DIV_ROUND_UP(priv->len, NFT_REG32_SIZE);
 	for (i = 0; i < regcount; i++, dreg++)
-		track->regs[priv->dreg].bitwise = expr;
+		track->regs[dreg].bitwise = expr;
 
 	return false;
 }
@@ -394,8 +393,7 @@ static int nft_bitwise_fast_init(const struct nft_ctx *ctx,
 }
 
 static int
-nft_bitwise_fast_dump(struct sk_buff *skb,
-		      const struct nft_expr *expr, bool reset)
+nft_bitwise_fast_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_bitwise_fast_expr *priv = nft_expr_priv(expr);
 	struct nft_data data;

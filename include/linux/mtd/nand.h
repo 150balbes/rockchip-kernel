@@ -198,12 +198,24 @@ struct nand_ecc_props {
 /* NAND ECC misc flags */
 #define NAND_ECC_MAXIMIZE_STRENGTH BIT(0)
 
+/* nand_bbt option */
+#define NANDDEV_BBT_SCANNED		BIT(0)
+
+/* The maximum number of blocks to scan for a bbt */
+#define NANDDEV_BBT_SCAN_MAXBLOCKS	4
+
 /**
  * struct nand_bbt - bad block table object
  * @cache: in memory BBT cache
+ * @option: the option of BBT
+ * @version: current memory BBT cache version
  */
 struct nand_bbt {
 	unsigned long *cache;
+#ifdef CONFIG_MTD_NAND_BBT_USING_FLASH
+	unsigned int option;
+	unsigned int version;
+#endif
 };
 
 /**
@@ -999,6 +1011,7 @@ static inline bool nanddev_io_iter_end(struct nand_device *nand,
 
 bool nanddev_isbad(struct nand_device *nand, const struct nand_pos *pos);
 bool nanddev_isreserved(struct nand_device *nand, const struct nand_pos *pos);
+int nanddev_erase(struct nand_device *nand, const struct nand_pos *pos);
 int nanddev_markbad(struct nand_device *nand, const struct nand_pos *pos);
 
 /* ECC related functions */

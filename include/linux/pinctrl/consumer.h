@@ -12,15 +12,14 @@
 #define __LINUX_PINCTRL_CONSUMER_H
 
 #include <linux/err.h>
-#include <linux/types.h>
-
+#include <linux/list.h>
+#include <linux/seq_file.h>
 #include <linux/pinctrl/pinctrl-state.h>
-
-struct device;
 
 /* This struct is private to the core and should be regarded as a cookie */
 struct pinctrl;
 struct pinctrl_state;
+struct device;
 
 #ifdef CONFIG_PINCTRL
 
@@ -34,8 +33,9 @@ extern int pinctrl_gpio_set_config(unsigned gpio, unsigned long config);
 
 extern struct pinctrl * __must_check pinctrl_get(struct device *dev);
 extern void pinctrl_put(struct pinctrl *p);
-extern struct pinctrl_state * __must_check pinctrl_lookup_state(struct pinctrl *p,
-								const char *name);
+extern struct pinctrl_state * __must_check pinctrl_lookup_state(
+							struct pinctrl *p,
+							const char *name);
 extern int pinctrl_select_state(struct pinctrl *p, struct pinctrl_state *s);
 
 extern struct pinctrl * __must_check devm_pinctrl_get(struct device *dev);
@@ -101,8 +101,9 @@ static inline void pinctrl_put(struct pinctrl *p)
 {
 }
 
-static inline struct pinctrl_state * __must_check pinctrl_lookup_state(struct pinctrl *p,
-								       const char *name)
+static inline struct pinctrl_state * __must_check pinctrl_lookup_state(
+							struct pinctrl *p,
+							const char *name)
 {
 	return NULL;
 }
@@ -144,8 +145,8 @@ static inline int pinctrl_pm_select_idle_state(struct device *dev)
 
 #endif /* CONFIG_PINCTRL */
 
-static inline struct pinctrl * __must_check pinctrl_get_select(struct device *dev,
-							       const char *name)
+static inline struct pinctrl * __must_check pinctrl_get_select(
+					struct device *dev, const char *name)
 {
 	struct pinctrl *p;
 	struct pinctrl_state *s;
@@ -170,13 +171,14 @@ static inline struct pinctrl * __must_check pinctrl_get_select(struct device *de
 	return p;
 }
 
-static inline struct pinctrl * __must_check pinctrl_get_select_default(struct device *dev)
+static inline struct pinctrl * __must_check pinctrl_get_select_default(
+					struct device *dev)
 {
 	return pinctrl_get_select(dev, PINCTRL_STATE_DEFAULT);
 }
 
-static inline struct pinctrl * __must_check devm_pinctrl_get_select(struct device *dev,
-								    const char *name)
+static inline struct pinctrl * __must_check devm_pinctrl_get_select(
+					struct device *dev, const char *name)
 {
 	struct pinctrl *p;
 	struct pinctrl_state *s;
@@ -201,7 +203,8 @@ static inline struct pinctrl * __must_check devm_pinctrl_get_select(struct devic
 	return p;
 }
 
-static inline struct pinctrl * __must_check devm_pinctrl_get_select_default(struct device *dev)
+static inline struct pinctrl * __must_check devm_pinctrl_get_select_default(
+					struct device *dev)
 {
 	return devm_pinctrl_get_select(dev, PINCTRL_STATE_DEFAULT);
 }

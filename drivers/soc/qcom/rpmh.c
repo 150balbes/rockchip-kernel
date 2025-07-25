@@ -76,12 +76,18 @@ static struct rpmh_ctrlr *get_rpmh_ctrlr(const struct device *dev)
 	return &drv->client;
 }
 
-void rpmh_tx_done(const struct tcs_request *msg)
+void rpmh_tx_done(const struct tcs_request *msg, int r)
 {
 	struct rpmh_request *rpm_msg = container_of(msg, struct rpmh_request,
 						    msg);
 	struct completion *compl = rpm_msg->completion;
 	bool free = rpm_msg->needs_free;
+
+	rpm_msg->err = r;
+
+	if (r)
+		dev_err(rpm_msg->dev, "RPMH TX fail in msg addr=%#x, err=%d\n",
+			rpm_msg->msg.cmds[0].addr, r);
 
 	if (!compl)
 		goto exit;
@@ -188,7 +194,7 @@ static int __rpmh_write(const struct device *dev, enum rpmh_state state,
 	} else {
 		/* Clean up our call by spoofing tx_done */
 		ret = 0;
-		rpmh_tx_done(&rpm_msg->msg);
+		rpmh_tx_done(&rpm_msg->msg, ret);
 	}
 
 	return ret;
@@ -444,7 +450,7 @@ int rpmh_flush(struct rpmh_ctrlr *ctrlr)
 
 	if (!ctrlr->dirty) {
 		pr_debug("Skipping flush, TCS has latest data.\n");
-		goto write_next_wakeup;
+		goto exit;
 	}
 
 	/* Invalidate the TCSes first to avoid stale data */
@@ -473,8 +479,6 @@ int rpmh_flush(struct rpmh_ctrlr *ctrlr)
 
 	ctrlr->dirty = false;
 
-write_next_wakeup:
-	rpmh_rsc_write_next_wakeup(ctrlr_to_drv(ctrlr));
 exit:
 	spin_unlock(&ctrlr->cache_lock);
 	return ret;

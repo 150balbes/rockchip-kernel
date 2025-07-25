@@ -542,8 +542,7 @@
 };
 
 &pmi8994_spmi_regulators {
-	vdd_gfx: s2@1700 {
-		reg = <0x1700 0x100>;
+	vdd_gfx: s2 {
 		regulator-min-microvolt = <980000>;
 		regulator-max-microvolt = <980000>;
 	};
@@ -551,7 +550,7 @@
 
 &rpm_requests {
 	/* These values were taken from the original firmware ACPI tables */
-	pm8994_regulators: regulators-0 {
+	pm8994_regulators: pm8994-regulators {
 		compatible = "qcom,rpm-pm8994-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -835,7 +834,7 @@
 		vreg_lvs2a_1p8: lvs2 { };
 	};
 
-	pmi8994_regulators: regulators-1 {
+	pmi8994_regulators: pmi8994-regulators {
 		compatible = "qcom,rpm-pmi8994-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -881,28 +880,28 @@
 };
 
 &tlmm {
-	grip_default: grip-default-state {
+	grip_default: grip-default {
 		pins = "gpio39";
 		function = "gpio";
 		drive-strength = <6>;
 		bias-pull-down;
 	};
 
-	grip_sleep: grip-sleep-state {
+	grip_sleep: grip-sleep {
 		pins = "gpio39";
 		function = "gpio";
 		drive-strength = <2>;
 		bias-pull-down;
 	};
 
-	hall_front_default: hall-front-default-state {
+	hall_front_default: hall-front-default {
 		pins = "gpio42";
 		function = "gpio";
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	hall_back_default: hall-back-default-state {
+	hall_back_default: hall-back-default {
 		pins = "gpio75";
 		function = "gpio";
 		drive-strength = <2>;

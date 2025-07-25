@@ -9,8 +9,6 @@
 #include <asm/hardware/cache-l2x0.h>
 #include "hardware.h"
 
-.arch armv7-a
-
 /*
  * ==================== low level suspend ====================
  *

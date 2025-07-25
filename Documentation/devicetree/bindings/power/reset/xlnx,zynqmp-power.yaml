@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/power/reset/xlnx,zynqmp-power.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Xilinx Zynq MPSoC Power Management
+title: Xilinx Zynq MPSoC Power Management Device Tree Bindings
 
 maintainers:
   - Michal Simek <michal.simek@xilinx.com>

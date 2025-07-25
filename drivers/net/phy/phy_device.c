@@ -563,11 +563,69 @@ static ssize_t phy_dev_flags_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(phy_dev_flags);
 
+static ssize_t
+phy_registers_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+	int index;
+
+	for (index = 0; index < 32; index++)
+		sprintf(buf, "%s%2d: 0x%x\n", buf, index,
+			phy_read(phydev, index));
+
+	return strlen(buf);
+}
+
+static ssize_t
+phy_registers_store(struct device *dev,
+		    struct device_attribute *attr,
+		    const char *buf, size_t count)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+	int index = 0, val = 0;
+	char tmp[32];
+	char *data;
+
+	if (count >= sizeof(tmp))
+		goto out;
+
+	memset(tmp, 0, sizeof(tmp));
+	memcpy(tmp, buf, count);
+
+	data = tmp;
+	data = strstr(data, " ");
+	if (!data)
+		goto out;
+	*data = 0;
+	data++;
+
+	if (kstrtoint(tmp, 0, &index) || index >= 32)
+		goto out;
+
+	if (kstrtoint(data, 0, &val) || val > 0xffff)
+		goto out;
+
+	pr_info("Set Ethernet PHY register %d to 0x%x\n", (int)index, (int)val);
+
+	phy_write(phydev, index, val);
+
+	return count;
+
+out:
+	pr_err("wrong register value input\n");
+	pr_err("usage: <reg index> <value>\n");
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(phy_registers);
+
 static struct attribute *phy_dev_attrs[] = {
 	&dev_attr_phy_id.attr,
 	&dev_attr_phy_interface.attr,
 	&dev_attr_phy_has_fixups.attr,
 	&dev_attr_phy_dev_flags.attr,
+	&dev_attr_phy_registers.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(phy_dev);
@@ -1512,15 +1570,6 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 	phy_resume(phydev);
 	phy_led_triggers_register(phydev);
 
-	/**
-	 * If the external phy used by current mac interface is managed by
-	 * another mac interface, so we should create a device link between
-	 * phy dev and mac dev.
-	 */
-	if (phydev->mdio.bus->parent && dev->dev.parent != phydev->mdio.bus->parent)
-		phydev->devlink = device_link_add(dev->dev.parent, &phydev->mdio.dev,
-						  DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
-
 	return err;
 
 error:
@@ -1758,9 +1807,6 @@ void phy_detach(struct phy_device *phydev)
 	struct net_device *dev = phydev->attached_dev;
 	struct module *ndev_owner = NULL;
 	struct mii_bus *bus;
-
-	if (phydev->devlink)
-		device_link_del(phydev->devlink);
 
 	if (phydev->sysfs_links) {
 		if (dev)
@@ -2652,8 +2698,8 @@ EXPORT_SYMBOL(genphy_resume);
 int genphy_loopback(struct phy_device *phydev, bool enable)
 {
 	if (enable) {
-		u16 val, ctl = BMCR_LOOPBACK;
-		int ret;
+		u16 ctl = BMCR_LOOPBACK;
+		int ret, val;
 
 		ctl |= mii_bmcr_encode_fixed(phydev->speed, phydev->duplex);
 
@@ -2905,7 +2951,7 @@ s32 phy_get_internal_delay(struct phy_device *phydev, struct device *dev,
 	if (delay < 0)
 		return delay;
 
-	if (delay && size == 0)
+	if (size == 0)
 		return delay;
 
 	if (delay < delay_values[0] || delay > delay_values[size - 1]) {
@@ -3053,8 +3099,6 @@ static int phy_probe(struct device *dev)
 	if (phydrv->flags & PHY_IS_INTERNAL)
 		phydev->is_internal = true;
 
-	mutex_lock(&phydev->lock);
-
 	/* Deassert the reset signal */
 	phy_device_reset(phydev, 0);
 
@@ -3063,6 +3107,8 @@ static int phy_probe(struct device *dev)
 		if (err)
 			goto out;
 	}
+
+	phy_disable_interrupts(phydev);
 
 	/* Start out supporting everything. Eventually,
 	 * a controller will attach, and may modify one
@@ -3122,11 +3168,9 @@ static int phy_probe(struct device *dev)
 	phydev->state = PHY_READY;
 
 out:
-	/* Assert the reset signal */
+	/* Re-assert the reset signal on error */
 	if (err)
 		phy_device_reset(phydev, 1);
-
-	mutex_unlock(&phydev->lock);
 
 	return err;
 }
@@ -3137,9 +3181,7 @@ static int phy_remove(struct device *dev)
 
 	cancel_delayed_work_sync(&phydev->state_queue);
 
-	mutex_lock(&phydev->lock);
 	phydev->state = PHY_DOWN;
-	mutex_unlock(&phydev->lock);
 
 	sfp_bus_del_upstream(phydev->sfp_bus);
 	phydev->sfp_bus = NULL;
@@ -3153,16 +3195,6 @@ static int phy_remove(struct device *dev)
 	phydev->drv = NULL;
 
 	return 0;
-}
-
-static void phy_shutdown(struct device *dev)
-{
-	struct phy_device *phydev = to_phy_device(dev);
-
-	if (phydev->state == PHY_READY || !phydev->attached_dev)
-		return;
-
-	phy_disable_interrupts(phydev);
 }
 
 /**
@@ -3198,7 +3230,6 @@ int phy_driver_register(struct phy_driver *new_driver, struct module *owner)
 	new_driver->mdiodrv.driver.bus = &mdio_bus_type;
 	new_driver->mdiodrv.driver.probe = phy_probe;
 	new_driver->mdiodrv.driver.remove = phy_remove;
-	new_driver->mdiodrv.driver.shutdown = phy_shutdown;
 	new_driver->mdiodrv.driver.owner = owner;
 	new_driver->mdiodrv.driver.probe_type = PROBE_FORCE_SYNCHRONOUS;
 
@@ -3270,23 +3301,30 @@ static int __init phy_init(void)
 {
 	int rc;
 
+	ethtool_set_ethtool_phy_ops(&phy_ethtool_phy_ops);
+
 	rc = mdio_bus_init();
 	if (rc)
-		return rc;
+		goto err_ethtool_phy_ops;
 
-	ethtool_set_ethtool_phy_ops(&phy_ethtool_phy_ops);
 	features_init();
 
 	rc = phy_driver_register(&genphy_c45_driver, THIS_MODULE);
 	if (rc)
-		goto err_c45;
+		goto err_mdio_bus;
 
 	rc = phy_driver_register(&genphy_driver, THIS_MODULE);
-	if (rc) {
-		phy_driver_unregister(&genphy_c45_driver);
+	if (rc)
+		goto err_c45;
+
+	return 0;
+
 err_c45:
-		mdio_bus_exit();
-	}
+	phy_driver_unregister(&genphy_c45_driver);
+err_mdio_bus:
+	mdio_bus_exit();
+err_ethtool_phy_ops:
+	ethtool_set_ethtool_phy_ops(NULL);
 
 	return rc;
 }

@@ -141,7 +141,8 @@ static const struct iio_chan_spec bh1780_channels[] = {
 	}
 };
 
-static int bh1780_probe(struct i2c_client *client)
+static int bh1780_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret;
 	struct bh1780_data *bh1780;
@@ -269,7 +270,7 @@ static const struct of_device_id of_bh1780_match[] = {
 MODULE_DEVICE_TABLE(of, of_bh1780_match);
 
 static struct i2c_driver bh1780_driver = {
-	.probe_new	= bh1780_probe,
+	.probe		= bh1780_probe,
 	.remove		= bh1780_remove,
 	.id_table	= bh1780_id,
 	.driver = {

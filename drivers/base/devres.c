@@ -101,9 +101,6 @@ static bool check_dr_size(size_t size, size_t *tot_size)
 					size, tot_size)))
 		return false;
 
-	/* Actually allocate the full kmalloc bucket size. */
-	*tot_size = kmalloc_size_roundup(*tot_size);
-
 	return true;
 }
 

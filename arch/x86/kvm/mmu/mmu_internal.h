@@ -56,14 +56,13 @@ struct kvm_mmu_page {
 
 	bool tdp_mmu_page;
 	bool unsync;
-	u8 mmu_valid_gen;
+	union {
+		u8 mmu_valid_gen;
 
-	 /*
-	  * The shadow page can't be replaced by an equivalent huge page
-	  * because it is being used to map an executable page in the guest
-	  * and the NX huge page mitigation is enabled.
-	  */
-	bool nx_huge_page_disallowed;
+		/* Only accessed under slots_lock.  */
+		bool tdp_mmu_scheduled_root_to_zap;
+	};
+	bool lpage_disallowed; /* Can't be replaced by an equiv large page */
 
 	/*
 	 * The following two entries are used to key the shadow page in the
@@ -98,22 +97,9 @@ struct kvm_mmu_page {
 		struct kvm_rmap_head parent_ptes; /* rmap pointers to parent sptes */
 		tdp_ptep_t ptep;
 	};
-	union {
-		DECLARE_BITMAP(unsync_child_bitmap, 512);
-		struct {
-			struct work_struct tdp_mmu_async_work;
-			void *tdp_mmu_async_data;
-		};
-	};
+	DECLARE_BITMAP(unsync_child_bitmap, 512);
 
-	/*
-	 * Tracks shadow pages that, if zapped, would allow KVM to create an NX
-	 * huge page.  A shadow page will have nx_huge_page_disallowed set but
-	 * not be on the list if a huge page is disallowed for other reasons,
-	 * e.g. because KVM is shadowing a PTE at the same gfn, the memslot
-	 * isn't properly aligned, etc...
-	 */
-	struct list_head possible_nx_huge_page_link;
+	struct list_head lpage_disallowed_link;
 #ifdef CONFIG_X86_32
 	/*
 	 * Used out of the mmu-lock to avoid reading spte values while an
@@ -132,6 +118,18 @@ struct kvm_mmu_page {
 };
 
 extern struct kmem_cache *mmu_page_header_cache;
+
+static inline struct kvm_mmu_page *to_shadow_page(hpa_t shadow_page)
+{
+	struct page *page = pfn_to_page(shadow_page >> PAGE_SHIFT);
+
+	return (struct kvm_mmu_page *)page_private(page);
+}
+
+static inline struct kvm_mmu_page *sptep_to_sp(u64 *sptep)
+{
+	return to_shadow_page(__pa(sptep));
+}
 
 static inline int kvm_mmu_role_as_id(union kvm_mmu_page_role role)
 {
@@ -316,7 +314,7 @@ void disallowed_hugepage_adjust(struct kvm_page_fault *fault, u64 spte, int cur_
 
 void *mmu_memory_cache_alloc(struct kvm_mmu_memory_cache *mc);
 
-void track_possible_nx_huge_page(struct kvm *kvm, struct kvm_mmu_page *sp);
-void untrack_possible_nx_huge_page(struct kvm *kvm, struct kvm_mmu_page *sp);
+void account_huge_nx_page(struct kvm *kvm, struct kvm_mmu_page *sp);
+void unaccount_huge_nx_page(struct kvm *kvm, struct kvm_mmu_page *sp);
 
 #endif /* __KVM_X86_MMU_INTERNAL_H */

@@ -18,7 +18,6 @@
 #include <net/pkt_cls.h>
 #include <linux/tc_act/tc_gact.h>
 #include <net/tc_act/tc_gact.h>
-#include <net/tc_wrapper.h>
 
 static struct tc_action_ops act_gact_ops;
 
@@ -26,7 +25,7 @@ static struct tc_action_ops act_gact_ops;
 static int gact_net_rand(struct tcf_gact *gact)
 {
 	smp_rmb(); /* coupled with smp_wmb() in tcf_gact_init() */
-	if (get_random_u32_below(gact->tcfg_pval))
+	if (prandom_u32_max(gact->tcfg_pval))
 		return gact->tcf_action;
 	return gact->tcfg_paction;
 }
@@ -146,9 +145,8 @@ release_idr:
 	return err;
 }
 
-TC_INDIRECT_SCOPE int tcf_gact_act(struct sk_buff *skb,
-				   const struct tc_action *a,
-				   struct tcf_result *res)
+static int tcf_gact_act(struct sk_buff *skb, const struct tc_action *a,
+			struct tcf_result *res)
 {
 	struct tcf_gact *gact = to_gact(a);
 	int action = READ_ONCE(gact->tcf_action);

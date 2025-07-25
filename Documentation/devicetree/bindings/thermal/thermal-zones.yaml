@@ -5,7 +5,7 @@
 $id: http://devicetree.org/schemas/thermal/thermal-zones.yaml#
 $schema: http://devicetree.org/meta-schemas/base.yaml#
 
-title: Thermal zone
+title: Thermal zone binding
 
 maintainers:
   - Amit Kucheria <amitk@kernel.org>

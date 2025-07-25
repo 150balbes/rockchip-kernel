@@ -179,7 +179,6 @@
 		A53_L2: l2-cache0 {
 			compatible = "cache";
 			cache-level = <2>;
-			cache-unified;
 			cache-size = <0x100000>;
 			cache-line-size = <64>;
 			cache-sets = <1024>;
@@ -593,7 +592,7 @@
 				#address-cells = <1>;
 				#size-cells = <1>;
 
-				imx8mq_uid: soc-uid@410 {
+				imx8mq_uid: soc-uid@4 {
 					reg = <0x4 0x8>;
 				};
 
@@ -606,11 +605,10 @@
 				};
 			};
 
-			anatop: clock-controller@30360000 {
-				compatible = "fsl,imx8mq-anatop";
+			anatop: syscon@30360000 {
+				compatible = "fsl,imx8mq-anatop", "syscon";
 				reg = <0x30360000 0x10000>;
 				interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
-				#clock-cells = <1>;
 			};
 
 			snvs: snvs@30370000 {
@@ -758,7 +756,7 @@
 									 <&clk IMX8MQ_SYS1_PLL_800M>,
 									 <&clk IMX8MQ_VPU_PLL>;
 						assigned-clock-rates = <600000000>,
-								       <600000000>,
+								       <300000000>,
 								       <800000000>,
 								       <0>;
 					};
@@ -1186,7 +1184,7 @@
 			};
 
 			csi1: csi@30a90000 {
-				compatible = "fsl,imx8mq-csi";
+				compatible = "fsl,imx8mq-csi", "fsl,imx7-csi";
 				reg = <0x30a90000 0x10000>;
 				interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MQ_CLK_CSI1_ROOT>;
@@ -1238,7 +1236,7 @@
 			};
 
 			csi2: csi@30b80000 {
-				compatible = "fsl,imx8mq-csi";
+				compatible = "fsl,imx8mq-csi", "fsl,imx7-csi";
 				reg = <0x30b80000 0x10000>;
 				interrupts = <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MQ_CLK_CSI2_ROOT>;
@@ -1358,15 +1356,15 @@
 			noc_opp_table: opp-table {
 				compatible = "operating-points-v2";
 
-				opp-133000000 {
+				opp-133M {
 					opp-hz = /bits/ 64 <133333333>;
 				};
 
-				opp-400000000 {
+				opp-400M {
 					opp-hz = /bits/ 64 <400000000>;
 				};
 
-				opp-800000000 {
+				opp-800M {
 					opp-hz = /bits/ 64 <800000000>;
 				};
 			};
@@ -1433,7 +1431,7 @@
 			phys = <&usb3_phy0>, <&usb3_phy0>;
 			phy-names = "usb2-phy", "usb3-phy";
 			power-domains = <&pgc_otg1>;
-			usb3-resume-missing-cas;
+			snps,parkmode-disable-ss-quirk;
 			status = "disabled";
 		};
 
@@ -1465,7 +1463,7 @@
 			phys = <&usb3_phy1>, <&usb3_phy1>;
 			phy-names = "usb2-phy", "usb3-phy";
 			power-domains = <&pgc_otg2>;
-			usb3-resume-missing-cas;
+			snps,parkmode-disable-ss-quirk;
 			status = "disabled";
 		};
 

@@ -698,8 +698,7 @@ struct drm_connector_tv_margins {
 
 /**
  * struct drm_tv_connector_state - TV connector related states
- * @select_subconnector: selected subconnector
- * @subconnector: detected subconnector
+ * @subconnector: selected subconnector
  * @margins: TV margins
  * @mode: TV mode
  * @brightness: brightness in percent
@@ -710,7 +709,6 @@ struct drm_connector_tv_margins {
  * @hue: hue in percent
  */
 struct drm_tv_connector_state {
-	enum drm_mode_subconnector select_subconnector;
 	enum drm_mode_subconnector subconnector;
 	struct drm_connector_tv_margins margins;
 	unsigned int mode;
@@ -1219,13 +1217,6 @@ struct drm_cmdline_mode {
 	bool bpp_specified;
 
 	/**
-	 * @pixel_clock:
-	 *
-	 * Pixel Clock in kHz. Optional.
-	 */
-	unsigned int pixel_clock;
-
-	/**
 	 * @xres:
 	 *
 	 * Active resolution on the X axis, in pixels.
@@ -1563,20 +1554,12 @@ struct drm_connector {
 	struct drm_cmdline_mode cmdline_mode;
 	/** @force: a DRM_FORCE_<foo> state for forced mode sets */
 	enum drm_connector_force force;
-
 	/**
-	 * @edid_override: Override EDID set via debugfs.
-	 *
-	 * Do not modify or access outside of the drm_edid_override_* family of
-	 * functions.
+	 * @override_edid: has the EDID been overwritten through debugfs for
+	 * testing? Do not modify outside of drm_edid_override_set() and
+	 * drm_edid_override_reset().
 	 */
-	const struct drm_edid *edid_override;
-
-	/**
-	 * @edid_override_mutex: Protect access to edid_override.
-	 */
-	struct mutex edid_override_mutex;
-
+	bool override_edid;
 	/** @epoch_counter: used to detect any other changes in connector, besides status */
 	u64 epoch_counter;
 
@@ -1843,8 +1826,17 @@ int drm_mode_create_suggested_offset_properties(struct drm_device *dev);
 int drm_connector_set_path_property(struct drm_connector *connector,
 				    const char *path);
 int drm_connector_set_tile_property(struct drm_connector *connector);
+#ifdef CONFIG_DRM_EDID
 int drm_connector_update_edid_property(struct drm_connector *connector,
 				       const struct edid *edid);
+#else
+static inline
+int drm_connector_update_edid_property(struct drm_connector *connector,
+				       const struct edid *edid)
+{
+	return -ENODEV;
+}
+#endif
 void drm_connector_set_link_status_property(struct drm_connector *connector,
 					    uint64_t link_status);
 void drm_connector_set_vrr_capable_property(

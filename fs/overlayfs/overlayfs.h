@@ -8,8 +8,6 @@
 #include <linux/uuid.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
-#include <linux/posix_acl.h>
-#include <linux/posix_acl_xattr.h>
 #include "ovl_entry.h"
 
 #undef pr_fmt
@@ -280,18 +278,6 @@ static inline int ovl_removexattr(struct ovl_fs *ofs, struct dentry *dentry,
 	return ovl_do_removexattr(ofs, dentry, ovl_xattr(ofs, ox));
 }
 
-static inline int ovl_do_set_acl(struct ovl_fs *ofs, struct dentry *dentry,
-				 const char *acl_name, struct posix_acl *acl)
-{
-	return vfs_set_acl(ovl_upper_mnt_userns(ofs), dentry, acl_name, acl);
-}
-
-static inline int ovl_do_remove_acl(struct ovl_fs *ofs, struct dentry *dentry,
-				    const char *acl_name)
-{
-	return vfs_remove_acl(ovl_upper_mnt_userns(ofs), dentry, acl_name);
-}
-
 static inline int ovl_do_rename(struct ovl_fs *ofs, struct inode *olddir,
 				struct dentry *olddentry, struct inode *newdir,
 				struct dentry *newdentry, unsigned int flags)
@@ -374,14 +360,16 @@ bool ovl_index_all(struct super_block *sb);
 bool ovl_verify_lower(struct super_block *sb);
 struct ovl_entry *ovl_alloc_entry(unsigned int numlower);
 bool ovl_dentry_remote(struct dentry *dentry);
-void ovl_dentry_update_reval(struct dentry *dentry, struct dentry *upperdentry,
-			     unsigned int mask);
+void ovl_dentry_update_reval(struct dentry *dentry, struct dentry *realdentry);
+void ovl_dentry_init_reval(struct dentry *dentry, struct dentry *upperdentry);
+void ovl_dentry_init_flags(struct dentry *dentry, struct dentry *upperdentry,
+			   unsigned int mask);
 bool ovl_dentry_weird(struct dentry *dentry);
 enum ovl_path_type ovl_path_type(struct dentry *dentry);
 void ovl_path_upper(struct dentry *dentry, struct path *path);
 void ovl_path_lower(struct dentry *dentry, struct path *path);
 void ovl_path_lowerdata(struct dentry *dentry, struct path *path);
-void ovl_i_path_real(struct inode *inode, struct path *path);
+struct inode *ovl_i_path_real(struct inode *inode, struct path *path);
 enum ovl_path_type ovl_path_real(struct dentry *dentry, struct path *path);
 enum ovl_path_type ovl_path_realdata(struct dentry *dentry, struct path *path);
 struct dentry *ovl_dentry_upper(struct dentry *dentry);
@@ -415,7 +403,7 @@ const char *ovl_dentry_get_redirect(struct dentry *dentry);
 void ovl_dentry_set_redirect(struct dentry *dentry, const char *redirect);
 void ovl_inode_update(struct inode *inode, struct dentry *upperdentry);
 void ovl_dir_modified(struct dentry *dentry, bool impurity);
-u64 ovl_inode_version_get(struct inode *inode);
+u64 ovl_dentry_version_get(struct dentry *dentry);
 bool ovl_is_whiteout(struct dentry *dentry);
 struct file *ovl_path_open(const struct path *path, int flags);
 int ovl_copy_up_start(struct dentry *dentry, int flags);
@@ -539,8 +527,7 @@ int ovl_check_origin_fh(struct ovl_fs *ofs, struct ovl_fh *fh, bool connected,
 int ovl_verify_set_fh(struct ovl_fs *ofs, struct dentry *dentry,
 		      enum ovl_xattr ox, struct dentry *real, bool is_upper,
 		      bool set);
-struct dentry *ovl_index_upper(struct ovl_fs *ofs, struct dentry *index,
-			       bool connected);
+struct dentry *ovl_index_upper(struct ovl_fs *ofs, struct dentry *index);
 int ovl_verify_index(struct ovl_fs *ofs, struct dentry *index);
 int ovl_get_index_name(struct ovl_fs *ofs, struct dentry *origin,
 		       struct qstr *name);
@@ -585,9 +572,9 @@ int ovl_indexdir_cleanup(struct ovl_fs *ofs);
  * lower dir was removed under it and possibly before it was rotated from upper
  * to lower layer.
  */
-static inline bool ovl_dir_is_real(struct inode *dir)
+static inline bool ovl_dir_is_real(struct dentry *dir)
 {
-	return !ovl_test_flag(OVL_WHITEOUTS, dir);
+	return !ovl_test_flag(OVL_WHITEOUTS, d_inode(dir));
 }
 
 /* inode.c */
@@ -609,33 +596,9 @@ int ovl_xattr_get(struct dentry *dentry, struct inode *inode, const char *name,
 ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size);
 
 #ifdef CONFIG_FS_POSIX_ACL
-struct posix_acl *do_ovl_get_acl(struct user_namespace *mnt_userns,
-				 struct inode *inode, int type,
-				 bool rcu, bool noperm);
-static inline struct posix_acl *ovl_get_inode_acl(struct inode *inode, int type,
-						  bool rcu)
-{
-	return do_ovl_get_acl(&init_user_ns, inode, type, rcu, true);
-}
-static inline struct posix_acl *ovl_get_acl(struct user_namespace *mnt_userns,
-					    struct dentry *dentry, int type)
-{
-	return do_ovl_get_acl(mnt_userns, d_inode(dentry), type, false, false);
-}
-int ovl_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
-		struct posix_acl *acl, int type);
-struct posix_acl *ovl_get_acl_path(const struct path *path,
-				   const char *acl_name, bool noperm);
+struct posix_acl *ovl_get_acl(struct inode *inode, int type, bool rcu);
 #else
-#define ovl_get_inode_acl	NULL
-#define ovl_get_acl		NULL
-#define ovl_set_acl		NULL
-static inline struct posix_acl *ovl_get_acl_path(const struct path *path,
-						 const char *acl_name,
-						 bool noperm)
-{
-	return NULL;
-}
+#define ovl_get_acl	NULL
 #endif
 
 int ovl_update_time(struct inode *inode, struct timespec64 *ts, int flags);

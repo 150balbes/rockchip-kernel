@@ -22,8 +22,6 @@ enum resp_states {
 	RESPST_EXECUTE,
 	RESPST_READ_REPLY,
 	RESPST_ATOMIC_REPLY,
-	RESPST_ATOMIC_WRITE_REPLY,
-	RESPST_PROCESS_FLUSH,
 	RESPST_COMPLETE,
 	RESPST_ACKNOWLEDGE,
 	RESPST_CLEANUP,
@@ -59,8 +57,6 @@ static char *resp_state_name[] = {
 	[RESPST_EXECUTE]			= "EXECUTE",
 	[RESPST_READ_REPLY]			= "READ_REPLY",
 	[RESPST_ATOMIC_REPLY]			= "ATOMIC_REPLY",
-	[RESPST_ATOMIC_WRITE_REPLY]		= "ATOMIC_WRITE_REPLY",
-	[RESPST_PROCESS_FLUSH]			= "PROCESS_FLUSH",
 	[RESPST_COMPLETE]			= "COMPLETE",
 	[RESPST_ACKNOWLEDGE]			= "ACKNOWLEDGE",
 	[RESPST_CLEANUP]			= "CLEANUP",
@@ -260,37 +256,19 @@ static enum resp_states check_op_seq(struct rxe_qp *qp,
 	}
 }
 
-static bool check_qp_attr_access(struct rxe_qp *qp,
-				 struct rxe_pkt_info *pkt)
-{
-	if (((pkt->mask & RXE_READ_MASK) &&
-	     !(qp->attr.qp_access_flags & IB_ACCESS_REMOTE_READ)) ||
-	    ((pkt->mask & (RXE_WRITE_MASK | RXE_ATOMIC_WRITE_MASK)) &&
-	     !(qp->attr.qp_access_flags & IB_ACCESS_REMOTE_WRITE)) ||
-	    ((pkt->mask & RXE_ATOMIC_MASK) &&
-	     !(qp->attr.qp_access_flags & IB_ACCESS_REMOTE_ATOMIC)))
-		return false;
-
-	if (pkt->mask & RXE_FLUSH_MASK) {
-		u32 flush_type = feth_plt(pkt);
-
-		if ((flush_type & IB_FLUSH_GLOBAL &&
-		     !(qp->attr.qp_access_flags & IB_ACCESS_FLUSH_GLOBAL)) ||
-		    (flush_type & IB_FLUSH_PERSISTENT &&
-		     !(qp->attr.qp_access_flags & IB_ACCESS_FLUSH_PERSISTENT)))
-			return false;
-	}
-
-	return true;
-}
-
 static enum resp_states check_op_valid(struct rxe_qp *qp,
 				       struct rxe_pkt_info *pkt)
 {
 	switch (qp_type(qp)) {
 	case IB_QPT_RC:
-		if (!check_qp_attr_access(qp, pkt))
+		if (((pkt->mask & RXE_READ_MASK) &&
+		     !(qp->attr.qp_access_flags & IB_ACCESS_REMOTE_READ)) ||
+		    ((pkt->mask & RXE_WRITE_MASK) &&
+		     !(qp->attr.qp_access_flags & IB_ACCESS_REMOTE_WRITE)) ||
+		    ((pkt->mask & RXE_ATOMIC_MASK) &&
+		     !(qp->attr.qp_access_flags & IB_ACCESS_REMOTE_ATOMIC))) {
 			return RESPST_ERR_UNSUPPORTED_OPCODE;
+		}
 
 		break;
 
@@ -339,7 +317,7 @@ static enum resp_states get_srq_wqe(struct rxe_qp *qp)
 	/* don't trust user space data */
 	if (unlikely(wqe->dma.num_sge > srq->rq.max_sge)) {
 		spin_unlock_irqrestore(&srq->rq.consumer_lock, flags);
-		rxe_dbg_qp(qp, "invalid num_sge in SRQ entry\n");
+		pr_warn("%s: invalid num_sge in SRQ entry\n", __func__);
 		return RESPST_ERR_MALFORMED_WQE;
 	}
 	size = sizeof(*wqe) + wqe->dma.num_sge*sizeof(struct rxe_sge);
@@ -389,7 +367,7 @@ static enum resp_states check_resource(struct rxe_qp *qp,
 		}
 	}
 
-	if (pkt->mask & (RXE_READ_OR_ATOMIC_MASK | RXE_ATOMIC_WRITE_MASK)) {
+	if (pkt->mask & RXE_READ_OR_ATOMIC_MASK) {
 		/* it is the requesters job to not send
 		 * too many read/atomic ops, we just
 		 * recycle the responder resource queue
@@ -412,66 +390,19 @@ static enum resp_states check_resource(struct rxe_qp *qp,
 	return RESPST_CHK_LENGTH;
 }
 
-static enum resp_states rxe_resp_check_length(struct rxe_qp *qp,
-					      struct rxe_pkt_info *pkt)
+static enum resp_states check_length(struct rxe_qp *qp,
+				     struct rxe_pkt_info *pkt)
 {
-	/*
-	 * See IBA C9-92
-	 * For UD QPs we only check if the packet will fit in the
-	 * receive buffer later. For rmda operations additional
-	 * length checks are performed in check_rkey.
-	 */
-	if (pkt->mask & RXE_PAYLOAD_MASK && ((qp_type(qp) == IB_QPT_RC) ||
-					     (qp_type(qp) == IB_QPT_UC))) {
-		unsigned int mtu = qp->mtu;
-		unsigned int payload = payload_size(pkt);
+	switch (qp_type(qp)) {
+	case IB_QPT_RC:
+		return RESPST_CHK_RKEY;
 
-		if ((pkt->mask & RXE_START_MASK) &&
-		    (pkt->mask & RXE_END_MASK)) {
-			if (unlikely(payload > mtu)) {
-				rxe_dbg_qp(qp, "only packet too long");
-				return RESPST_ERR_LENGTH;
-			}
-		} else if ((pkt->mask & RXE_START_MASK) ||
-			   (pkt->mask & RXE_MIDDLE_MASK)) {
-			if (unlikely(payload != mtu)) {
-				rxe_dbg_qp(qp, "first or middle packet not mtu");
-				return RESPST_ERR_LENGTH;
-			}
-		} else if (pkt->mask & RXE_END_MASK) {
-			if (unlikely((payload == 0) || (payload > mtu))) {
-				rxe_dbg_qp(qp, "last packet zero or too long");
-				return RESPST_ERR_LENGTH;
-			}
-		}
+	case IB_QPT_UC:
+		return RESPST_CHK_RKEY;
+
+	default:
+		return RESPST_CHK_RKEY;
 	}
-
-	/* See IBA C9-94 */
-	if (pkt->mask & RXE_RETH_MASK) {
-		if (reth_len(pkt) > (1U << 31)) {
-			rxe_dbg_qp(qp, "dma length too long");
-			return RESPST_ERR_LENGTH;
-		}
-	}
-
-	return RESPST_CHK_RKEY;
-}
-
-static void qp_resp_from_reth(struct rxe_qp *qp, struct rxe_pkt_info *pkt)
-{
-	qp->resp.va = reth_va(pkt);
-	qp->resp.offset = 0;
-	qp->resp.rkey = reth_rkey(pkt);
-	qp->resp.resid = reth_len(pkt);
-	qp->resp.length = reth_len(pkt);
-}
-
-static void qp_resp_from_atmeth(struct rxe_qp *qp, struct rxe_pkt_info *pkt)
-{
-	qp->resp.va = atmeth_va(pkt);
-	qp->resp.offset = 0;
-	qp->resp.rkey = atmeth_rkey(pkt);
-	qp->resp.resid = sizeof(u64);
 }
 
 static enum resp_states check_rkey(struct rxe_qp *qp,
@@ -485,32 +416,29 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 	u32 pktlen;
 	int mtu = qp->mtu;
 	enum resp_states state;
-	int access = 0;
+	int access;
 
-	if (pkt->mask & (RXE_READ_OR_WRITE_MASK | RXE_ATOMIC_WRITE_MASK)) {
-		if (pkt->mask & RXE_RETH_MASK)
-			qp_resp_from_reth(qp, pkt);
-
+	if (pkt->mask & RXE_READ_OR_WRITE_MASK) {
+		if (pkt->mask & RXE_RETH_MASK) {
+			qp->resp.va = reth_va(pkt);
+			qp->resp.offset = 0;
+			qp->resp.rkey = reth_rkey(pkt);
+			qp->resp.resid = reth_len(pkt);
+			qp->resp.length = reth_len(pkt);
+		}
 		access = (pkt->mask & RXE_READ_MASK) ? IB_ACCESS_REMOTE_READ
 						     : IB_ACCESS_REMOTE_WRITE;
-	} else if (pkt->mask & RXE_FLUSH_MASK) {
-		u32 flush_type = feth_plt(pkt);
-
-		if (pkt->mask & RXE_RETH_MASK)
-			qp_resp_from_reth(qp, pkt);
-
-		if (flush_type & IB_FLUSH_GLOBAL)
-			access |= IB_ACCESS_FLUSH_GLOBAL;
-		if (flush_type & IB_FLUSH_PERSISTENT)
-			access |= IB_ACCESS_FLUSH_PERSISTENT;
 	} else if (pkt->mask & RXE_ATOMIC_MASK) {
-		qp_resp_from_atmeth(qp, pkt);
+		qp->resp.va = atmeth_va(pkt);
+		qp->resp.offset = 0;
+		qp->resp.rkey = atmeth_rkey(pkt);
+		qp->resp.resid = sizeof(u64);
 		access = IB_ACCESS_REMOTE_ATOMIC;
 	} else {
 		return RESPST_EXECUTE;
 	}
 
-	/* A zero-byte op is not required to set an addr or rkey. See C9-88 */
+	/* A zero-byte op is not required to set an addr or rkey. */
 	if ((pkt->mask & RXE_READ_OR_WRITE_MASK) &&
 	    (pkt->mask & RXE_RETH_MASK) &&
 	    reth_len(pkt) == 0) {
@@ -525,14 +453,15 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 	if (rkey_is_mw(rkey)) {
 		mw = rxe_lookup_mw(qp, access, rkey);
 		if (!mw) {
-			rxe_dbg_qp(qp, "no MW matches rkey %#x\n", rkey);
+			pr_debug("%s: no MW matches rkey %#x\n",
+					__func__, rkey);
 			state = RESPST_ERR_RKEY_VIOLATION;
 			goto err;
 		}
 
 		mr = mw->mr;
 		if (!mr) {
-			rxe_dbg_qp(qp, "MW doesn't have an MR\n");
+			pr_err("%s: MW doesn't have an MR\n", __func__);
 			state = RESPST_ERR_RKEY_VIOLATION;
 			goto err;
 		}
@@ -540,23 +469,17 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 		if (mw->access & IB_ZERO_BASED)
 			qp->resp.offset = mw->addr;
 
-		rxe_put(mw);
 		rxe_get(mr);
+		rxe_put(mw);
+		mw = NULL;
 	} else {
 		mr = lookup_mr(qp->pd, access, rkey, RXE_LOOKUP_REMOTE);
 		if (!mr) {
-			rxe_dbg_qp(qp, "no MR matches rkey %#x\n", rkey);
+			pr_debug("%s: no MR matches rkey %#x\n",
+					__func__, rkey);
 			state = RESPST_ERR_RKEY_VIOLATION;
 			goto err;
 		}
-	}
-
-	if (pkt->mask & RXE_FLUSH_MASK) {
-		/* FLUSH MR may not set va or resid
-		 * no need to check range since we will flush whole mr
-		 */
-		if (feth_sel(pkt) == IB_FLUSH_MR)
-			goto skip_check_range;
 	}
 
 	if (mr_check_range(mr, va + qp->resp.offset, resid)) {
@@ -564,8 +487,7 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 		goto err;
 	}
 
-skip_check_range:
-	if (pkt->mask & (RXE_WRITE_MASK | RXE_ATOMIC_WRITE_MASK)) {
+	if (pkt->mask & RXE_WRITE_MASK)	 {
 		if (resid > mtu) {
 			if (pktlen != mtu || bth_pad(pkt)) {
 				state = RESPST_ERR_LENGTH;
@@ -665,64 +587,13 @@ static struct resp_res *rxe_prepare_res(struct rxe_qp *qp,
 		res->state = rdatm_res_state_new;
 		break;
 	case RXE_ATOMIC_MASK:
-	case RXE_ATOMIC_WRITE_MASK:
 		res->first_psn = pkt->psn;
 		res->last_psn = pkt->psn;
 		res->cur_psn = pkt->psn;
 		break;
-	case RXE_FLUSH_MASK:
-		res->flush.va = qp->resp.va + qp->resp.offset;
-		res->flush.length = qp->resp.length;
-		res->flush.type = feth_plt(pkt);
-		res->flush.level = feth_sel(pkt);
 	}
 
 	return res;
-}
-
-static enum resp_states process_flush(struct rxe_qp *qp,
-				       struct rxe_pkt_info *pkt)
-{
-	u64 length, start;
-	struct rxe_mr *mr = qp->resp.mr;
-	struct resp_res *res = qp->resp.res;
-
-	/* oA19-14, oA19-15 */
-	if (res && res->replay)
-		return RESPST_ACKNOWLEDGE;
-	else if (!res) {
-		res = rxe_prepare_res(qp, pkt, RXE_FLUSH_MASK);
-		qp->resp.res = res;
-	}
-
-	if (res->flush.level == IB_FLUSH_RANGE) {
-		start = res->flush.va;
-		length = res->flush.length;
-	} else { /* level == IB_FLUSH_MR */
-		start = mr->ibmr.iova;
-		length = mr->ibmr.length;
-	}
-
-	if (res->flush.type & IB_FLUSH_PERSISTENT) {
-		if (rxe_flush_pmem_iova(mr, start, length))
-			return RESPST_ERR_RKEY_VIOLATION;
-		/* Make data persistent. */
-		wmb();
-	} else if (res->flush.type & IB_FLUSH_GLOBAL) {
-		/* Make data global visibility. */
-		wmb();
-	}
-
-	qp->resp.msn++;
-
-	/* next expected psn, read handles this separately */
-	qp->resp.psn = (pkt->psn + 1) & BTH_PSN_MASK;
-	qp->resp.ack_psn = qp->resp.psn;
-
-	qp->resp.opcode = pkt->opcode;
-	qp->resp.status = IB_WC_SUCCESS;
-
-	return RESPST_ACKNOWLEDGE;
 }
 
 /* Guarantee atomicity of atomic operations at the machine level. */
@@ -783,63 +654,6 @@ static enum resp_states atomic_reply(struct rxe_qp *qp,
 	ret = RESPST_ACKNOWLEDGE;
 out:
 	return ret;
-}
-
-#ifdef CONFIG_64BIT
-static enum resp_states do_atomic_write(struct rxe_qp *qp,
-					struct rxe_pkt_info *pkt)
-{
-	struct rxe_mr *mr = qp->resp.mr;
-	int payload = payload_size(pkt);
-	u64 src, *dst;
-
-	if (mr->state != RXE_MR_STATE_VALID)
-		return RESPST_ERR_RKEY_VIOLATION;
-
-	memcpy(&src, payload_addr(pkt), payload);
-
-	dst = iova_to_vaddr(mr, qp->resp.va + qp->resp.offset, payload);
-	/* check vaddr is 8 bytes aligned. */
-	if (!dst || (uintptr_t)dst & 7)
-		return RESPST_ERR_MISALIGNED_ATOMIC;
-
-	/* Do atomic write after all prior operations have completed */
-	smp_store_release(dst, src);
-
-	/* decrease resp.resid to zero */
-	qp->resp.resid -= sizeof(payload);
-
-	qp->resp.msn++;
-
-	/* next expected psn, read handles this separately */
-	qp->resp.psn = (pkt->psn + 1) & BTH_PSN_MASK;
-	qp->resp.ack_psn = qp->resp.psn;
-
-	qp->resp.opcode = pkt->opcode;
-	qp->resp.status = IB_WC_SUCCESS;
-	return RESPST_ACKNOWLEDGE;
-}
-#else
-static enum resp_states do_atomic_write(struct rxe_qp *qp,
-					struct rxe_pkt_info *pkt)
-{
-	return RESPST_ERR_UNSUPPORTED_OPCODE;
-}
-#endif /* CONFIG_64BIT */
-
-static enum resp_states atomic_write_reply(struct rxe_qp *qp,
-					   struct rxe_pkt_info *pkt)
-{
-	struct resp_res *res = qp->resp.res;
-
-	if (!res) {
-		res = rxe_prepare_res(qp, pkt, RXE_ATOMIC_WRITE_MASK);
-		qp->resp.res = res;
-	}
-
-	if (res->replay)
-		return RESPST_ACKNOWLEDGE;
-	return do_atomic_write(qp, pkt);
 }
 
 static struct sk_buff *prepare_ack_packet(struct rxe_qp *qp,
@@ -997,19 +811,14 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 	skb = prepare_ack_packet(qp, &ack_pkt, opcode, payload,
 				 res->cur_psn, AETH_ACK_UNLIMITED);
 	if (!skb) {
-		if (mr)
-			rxe_put(mr);
+		rxe_put(mr);
 		return RESPST_ERR_RNR;
 	}
 
-	err = rxe_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
-			  payload, RXE_FROM_MR_OBJ);
+	rxe_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
+		    payload, RXE_FROM_MR_OBJ);
 	if (mr)
 		rxe_put(mr);
-	if (err) {
-		kfree_skb(skb);
-		return RESPST_ERR_RKEY_VIOLATION;
-	}
 
 	if (bth_pad(&ack_pkt)) {
 		u8 *pad = payload_addr(&ack_pkt) + payload;
@@ -1085,10 +894,6 @@ static enum resp_states execute(struct rxe_qp *qp, struct rxe_pkt_info *pkt)
 		return RESPST_READ_REPLY;
 	} else if (pkt->mask & RXE_ATOMIC_MASK) {
 		return RESPST_ATOMIC_REPLY;
-	} else if (pkt->mask & RXE_ATOMIC_WRITE_MASK) {
-		return RESPST_ATOMIC_WRITE_REPLY;
-	} else if (pkt->mask & RXE_FLUSH_MASK) {
-		return RESPST_PROCESS_FLUSH;
 	} else {
 		/* Unreachable */
 		WARN_ON_ONCE(1);
@@ -1239,7 +1044,7 @@ static int send_common_ack(struct rxe_qp *qp, u8 syndrome, u32 psn,
 
 	err = rxe_xmit_packet(qp, &ack_pkt, skb);
 	if (err)
-		rxe_dbg_qp(qp, "Failed sending %s\n", msg);
+		pr_err_ratelimited("Failed sending %s\n", msg);
 
 	return err;
 }
@@ -1262,19 +1067,6 @@ static int send_atomic_ack(struct rxe_qp *qp, u8 syndrome, u32 psn)
 	return ret;
 }
 
-static int send_read_response_ack(struct rxe_qp *qp, u8 syndrome, u32 psn)
-{
-	int ret = send_common_ack(qp, syndrome, psn,
-			IB_OPCODE_RC_RDMA_READ_RESPONSE_ONLY,
-			"RDMA READ response of length zero ACK");
-
-	/* have to clear this since it is used to trigger
-	 * long read replies
-	 */
-	qp->resp.res = NULL;
-	return ret;
-}
-
 static enum resp_states acknowledge(struct rxe_qp *qp,
 				    struct rxe_pkt_info *pkt)
 {
@@ -1285,8 +1077,6 @@ static enum resp_states acknowledge(struct rxe_qp *qp,
 		send_ack(qp, qp->resp.aeth_syndrome, pkt->psn);
 	else if (pkt->mask & RXE_ATOMIC_MASK)
 		send_atomic_ack(qp, AETH_ACK_UNLIMITED, pkt->psn);
-	else if (pkt->mask & (RXE_FLUSH_MASK | RXE_ATOMIC_WRITE_MASK))
-		send_read_response_ack(qp, AETH_ACK_UNLIMITED, pkt->psn);
 	else if (bth_ack(pkt))
 		send_ack(qp, AETH_ACK_UNLIMITED, pkt->psn);
 
@@ -1343,22 +1133,6 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 		/* SEND. Ack again and cleanup. C9-105. */
 		send_ack(qp, AETH_ACK_UNLIMITED, prev_psn);
 		return RESPST_CLEANUP;
-	} else if (pkt->mask & RXE_FLUSH_MASK) {
-		struct resp_res *res;
-
-		/* Find the operation in our list of responder resources. */
-		res = find_resource(qp, pkt->psn);
-		if (res) {
-			res->replay = 1;
-			res->cur_psn = pkt->psn;
-			qp->resp.res = res;
-			rc = RESPST_PROCESS_FLUSH;
-			goto out;
-		}
-
-		/* Resource not found. Class D error. Drop the request. */
-		rc = RESPST_CLEANUP;
-		goto out;
 	} else if (pkt->mask & RXE_READ_MASK) {
 		struct resp_res *res;
 
@@ -1414,9 +1188,7 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 			res->replay = 1;
 			res->cur_psn = pkt->psn;
 			qp->resp.res = res;
-			rc = pkt->mask & RXE_ATOMIC_MASK ?
-					RESPST_ATOMIC_REPLY :
-					RESPST_ATOMIC_WRITE_REPLY;
+			rc = RESPST_ATOMIC_REPLY;
 			goto out;
 		}
 
@@ -1518,7 +1290,8 @@ int rxe_responder(void *arg)
 	}
 
 	while (1) {
-		rxe_dbg_qp(qp, "state = %s\n", resp_state_name[state]);
+		pr_debug("qp#%d state = %s\n", qp_num(qp),
+			 resp_state_name[state]);
 		switch (state) {
 		case RESPST_GET_REQ:
 			state = get_req(qp, &pkt);
@@ -1536,7 +1309,7 @@ int rxe_responder(void *arg)
 			state = check_resource(qp, pkt);
 			break;
 		case RESPST_CHK_LENGTH:
-			state = rxe_resp_check_length(qp, pkt);
+			state = check_length(qp, pkt);
 			break;
 		case RESPST_CHK_RKEY:
 			state = check_rkey(qp, pkt);
@@ -1552,12 +1325,6 @@ int rxe_responder(void *arg)
 			break;
 		case RESPST_ATOMIC_REPLY:
 			state = atomic_reply(qp, pkt);
-			break;
-		case RESPST_ATOMIC_WRITE_REPLY:
-			state = atomic_write_reply(qp, pkt);
-			break;
-		case RESPST_PROCESS_FLUSH:
-			state = process_flush(qp, pkt);
 			break;
 		case RESPST_ACKNOWLEDGE:
 			state = acknowledge(qp, pkt);
@@ -1681,7 +1448,7 @@ int rxe_responder(void *arg)
 
 		case RESPST_ERROR:
 			qp->resp.goto_error = 0;
-			rxe_dbg_qp(qp, "moved to error state\n");
+			pr_debug("qp#%d moved to error state\n", qp_num(qp));
 			rxe_qp_error(qp);
 			goto exit;
 

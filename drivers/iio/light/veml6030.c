@@ -786,7 +786,8 @@ static int veml6030_hw_init(struct iio_dev *indio_dev)
 	return ret;
 }
 
-static int veml6030_probe(struct i2c_client *client)
+static int veml6030_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	int ret;
 	struct veml6030_data *data;
@@ -892,7 +893,7 @@ static struct i2c_driver veml6030_driver = {
 		.of_match_table = veml6030_of_match,
 		.pm = pm_ptr(&veml6030_pm_ops),
 	},
-	.probe_new = veml6030_probe,
+	.probe = veml6030_probe,
 	.id_table = veml6030_id,
 };
 module_i2c_driver(veml6030_driver);

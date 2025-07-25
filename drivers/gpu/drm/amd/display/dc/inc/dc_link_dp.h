@@ -82,6 +82,10 @@ bool perform_link_training_with_retries(
 	enum signal_type signal,
 	bool do_fallback);
 
+enum dc_status read_hpd_rx_irq_data(
+	struct dc_link *link,
+	union hpd_irq_data *irq_data);
+
 bool hpd_rx_irq_check_link_loss_status(
 	struct dc_link *link,
 	union hpd_irq_data *hpd_irq_dpcd_data);
@@ -193,7 +197,7 @@ enum dc_status dpcd_configure_lttpr_mode(
 		struct link_training_settings *lt_settings);
 
 enum dp_link_encoding dp_get_link_encoding_format(const struct dc_link_settings *link_settings);
-enum dc_status dp_retrieve_lttpr_cap(struct dc_link *link);
+bool dp_retrieve_lttpr_cap(struct dc_link *link);
 bool dp_is_lttpr_present(struct dc_link *link);
 enum lttpr_mode dp_decide_lttpr_mode(struct dc_link *link, struct dc_link_settings *link_setting);
 void dp_get_lttpr_mode_override(struct dc_link *link, enum lttpr_mode *override);

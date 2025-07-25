@@ -290,7 +290,8 @@ static const struct v4l2_subdev_ops saa7185_ops = {
 
 /* ----------------------------------------------------------------------- */
 
-static int saa7185_probe(struct i2c_client *client)
+static int saa7185_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int i;
 	struct saa7185 *encoder;
@@ -343,7 +344,7 @@ static struct i2c_driver saa7185_driver = {
 	.driver = {
 		.name	= "saa7185",
 	},
-	.probe_new	= saa7185_probe,
+	.probe		= saa7185_probe,
 	.remove		= saa7185_remove,
 	.id_table	= saa7185_id,
 };

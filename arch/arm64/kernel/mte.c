@@ -41,14 +41,20 @@ static void mte_sync_page_tags(struct page *page, pte_t old_pte,
 	if (check_swap && is_swap_pte(old_pte)) {
 		swp_entry_t entry = pte_to_swp_entry(old_pte);
 
-		if (!non_swap_entry(entry))
-			mte_restore_tags(entry, page);
+		if (!non_swap_entry(entry) && mte_restore_tags(entry, page)) {
+			set_page_mte_tagged(page);
+			return;
+		}
 	}
 
 	if (!pte_is_tagged)
 		return;
 
-	if (try_page_mte_tagging(page)) {
+	/*
+	 * Test PG_mte_tagged again in case it was racing with another
+	 * set_pte_at().
+	 */
+	if (!page_mte_tagged(page)) {
 		mte_clear_page_tags(page_address(page));
 		set_page_mte_tagged(page);
 	}
@@ -66,13 +72,10 @@ void mte_sync_tags(pte_t old_pte, pte_t pte)
 		return;
 
 	/* if PG_mte_tagged is set, tags have already been initialised */
-	for (i = 0; i < nr_pages; i++, page++) {
-		if (!page_mte_tagged(page)) {
+	for (i = 0; i < nr_pages; i++, page++)
+		if (!page_mte_tagged(page))
 			mte_sync_page_tags(page, old_pte, check_swap,
 					   pte_is_tagged);
-			set_page_mte_tagged(page);
-		}
-	}
 
 	/* ensure the tags are visible before the PTE is set */
 	smp_wmb();

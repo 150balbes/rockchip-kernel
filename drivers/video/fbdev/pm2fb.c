@@ -1804,12 +1804,7 @@ static int __init pm2fb_init(void)
 {
 #ifndef MODULE
 	char *option = NULL;
-#endif
 
-	if (fb_modesetting_disabled("pm2fb"))
-		return -ENODEV;
-
-#ifndef MODULE
 	if (fb_get_options("pm2fb", &option))
 		return -ENODEV;
 	pm2fb_setup(option);

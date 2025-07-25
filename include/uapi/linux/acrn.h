@@ -12,6 +12,7 @@
 #define _UAPI_ACRN_H
 
 #include <linux/types.h>
+#include <linux/uuid.h>
 
 #define ACRN_IO_REQUEST_MAX		16
 
@@ -185,7 +186,7 @@ struct acrn_ioreq_notify {
  * @reserved0:		Reserved and must be 0
  * @vcpu_num:		Number of vCPU in the VM. Return from hypervisor.
  * @reserved1:		Reserved and must be 0
- * @uuid:		Empty space never to be used again (used to be UUID of the VM)
+ * @uuid:		UUID of the VM. Pass to hypervisor directly.
  * @vm_flag:		Flag of the VM creating. Pass to hypervisor directly.
  * @ioreq_buf:		Service VM GPA of I/O request buffer. Pass to
  *			hypervisor directly.
@@ -197,7 +198,7 @@ struct acrn_vm_creation {
 	__u16	reserved0;
 	__u16	vcpu_num;
 	__u16	reserved1;
-	__u8	uuid[16];
+	guid_t	uuid;
 	__u64	vm_flag;
 	__u64	ioreq_buf;
 	__u64	cpu_affinity;

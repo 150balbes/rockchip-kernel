@@ -219,12 +219,11 @@ __ext2_set_acl(struct inode *inode, struct posix_acl *acl, int type)
  * inode->i_mutex: down
  */
 int
-ext2_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
+ext2_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
 	     struct posix_acl *acl, int type)
 {
 	int error;
 	int update_mode = 0;
-	struct inode *inode = d_inode(dentry);
 	umode_t mode = inode->i_mode;
 
 	if (type == ACL_TYPE_ACCESS && acl) {

@@ -137,6 +137,7 @@ static int mx25_tsadc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct mx25_tsadc *tsadc;
+	struct resource *res;
 	int ret;
 	void __iomem *iomem;
 
@@ -144,7 +145,8 @@ static int mx25_tsadc_probe(struct platform_device *pdev)
 	if (!tsadc)
 		return -ENOMEM;
 
-	iomem = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	iomem = devm_ioremap_resource(dev, res);
 	if (IS_ERR(iomem))
 		return PTR_ERR(iomem);
 

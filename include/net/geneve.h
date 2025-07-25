@@ -59,7 +59,7 @@ struct genevehdr {
 	__be16 proto_type;
 	u8 vni[3];
 	u8 rsvd2;
-	u8 options[];
+	struct geneve_opt options[];
 };
 
 static inline bool netif_is_geneve(const struct net_device *dev)

@@ -361,6 +361,8 @@ void amdgpu_ring_fini(struct amdgpu_ring *ring)
 		amdgpu_bo_free_kernel(&ring->ring_obj,
 				      &ring->gpu_addr,
 				      (void **)&ring->ring);
+	} else {
+		kfree(ring->fence_drv.fences);
 	}
 
 	dma_fence_put(ring->vmid_wait);
@@ -568,16 +570,4 @@ int amdgpu_ring_init_mqd(struct amdgpu_ring *ring)
 		mqd_mgr = &adev->mqds[ring->funcs->type];
 
 	return mqd_mgr->init_mqd(adev, ring->mqd_ptr, &prop);
-}
-
-void amdgpu_ring_ib_begin(struct amdgpu_ring *ring)
-{
-	if (ring->is_sw_ring)
-		amdgpu_sw_ring_ib_begin(ring);
-}
-
-void amdgpu_ring_ib_end(struct amdgpu_ring *ring)
-{
-	if (ring->is_sw_ring)
-		amdgpu_sw_ring_ib_end(ring);
 }

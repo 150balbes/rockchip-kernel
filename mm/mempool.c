@@ -57,10 +57,8 @@ static void __check_element(mempool_t *pool, void *element, size_t size)
 static void check_element(mempool_t *pool, void *element)
 {
 	/* Mempools backed by slab allocator */
-	if (pool->free == mempool_kfree) {
-		__check_element(pool, element, (size_t)pool->pool_data);
-	} else if (pool->free == mempool_free_slab) {
-		__check_element(pool, element, kmem_cache_size(pool->pool_data));
+	if (pool->free == mempool_free_slab || pool->free == mempool_kfree) {
+		__check_element(pool, element, ksize(element));
 	} else if (pool->free == mempool_free_pages) {
 		/* Mempools backed by page allocator */
 		int order = (int)(long)pool->pool_data;
@@ -82,10 +80,8 @@ static void __poison_element(void *element, size_t size)
 static void poison_element(mempool_t *pool, void *element)
 {
 	/* Mempools backed by slab allocator */
-	if (pool->alloc == mempool_kmalloc) {
-		__poison_element(element, (size_t)pool->pool_data);
-	} else if (pool->alloc == mempool_alloc_slab) {
-		__poison_element(element, kmem_cache_size(pool->pool_data));
+	if (pool->alloc == mempool_alloc_slab || pool->alloc == mempool_kmalloc) {
+		__poison_element(element, ksize(element));
 	} else if (pool->alloc == mempool_alloc_pages) {
 		/* Mempools backed by page allocator */
 		int order = (int)(long)pool->pool_data;
@@ -115,10 +111,8 @@ static __always_inline void kasan_poison_element(mempool_t *pool, void *element)
 
 static void kasan_unpoison_element(mempool_t *pool, void *element)
 {
-	if (pool->alloc == mempool_kmalloc)
-		kasan_unpoison_range(element, (size_t)pool->pool_data);
-	else if (pool->alloc == mempool_alloc_slab)
-		kasan_unpoison_range(element, kmem_cache_size(pool->pool_data));
+	if (pool->alloc == mempool_alloc_slab || pool->alloc == mempool_kmalloc)
+		kasan_unpoison_range(element, __ksize(element));
 	else if (pool->alloc == mempool_alloc_pages)
 		kasan_unpoison_pages(element, (unsigned long)pool->pool_data,
 				     false);

@@ -303,12 +303,15 @@ void free_page_and_swap_cache(struct page *page)
  * Passed an array of pages, drop them all from swapcache and then release
  * them.  They are removed from the LRU and freed if this is their last use.
  */
-void free_pages_and_swap_cache(struct encoded_page **pages, int nr)
+void free_pages_and_swap_cache(struct page **pages, int nr)
 {
+	struct page **pagep = pages;
+	int i;
+
 	lru_add_drain();
-	for (int i = 0; i < nr; i++)
-		free_swap_cache(encoded_page_ptr(pages[i]));
-	release_pages(pages, nr);
+	for (i = 0; i < nr; i++)
+		free_swap_cache(pagep[i]);
+	release_pages(pagep, nr);
 }
 
 static inline bool swap_use_vma_readahead(void)
@@ -370,28 +373,30 @@ struct folio *swap_cache_get_folio(swp_entry_t entry,
 }
 
 /**
- * filemap_get_incore_folio - Find and get a folio from the page or swap caches.
+ * find_get_incore_page - Find and get a page from the page or swap caches.
  * @mapping: The address_space to search.
  * @index: The page cache index.
  *
- * This differs from filemap_get_folio() in that it will also look for the
- * folio in the swap cache.
+ * This differs from find_get_page() in that it will also look for the
+ * page in the swap cache.
  *
- * Return: The found folio or %NULL.
+ * Return: The found page or %NULL.
  */
-struct folio *filemap_get_incore_folio(struct address_space *mapping,
-		pgoff_t index)
+struct page *find_get_incore_page(struct address_space *mapping, pgoff_t index)
 {
 	swp_entry_t swp;
 	struct swap_info_struct *si;
-	struct folio *folio = __filemap_get_folio(mapping, index, FGP_ENTRY, 0);
+	struct page *page = pagecache_get_page(mapping, index,
+						FGP_ENTRY | FGP_HEAD, 0);
 
-	if (!xa_is_value(folio))
-		goto out;
+	if (!page)
+		return page;
+	if (!xa_is_value(page))
+		return find_subpage(page, index);
 	if (!shmem_mapping(mapping))
 		return NULL;
 
-	swp = radix_to_swp_entry(folio);
+	swp = radix_to_swp_entry(page);
 	/* There might be swapin error entries in shmem mapping. */
 	if (non_swap_entry(swp))
 		return NULL;
@@ -399,11 +404,9 @@ struct folio *filemap_get_incore_folio(struct address_space *mapping,
 	si = get_swap_device(swp);
 	if (!si)
 		return NULL;
-	index = swp_offset(swp);
-	folio = filemap_get_folio(swap_address_space(swp), index);
+	page = find_get_page(swap_address_space(swp), swp_offset(swp));
 	put_swap_device(si);
-out:
-	return folio;
+	return page;
 }
 
 struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,

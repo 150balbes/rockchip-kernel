@@ -22,6 +22,9 @@ struct hv_input_dev_info {
 	unsigned short reserved[11];
 };
 
+/* The maximum size of a synthetic input message. */
+#define SYNTHHID_MAX_INPUT_REPORT_SIZE 16
+
 /*
  * Current version
  *
@@ -54,6 +57,11 @@ enum synthhid_msg_type {
 struct synthhid_msg_hdr {
 	enum synthhid_msg_type type;
 	u32 size;
+};
+
+struct synthhid_msg {
+	struct synthhid_msg_hdr header;
+	char data[1]; /* Enclosed message */
 };
 
 union synthhid_version {
@@ -91,7 +99,7 @@ struct synthhid_device_info_ack {
 
 struct synthhid_input_report {
 	struct synthhid_msg_hdr header;
-	char buffer[];
+	char buffer[1];
 };
 
 #pragma pack(pop)
@@ -110,7 +118,7 @@ enum pipe_prot_msg_type {
 struct pipe_prt_msg {
 	enum pipe_prot_msg_type type;
 	u32 size;
-	char data[];
+	char data[1];
 };
 
 struct  mousevsc_prt_msg {
@@ -224,7 +232,7 @@ static void mousevsc_on_receive_device_info(struct mousevsc_dev *input_device,
 
 	ret = vmbus_sendpacket(input_device->device->channel,
 			&ack,
-			sizeof(struct pipe_prt_msg) +
+			sizeof(struct pipe_prt_msg) - sizeof(unsigned char) +
 			sizeof(struct synthhid_device_info_ack),
 			(unsigned long)&ack,
 			VM_PKT_DATA_INBAND,
@@ -243,7 +251,7 @@ static void mousevsc_on_receive(struct hv_device *device,
 				struct vmpacket_descriptor *packet)
 {
 	struct pipe_prt_msg *pipe_msg;
-	struct synthhid_msg_hdr *hid_msg_hdr;
+	struct synthhid_msg *hid_msg;
 	struct mousevsc_dev *input_dev = hv_get_drvdata(device);
 	struct synthhid_input_report *input_report;
 	size_t len;
@@ -254,23 +262,25 @@ static void mousevsc_on_receive(struct hv_device *device,
 	if (pipe_msg->type != PIPE_MESSAGE_DATA)
 		return;
 
-	hid_msg_hdr = (struct synthhid_msg_hdr *)pipe_msg->data;
+	hid_msg = (struct synthhid_msg *)pipe_msg->data;
 
-	switch (hid_msg_hdr->type) {
+	switch (hid_msg->header.type) {
 	case SYNTH_HID_PROTOCOL_RESPONSE:
 		/*
 		 * While it will be impossible for us to protect against
 		 * malicious/buggy hypervisor/host, add a check here to
 		 * ensure we don't corrupt memory.
 		 */
-		if (struct_size(pipe_msg, data, pipe_msg->size)
+		if ((pipe_msg->size + sizeof(struct pipe_prt_msg)
+			- sizeof(unsigned char))
 			> sizeof(struct mousevsc_prt_msg)) {
 			WARN_ON(1);
 			break;
 		}
 
 		memcpy(&input_dev->protocol_resp, pipe_msg,
-				struct_size(pipe_msg, data, pipe_msg->size));
+		       pipe_msg->size + sizeof(struct pipe_prt_msg) -
+		       sizeof(unsigned char));
 		complete(&input_dev->wait_event);
 		break;
 
@@ -301,7 +311,7 @@ static void mousevsc_on_receive(struct hv_device *device,
 		break;
 	default:
 		pr_err("unsupported hid msg type - type %d len %d\n",
-		       hid_msg_hdr->type, hid_msg_hdr->size);
+		       hid_msg->header.type, hid_msg->header.size);
 		break;
 	}
 
@@ -349,7 +359,8 @@ static int mousevsc_connect_to_vsp(struct hv_device *device)
 	request->request.version_requested.version = SYNTHHID_INPUT_VERSION;
 
 	ret = vmbus_sendpacket(device->channel, request,
-				sizeof(struct pipe_prt_msg) +
+				sizeof(struct pipe_prt_msg) -
+				sizeof(unsigned char) +
 				sizeof(struct synthhid_protocol_request),
 				(unsigned long)request,
 				VM_PKT_DATA_INBAND,

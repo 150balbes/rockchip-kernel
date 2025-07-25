@@ -116,20 +116,20 @@ EXPORT_SYMBOL_GPL(pci_proc_domain);
 
 /* Modify PCI: Register I/O address translation parameters */
 int zpci_register_ioat(struct zpci_dev *zdev, u8 dmaas,
-		       u64 base, u64 limit, u64 iota, u8 *status)
+		       u64 base, u64 limit, u64 iota)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, dmaas, ZPCI_MOD_FC_REG_IOAT);
 	struct zpci_fib fib = {0};
-	u8 cc;
+	u8 cc, status;
 
 	WARN_ON_ONCE(iota & 0x3fff);
 	fib.pba = base;
 	fib.pal = limit;
 	fib.iota = iota | ZPCI_IOTA_RTTO_FLAG;
 	fib.gd = zdev->gisa;
-	cc = zpci_mod_fc(req, &fib, status);
+	cc = zpci_mod_fc(req, &fib, &status);
 	if (cc)
-		zpci_dbg(3, "reg ioat fid:%x, cc:%d, status:%d\n", zdev->fid, cc, *status);
+		zpci_dbg(3, "reg ioat fid:%x, cc:%d, status:%d\n", zdev->fid, cc, status);
 	return cc;
 }
 EXPORT_SYMBOL_GPL(zpci_register_ioat);
@@ -241,7 +241,7 @@ resource_size_t pcibios_align_resource(void *data, const struct resource *res,
 /* combine single writes by using store-block insn */
 void __iowrite64_copy(void __iomem *to, const void *from, size_t count)
 {
-       zpci_memcpy_toio(to, from, count);
+	zpci_memcpy_toio(to, from, count * 8);
 }
 
 static void __iomem *__ioremap(phys_addr_t addr, size_t size, pgprot_t prot)
@@ -544,8 +544,7 @@ static struct resource *__alloc_res(struct zpci_dev *zdev, unsigned long start,
 	return r;
 }
 
-int zpci_setup_bus_resources(struct zpci_dev *zdev,
-			     struct list_head *resources)
+int zpci_setup_bus_resources(struct zpci_dev *zdev)
 {
 	unsigned long addr, size, flags;
 	struct resource *res;
@@ -581,7 +580,6 @@ int zpci_setup_bus_resources(struct zpci_dev *zdev,
 			return -ENOMEM;
 		}
 		zdev->bars[i].res = res;
-		pci_add_resource(resources, res);
 	}
 	zdev->has_resources = 1;
 
@@ -590,17 +588,23 @@ int zpci_setup_bus_resources(struct zpci_dev *zdev,
 
 static void zpci_cleanup_bus_resources(struct zpci_dev *zdev)
 {
+	struct resource *res;
 	int i;
 
+	pci_lock_rescan_remove();
 	for (i = 0; i < PCI_STD_NUM_BARS; i++) {
-		if (!zdev->bars[i].size || !zdev->bars[i].res)
+		res = zdev->bars[i].res;
+		if (!res)
 			continue;
 
+		release_resource(res);
+		pci_bus_remove_resource(zdev->zbus->bus, res);
 		zpci_free_iomap(zdev, zdev->bars[i].map_idx);
-		release_resource(zdev->bars[i].res);
-		kfree(zdev->bars[i].res);
+		zdev->bars[i].res = NULL;
+		kfree(res);
 	}
 	zdev->has_resources = 0;
+	pci_unlock_rescan_remove();
 }
 
 int pcibios_device_add(struct pci_dev *pdev)
@@ -764,7 +768,6 @@ EXPORT_SYMBOL_GPL(zpci_disable_device);
  */
 int zpci_hot_reset_device(struct zpci_dev *zdev)
 {
-	u8 status;
 	int rc;
 
 	zpci_dbg(3, "rst fid:%x, fh:%x\n", zdev->fid, zdev->fh);
@@ -788,7 +791,7 @@ int zpci_hot_reset_device(struct zpci_dev *zdev)
 
 	if (zdev->dma_table)
 		rc = zpci_register_ioat(zdev, 0, zdev->start_dma, zdev->end_dma,
-					virt_to_phys(zdev->dma_table), &status);
+					virt_to_phys(zdev->dma_table));
 	else
 		rc = zpci_dma_init_device(zdev);
 	if (rc) {
@@ -996,7 +999,7 @@ void zpci_release_device(struct kref *kref)
 		break;
 	}
 	zpci_dbg(3, "rem fid:%x\n", zdev->fid);
-	kfree_rcu(zdev, rcu);
+	kfree(zdev);
 }
 
 int zpci_report_error(struct pci_dev *pdev,

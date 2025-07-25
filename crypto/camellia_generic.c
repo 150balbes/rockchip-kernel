@@ -9,7 +9,7 @@
  *  https://info.isl.ntt.co.jp/crypt/eng/camellia/specifications.html
  */
 
-#include <crypto/algapi.h>
+#include <linux/crypto.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/kernel.h>

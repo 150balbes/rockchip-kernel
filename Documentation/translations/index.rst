@@ -12,7 +12,6 @@ Translations
    it_IT/index
    ko_KR/index
    ja_JP/index
-   sp_SP/index
 
 
 .. _translations_disclaimer:

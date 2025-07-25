@@ -730,13 +730,7 @@ enum safexcel_eip_version {
 	EIP97IES_MRVL,
 	EIP197B_MRVL,
 	EIP197D_MRVL,
-	EIP197_DEVBRD,
-	EIP197C_MXL,
-};
-
-struct safexcel_priv_data {
-	enum safexcel_eip_version version;
-	bool fw_little_endian;
+	EIP197_DEVBRD
 };
 
 /* Priority we use for advertising our algorithms */
@@ -821,7 +815,7 @@ struct safexcel_crypto_priv {
 	struct clk *reg_clk;
 	struct safexcel_config config;
 
-	struct safexcel_priv_data *data;
+	enum safexcel_eip_version version;
 	struct safexcel_register_offsets offsets;
 	struct safexcel_hwconfig hwconfig;
 	u32 flags;

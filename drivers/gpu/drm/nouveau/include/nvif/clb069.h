@@ -8,8 +8,5 @@ struct nvif_clb069_v0 {
 	__u32 put;
 };
 
-union nvif_clb069_event_args {
-	struct nvif_clb069_event_vn {
-	} vn;
-};
+#define NVB069_V0_NTFY_FAULT                                                0x00
 #endif

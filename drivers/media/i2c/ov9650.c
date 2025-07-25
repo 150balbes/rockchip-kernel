@@ -10,6 +10,7 @@
  */
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
@@ -29,6 +30,7 @@
 #include <media/v4l2-image-sizes.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
+#include <media/i2c/ov9650.h>
 
 static int debug;
 module_param(debug, int, 0644);
@@ -1106,9 +1108,7 @@ static int ov965x_g_frame_interval(struct v4l2_subdev *sd,
 {
 	struct ov965x *ov965x = to_ov965x(sd);
 
-	mutex_lock(&ov965x->lock);
 	fi->interval = ov965x->fiv->interval;
-	mutex_unlock(&ov965x->lock);
 
 	return 0;
 }
@@ -1400,6 +1400,38 @@ static const struct v4l2_subdev_ops ov965x_subdev_ops = {
 	.video = &ov965x_video_ops,
 };
 
+/*
+ * Reset and power down GPIOs configuration
+ */
+static int ov965x_configure_gpios_pdata(struct ov965x *ov965x,
+				const struct ov9650_platform_data *pdata)
+{
+	int ret, i;
+	int gpios[NUM_GPIOS];
+	struct device *dev = regmap_get_device(ov965x->regmap);
+
+	gpios[GPIO_PWDN] = pdata->gpio_pwdn;
+	gpios[GPIO_RST]  = pdata->gpio_reset;
+
+	for (i = 0; i < ARRAY_SIZE(ov965x->gpios); i++) {
+		int gpio = gpios[i];
+
+		if (!gpio_is_valid(gpio))
+			continue;
+		ret = devm_gpio_request_one(dev, gpio,
+					    GPIOF_OUT_INIT_HIGH, "OV965X");
+		if (ret < 0)
+			return ret;
+		v4l2_dbg(1, debug, &ov965x->sd, "set gpio %d to 1\n", gpio);
+
+		gpio_set_value_cansleep(gpio, 1);
+		gpio_export(gpio, 0);
+		ov965x->gpios[i] = gpio_to_desc(gpio);
+	}
+
+	return 0;
+}
+
 static int ov965x_configure_gpios(struct ov965x *ov965x)
 {
 	struct device *dev = regmap_get_device(ov965x->regmap);
@@ -1459,6 +1491,7 @@ out:
 
 static int ov965x_probe(struct i2c_client *client)
 {
+	const struct ov9650_platform_data *pdata = client->dev.platform_data;
 	struct v4l2_subdev *sd;
 	struct ov965x *ov965x;
 	int ret;
@@ -1478,7 +1511,17 @@ static int ov965x_probe(struct i2c_client *client)
 		return PTR_ERR(ov965x->regmap);
 	}
 
-	if (dev_fwnode(&client->dev)) {
+	if (pdata) {
+		if (pdata->mclk_frequency == 0) {
+			dev_err(&client->dev, "MCLK frequency not specified\n");
+			return -EINVAL;
+		}
+		ov965x->mclk_frequency = pdata->mclk_frequency;
+
+		ret = ov965x_configure_gpios_pdata(ov965x, pdata);
+		if (ret < 0)
+			return ret;
+	} else if (dev_fwnode(&client->dev)) {
 		ov965x->clk = devm_clk_get(&client->dev, NULL);
 		if (IS_ERR(ov965x->clk))
 			return PTR_ERR(ov965x->clk);
@@ -1489,7 +1532,7 @@ static int ov965x_probe(struct i2c_client *client)
 			return ret;
 	} else {
 		dev_err(&client->dev,
-			"No device properties specified\n");
+			"Neither platform data nor device property specified\n");
 
 		return -EINVAL;
 	}

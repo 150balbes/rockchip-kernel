@@ -23,7 +23,6 @@
 #include <linux/sched/signal.h>
 #include <asm/debug.h>
 #include <asm/cpacf.h>
-#include <asm/archrandom.h>
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("IBM Corporation");
@@ -192,6 +191,7 @@ static struct hwrng trng_hwrng_dev = {
 	.name		= "s390-trng",
 	.data_read	= trng_hwrng_data_read,
 	.read		= trng_hwrng_read,
+	.quality	= 1024,
 };
 
 

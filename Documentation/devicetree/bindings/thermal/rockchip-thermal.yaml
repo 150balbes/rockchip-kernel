@@ -19,7 +19,6 @@ properties:
       - rockchip,rk3368-tsadc
       - rockchip,rk3399-tsadc
       - rockchip,rk3568-tsadc
-      - rockchip,rk3588-tsadc
       - rockchip,rv1108-tsadc
 
   reg:

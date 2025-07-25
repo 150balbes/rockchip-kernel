@@ -990,7 +990,7 @@ potreste fare come segue::
 
             while (list) {
                     struct foo *next = list->next;
-                    timer_delete(&list->timer);
+                    del_timer(&list->timer);
                     kfree(list);
                     list = next;
             }
@@ -1003,7 +1003,7 @@ e prenderà il *lock* solo dopo spin_unlock_bh(), e cercherà
 di eliminare il suo oggetto (che però è già stato eliminato).
 
 Questo può essere evitato controllando il valore di ritorno di
-timer_delete(): se ritorna 1, il temporizzatore è stato già
+del_timer(): se ritorna 1, il temporizzatore è stato già
 rimosso. Se 0, significa (in questo caso) che il temporizzatore è in
 esecuzione, quindi possiamo fare come segue::
 
@@ -1012,7 +1012,7 @@ esecuzione, quindi possiamo fare come segue::
 
                     while (list) {
                             struct foo *next = list->next;
-                            if (!timer_delete(&list->timer)) {
+                            if (!del_timer(&list->timer)) {
                                     /* Give timer a chance to delete this */
                                     spin_unlock_bh(&list_lock);
                                     goto retry;
@@ -1026,8 +1026,10 @@ esecuzione, quindi possiamo fare come segue::
 Un altro problema è l'eliminazione dei temporizzatori che si riavviano
 da soli (chiamando add_timer() alla fine della loro esecuzione).
 Dato che questo è un problema abbastanza comune con una propensione
-alle corse critiche, dovreste usare timer_delete_sync()
-(``include/linux/timer.h``) per gestire questo caso.
+alle corse critiche, dovreste usare del_timer_sync()
+(``include/linux/timer.h``) per gestire questo caso. Questa ritorna il
+numero di volte che il temporizzatore è stato interrotto prima che
+fosse in grado di fermarlo senza che si riavviasse.
 
 Velocità della sincronizzazione
 ===============================
@@ -1372,7 +1374,7 @@ contesto, o trattenendo un qualsiasi *lock*.
 
 -  kfree()
 
--  add_timer() e timer_delete()
+-  add_timer() e del_timer()
 
 Riferimento per l'API dei Mutex
 ===============================

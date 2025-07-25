@@ -316,7 +316,7 @@
 			};
 		};
 
-		ebi2: external-bus@1a100000 {
+		external-bus@1a100000 {
 			compatible = "qcom,msm8660-ebi2";
 			#address-cells = <2>;
 			#size-cells = <1>;
@@ -333,12 +333,12 @@
 			status = "disabled";
 		};
 
-		ssbi@500000 {
+		qcom,ssbi@500000 {
 			compatible = "qcom,ssbi";
 			reg = <0x500000 0x1000>;
 			qcom,controller-type = "pmic-arbiter";
 
-			pm8058: pmic {
+			pm8058: pmic@0 {
 				compatible = "qcom,pm8058";
 				interrupt-parent = <&tlmm>;
 				interrupts = <88 8>;
@@ -379,7 +379,7 @@
 					pull-up;
 				};
 
-				pm8058_keypad: keypad@148 {
+				keypad@148 {
 					compatible = "qcom,pm8058-keypad";
 					reg = <0x148>;
 					interrupt-parent = <&pm8058>;
@@ -444,31 +444,6 @@
 					compatible = "qcom,pm8058-vib";
 					reg = <0x4a>;
 				};
-
-				pm8058_led48: led@48 {
-					compatible = "qcom,pm8058-keypad-led";
-					reg = <0x48>;
-					status = "disabled";
-				};
-
-				pm8058_led131: led@131 {
-					compatible = "qcom,pm8058-led";
-					reg = <0x131>;
-					status = "disabled";
-				};
-
-				pm8058_led132: led@132 {
-					compatible = "qcom,pm8058-led";
-					reg = <0x132>;
-					status = "disabled";
-				};
-
-				pm8058_led133: led@133 {
-					compatible = "qcom,pm8058-led";
-					reg = <0x133>;
-					status = "disabled";
-				};
-
 			};
 		};
 
@@ -496,7 +471,7 @@
 				clock-names = "pxo";
 			};
 
-			regulators-0 {
+			pm8901-regulators {
 				compatible = "qcom,rpm-pm8901-regulators";
 
 				pm8901_l0: l0 {};
@@ -520,7 +495,7 @@
 				pm8901_mvs: mvs {};
 			};
 
-			regulators-1 {
+			pm8058-regulators {
 				compatible = "qcom,rpm-pm8058-regulators";
 
 				pm8058_l0: l0 {};
@@ -574,6 +549,7 @@
 				arm,primecell-periphid = <0x00051180>;
 				reg = <0x12400000 0x8000>;
 				interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_HIGH>;
+				interrupt-names = "cmd_irq";
 				clocks = <&gcc SDC1_CLK>, <&gcc SDC1_H_CLK>;
 				clock-names = "mclk", "apb_pclk";
 				bus-width = <8>;
@@ -589,6 +565,7 @@
 				arm,primecell-periphid = <0x00051180>;
 				reg = <0x12140000 0x8000>;
 				interrupts = <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>;
+				interrupt-names = "cmd_irq";
 				clocks = <&gcc SDC2_CLK>, <&gcc SDC2_H_CLK>;
 				clock-names = "mclk", "apb_pclk";
 				bus-width = <8>;
@@ -603,6 +580,7 @@
 				status = "disabled";
 				reg = <0x12180000 0x8000>;
 				interrupts = <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>;
+				interrupt-names = "cmd_irq";
 				clocks = <&gcc SDC3_CLK>, <&gcc SDC3_H_CLK>;
 				clock-names = "mclk", "apb_pclk";
 				bus-width = <4>;
@@ -618,6 +596,7 @@
 				status = "disabled";
 				reg = <0x121c0000 0x8000>;
 				interrupts = <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>;
+				interrupt-names = "cmd_irq";
 				clocks = <&gcc SDC4_CLK>, <&gcc SDC4_H_CLK>;
 				clock-names = "mclk", "apb_pclk";
 				bus-width = <4>;
@@ -632,6 +611,7 @@
 				status = "disabled";
 				reg = <0x12200000 0x8000>;
 				interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_HIGH>;
+				interrupt-names = "cmd_irq";
 				clocks = <&gcc SDC5_CLK>, <&gcc SDC5_H_CLK>;
 				clock-names = "mclk", "apb_pclk";
 				bus-width = <4>;

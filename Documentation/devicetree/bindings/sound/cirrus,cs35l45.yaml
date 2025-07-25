@@ -14,9 +14,6 @@ description: |
   CS35L45 is a Boosted Mono Class D Amplifier with DSP
   Speaker Protection and Adaptive Battery Management.
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     enum:
@@ -55,7 +52,7 @@ required:
   - reg
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

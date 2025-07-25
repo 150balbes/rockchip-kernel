@@ -16,24 +16,6 @@ static bool mt7921_disable_clc;
 module_param_named(disable_clc, mt7921_disable_clc, bool, 0644);
 MODULE_PARM_DESC(disable_clc, "disable CLC support");
 
-static int
-mt7921_mcu_parse_eeprom(struct mt76_dev *dev, struct sk_buff *skb)
-{
-	struct mt7921_mcu_eeprom_info *res;
-	u8 *buf;
-
-	if (!skb)
-		return -EINVAL;
-
-	skb_pull(skb, sizeof(struct mt76_connac2_mcu_rxd));
-
-	res = (struct mt7921_mcu_eeprom_info *)skb->data;
-	buf = dev->eeprom.data + le32_to_cpu(res->addr);
-	memcpy(buf, res->data, 16);
-
-	return 0;
-}
-
 int mt7921_mcu_parse_response(struct mt76_dev *mdev, int cmd,
 			      struct sk_buff *skb, int seq)
 {
@@ -60,8 +42,6 @@ int mt7921_mcu_parse_response(struct mt76_dev *mdev, int cmd,
 	} else if (cmd == MCU_EXT_CMD(THERMAL_CTRL)) {
 		skb_pull(skb, sizeof(*rxd) + 4);
 		ret = le32_to_cpu(*(__le32 *)skb->data);
-	} else if (cmd == MCU_EXT_CMD(EFUSE_ACCESS)) {
-		ret = mt7921_mcu_parse_eeprom(mdev, skb);
 	} else if (cmd == MCU_UNI_CMD(DEV_INFO_UPDATE) ||
 		   cmd == MCU_UNI_CMD(BSS_INFO_UPDATE) ||
 		   cmd == MCU_UNI_CMD(STA_REC_UPDATE) ||
@@ -155,29 +135,6 @@ void mt7921_mcu_set_suspend_iter(void *priv, u8 *mac, struct ieee80211_vif *vif)
 #endif /* CONFIG_PM */
 
 static void
-mt7921_mcu_uni_roc_event(struct mt7921_dev *dev, struct sk_buff *skb)
-{
-	struct mt7921_roc_grant_tlv *grant;
-	struct mt76_connac2_mcu_rxd *rxd;
-	int duration;
-
-	rxd = (struct mt76_connac2_mcu_rxd *)skb->data;
-	grant = (struct mt7921_roc_grant_tlv *)(rxd->tlv + 4);
-
-	/* should never happen */
-	WARN_ON_ONCE((le16_to_cpu(grant->tag) != UNI_EVENT_ROC_GRANT));
-
-	if (grant->reqtype == MT7921_ROC_REQ_ROC)
-		ieee80211_ready_on_channel(dev->mt76.phy.hw);
-
-	dev->phy.roc_grant = true;
-	wake_up(&dev->phy.roc_wait);
-	duration = le32_to_cpu(grant->max_interval);
-	mod_timer(&dev->phy.roc_timer,
-		  round_jiffies_up(jiffies + msecs_to_jiffies(duration)));
-}
-
-static void
 mt7921_mcu_scan_event(struct mt7921_dev *dev, struct sk_buff *skb)
 {
 	struct mt76_phy *mphy = &dev->mt76.phy;
@@ -220,6 +177,20 @@ mt7921_mcu_connection_loss_event(struct mt7921_dev *dev, struct sk_buff *skb)
 	ieee80211_iterate_active_interfaces_atomic(mphy->hw,
 					IEEE80211_IFACE_ITER_RESUME_ALL,
 					mt7921_mcu_connection_loss_iter, event);
+}
+
+static void
+mt7921_mcu_bss_event(struct mt7921_dev *dev, struct sk_buff *skb)
+{
+	struct mt76_phy *mphy = &dev->mt76.phy;
+	struct mt76_connac_mcu_bss_event *event;
+
+	skb_pull(skb, sizeof(struct mt76_connac2_mcu_rxd));
+	event = (struct mt76_connac_mcu_bss_event *)skb->data;
+	if (event->is_absent)
+		ieee80211_stop_queues(mphy->hw);
+	else
+		ieee80211_wake_queues(mphy->hw);
 }
 
 static void
@@ -288,6 +259,9 @@ mt7921_mcu_rx_unsolicited_event(struct mt7921_dev *dev, struct sk_buff *skb)
 	case MCU_EVENT_SCAN_DONE:
 		mt7921_mcu_scan_event(dev, skb);
 		return;
+	case MCU_EVENT_BSS_ABSENCE:
+		mt7921_mcu_bss_event(dev, skb);
+		break;
 	case MCU_EVENT_DBG_MSG:
 		mt7921_mcu_debug_msg_event(dev, skb);
 		break;
@@ -308,24 +282,6 @@ mt7921_mcu_rx_unsolicited_event(struct mt7921_dev *dev, struct sk_buff *skb)
 	dev_kfree_skb(skb);
 }
 
-static void
-mt7921_mcu_uni_rx_unsolicited_event(struct mt7921_dev *dev,
-				    struct sk_buff *skb)
-{
-	struct mt76_connac2_mcu_rxd *rxd;
-
-	rxd = (struct mt76_connac2_mcu_rxd *)skb->data;
-
-	switch (rxd->eid) {
-	case MCU_UNI_EVENT_ROC:
-		mt7921_mcu_uni_roc_event(dev, skb);
-		break;
-	default:
-		break;
-	}
-	dev_kfree_skb(skb);
-}
-
 void mt7921_mcu_rx_event(struct mt7921_dev *dev, struct sk_buff *skb)
 {
 	struct mt76_connac2_mcu_rxd *rxd;
@@ -335,11 +291,6 @@ void mt7921_mcu_rx_event(struct mt7921_dev *dev, struct sk_buff *skb)
 
 	rxd = (struct mt76_connac2_mcu_rxd *)skb->data;
 
-	if (rxd->option & MCU_UNI_CMD_UNSOLICITED_EVENT) {
-		mt7921_mcu_uni_rx_unsolicited_event(dev, skb);
-		return;
-	}
-
 	if (rxd->eid == 0x6) {
 		mt76_mcu_rx_event(&dev->mt76, skb);
 		return;
@@ -348,6 +299,7 @@ void mt7921_mcu_rx_event(struct mt7921_dev *dev, struct sk_buff *skb)
 	if (rxd->ext_eid == MCU_EXT_EVENT_RATE_REPORT ||
 	    rxd->eid == MCU_EVENT_BSS_BEACON_LOSS ||
 	    rxd->eid == MCU_EVENT_SCHED_SCAN_DONE ||
+	    rxd->eid == MCU_EVENT_BSS_ABSENCE ||
 	    rxd->eid == MCU_EVENT_SCAN_DONE ||
 	    rxd->eid == MCU_EVENT_TX_DONE ||
 	    rxd->eid == MCU_EVENT_DBG_MSG ||
@@ -497,12 +449,6 @@ static int mt7921_load_firmware(struct mt7921_dev *dev)
 {
 	int ret;
 
-	ret = mt76_get_field(dev, MT_CONN_ON_MISC, MT_TOP_MISC2_FW_N9_RDY);
-	if (ret && mt76_is_mmio(&dev->mt76)) {
-		dev_dbg(dev->mt76.dev, "Firmware is already download\n");
-		goto fw_loaded;
-	}
-
 	ret = mt76_connac2_load_patch(&dev->mt76, mt7921_patch_name(dev));
 	if (ret)
 		return ret;
@@ -524,8 +470,6 @@ static int mt7921_load_firmware(struct mt7921_dev *dev)
 
 		return -EIO;
 	}
-
-fw_loaded:
 
 #ifdef CONFIG_PM
 	dev->mt76.hw->wiphy->wowlan = &mt76_connac_wowlan_support;
@@ -662,103 +606,6 @@ int mt7921_mcu_set_tx(struct mt7921_dev *dev, struct ieee80211_vif *vif)
 
 	return mt76_mcu_send_msg(&dev->mt76, MCU_CE_CMD(SET_MU_EDCA_PARMS),
 				 &req_mu, sizeof(req_mu), false);
-}
-
-int mt7921_mcu_set_roc(struct mt7921_phy *phy, struct mt7921_vif *vif,
-		       struct ieee80211_channel *chan, int duration,
-		       enum mt7921_roc_req type, u8 token_id)
-{
-	int center_ch = ieee80211_frequency_to_channel(chan->center_freq);
-	struct mt7921_dev *dev = phy->dev;
-	struct {
-		struct {
-			u8 rsv[4];
-		} __packed hdr;
-		struct roc_acquire_tlv {
-			__le16 tag;
-			__le16 len;
-			u8 bss_idx;
-			u8 tokenid;
-			u8 control_channel;
-			u8 sco;
-			u8 band;
-			u8 bw;
-			u8 center_chan;
-			u8 center_chan2;
-			u8 bw_from_ap;
-			u8 center_chan_from_ap;
-			u8 center_chan2_from_ap;
-			u8 reqtype;
-			__le32 maxinterval;
-			u8 dbdcband;
-			u8 rsv[3];
-		} __packed roc;
-	} __packed req = {
-		.roc = {
-			.tag = cpu_to_le16(UNI_ROC_ACQUIRE),
-			.len = cpu_to_le16(sizeof(struct roc_acquire_tlv)),
-			.tokenid = token_id,
-			.reqtype = type,
-			.maxinterval = cpu_to_le32(duration),
-			.bss_idx = vif->mt76.idx,
-			.control_channel = chan->hw_value,
-			.bw = CMD_CBW_20MHZ,
-			.bw_from_ap = CMD_CBW_20MHZ,
-			.center_chan = center_ch,
-			.center_chan_from_ap = center_ch,
-			.dbdcband = 0xff, /* auto */
-		},
-	};
-
-	if (chan->hw_value < center_ch)
-		req.roc.sco = 1; /* SCA */
-	else if (chan->hw_value > center_ch)
-		req.roc.sco = 3; /* SCB */
-
-	switch (chan->band) {
-	case NL80211_BAND_6GHZ:
-		req.roc.band = 3;
-		break;
-	case NL80211_BAND_5GHZ:
-		req.roc.band = 2;
-		break;
-	default:
-		req.roc.band = 1;
-		break;
-	}
-
-	return mt76_mcu_send_msg(&dev->mt76, MCU_UNI_CMD(ROC),
-				 &req, sizeof(req), false);
-}
-
-int mt7921_mcu_abort_roc(struct mt7921_phy *phy, struct mt7921_vif *vif,
-			 u8 token_id)
-{
-	struct mt7921_dev *dev = phy->dev;
-	struct {
-		struct {
-			u8 rsv[4];
-		} __packed hdr;
-		struct roc_abort_tlv {
-			__le16 tag;
-			__le16 len;
-			u8 bss_idx;
-			u8 tokenid;
-			u8 dbdcband;
-			u8 rsv[5];
-		} __packed abort;
-	} __packed req = {
-		.abort = {
-			.tag = cpu_to_le16(UNI_ROC_ABORT),
-			.len = cpu_to_le16(sizeof(struct roc_abort_tlv)),
-			.tokenid = token_id,
-			.bss_idx = vif->mt76.idx,
-			.dbdcband = 0xff, /* auto*/
-		},
-	};
-
-	return mt76_mcu_send_msg(&dev->mt76, MCU_UNI_CMD(ROC),
-				 &req, sizeof(req), false);
 }
 
 int mt7921_mcu_set_chan_info(struct mt7921_phy *phy, int cmd)
@@ -1189,21 +1036,26 @@ int __mt7921_mcu_set_clc(struct mt7921_dev *dev, u8 *alpha2,
 		u8 type[2];
 		u8 rsvd[64];
 	} __packed req = {
+		.ver = 1,
 		.idx = idx,
 		.env = env_cap,
 	};
 	int ret, valid_cnt = 0;
-	u8 i, *pos;
+	u16 buf_len = 0;
+	u8 *pos;
 
 	if (!clc)
 		return 0;
 
+	buf_len = le16_to_cpu(clc->len) - sizeof(*clc);
 	pos = clc->data;
-	for (i = 0; i < clc->nr_country; i++) {
+	while (buf_len > 16) {
 		struct mt7921_clc_rule *rule = (struct mt7921_clc_rule *)pos;
 		u16 len = le16_to_cpu(rule->len);
+		u16 offset = len + sizeof(*rule);
 
-		pos += len + sizeof(*rule);
+		pos += offset;
+		buf_len -= offset;
 		if (rule->alpha2[0] != alpha2[0] ||
 		    rule->alpha2[1] != alpha2[1])
 			continue;

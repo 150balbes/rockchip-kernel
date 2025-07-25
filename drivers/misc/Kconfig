@@ -5,6 +5,23 @@
 
 menu "Misc devices"
 
+source "drivers/misc/rk628/Kconfig"
+
+config RK803
+	tristate "RK803"
+	default n
+	help
+	  Driver for RK803 which is used for driving porjector and IR flood LED.
+
+source "drivers/misc/rockchip/Kconfig"
+
+config LT7911D_FB_NOTIFIER
+	tristate "Lontium LT7911D FB Notifier"
+	depends on FB
+	help
+	   Enable this configuration option to enable the FB notifier driver
+	   for Lontium LT7911D.
+
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
@@ -175,28 +192,6 @@ config SGI_XP
 	  hardware based memory protection from the others.  Enabling
 	  this feature will allow for direct communication between SSIs
 	  based on a network adapter and DMA messaging.
-
-config SMPRO_ERRMON
-	tristate "Ampere Computing SMPro error monitor driver"
-	depends on MFD_SMPRO || COMPILE_TEST
-	help
-	  Say Y here to get support for the SMpro error monitor function
-	  provided by Ampere Computing's Altra and Altra Max SoCs. Upon
-	  loading, the driver creates sysfs files which can be use to gather
-	  multiple HW error data reported via read and write system calls.
-
-	  To compile this driver as a module, say M here. The driver will be
-	  called smpro-errmon.
-
-config SMPRO_MISC
-	tristate "Ampere Computing SMPro miscellaneous driver"
-	depends on MFD_SMPRO || COMPILE_TEST
-	help
-	  Say Y here to get support for the SMpro error miscellalenous function
-	  provided by Ampere Computing's Altra and Altra Max SoCs.
-
-	  To compile this driver as a module, say M here. The driver will be
-	  called smpro-misc.
 
 config CS5535_MFGPT
 	tristate "CS5535/CS5536 Geode Multi-Function General Purpose Timer (MFGPT) support"
@@ -496,6 +491,7 @@ config HISI_HIKEY_USB
 config OPEN_DICE
 	tristate "Open Profile for DICE driver"
 	depends on OF_RESERVED_MEM
+	depends on HAS_IOMEM
 	help
 	  This driver exposes a DICE reserved memory region to userspace via
 	  a character device. The memory region contains Compound Device

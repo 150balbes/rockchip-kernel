@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include "messages.h"
 #include "tree-mod-log.h"
 #include "disk-io.h"
-#include "fs.h"
-#include "accessors.h"
-#include "tree-checker.h"
 
 struct tree_mod_root {
 	u64 logical;
@@ -201,11 +197,12 @@ static inline bool tree_mod_need_log(const struct btrfs_fs_info *fs_info,
 
 static struct tree_mod_elem *alloc_tree_mod_elem(struct extent_buffer *eb,
 						 int slot,
-						 enum btrfs_mod_log_op op)
+						 enum btrfs_mod_log_op op,
+						 gfp_t flags)
 {
 	struct tree_mod_elem *tm;
 
-	tm = kzalloc(sizeof(*tm), GFP_NOFS);
+	tm = kzalloc(sizeof(*tm), flags);
 	if (!tm)
 		return NULL;
 
@@ -223,7 +220,7 @@ static struct tree_mod_elem *alloc_tree_mod_elem(struct extent_buffer *eb,
 }
 
 int btrfs_tree_mod_log_insert_key(struct extent_buffer *eb, int slot,
-				  enum btrfs_mod_log_op op)
+				  enum btrfs_mod_log_op op, gfp_t flags)
 {
 	struct tree_mod_elem *tm;
 	int ret;
@@ -231,7 +228,7 @@ int btrfs_tree_mod_log_insert_key(struct extent_buffer *eb, int slot,
 	if (!tree_mod_need_log(eb->fs_info, eb))
 		return 0;
 
-	tm = alloc_tree_mod_elem(eb, slot, op);
+	tm = alloc_tree_mod_elem(eb, slot, op, flags);
 	if (!tm)
 		return -ENOMEM;
 
@@ -279,7 +276,7 @@ int btrfs_tree_mod_log_insert_move(struct extent_buffer *eb,
 
 	for (i = 0; i + dst_slot < src_slot && i < nr_items; i++) {
 		tm_list[i] = alloc_tree_mod_elem(eb, i + dst_slot,
-				BTRFS_MOD_LOG_KEY_REMOVE_WHILE_MOVING);
+				BTRFS_MOD_LOG_KEY_REMOVE_WHILE_MOVING, GFP_NOFS);
 		if (!tm_list[i]) {
 			ret = -ENOMEM;
 			goto free_tms;
@@ -367,7 +364,7 @@ int btrfs_tree_mod_log_insert_root(struct extent_buffer *old_root,
 		}
 		for (i = 0; i < nritems; i++) {
 			tm_list[i] = alloc_tree_mod_elem(old_root, i,
-			    BTRFS_MOD_LOG_KEY_REMOVE_WHILE_FREEING);
+			    BTRFS_MOD_LOG_KEY_REMOVE_WHILE_FREEING, GFP_NOFS);
 			if (!tm_list[i]) {
 				ret = -ENOMEM;
 				goto free_tms;
@@ -505,14 +502,14 @@ int btrfs_tree_mod_log_eb_copy(struct extent_buffer *dst,
 	tm_list_rem = tm_list + nr_items;
 	for (i = 0; i < nr_items; i++) {
 		tm_list_rem[i] = alloc_tree_mod_elem(src, i + src_offset,
-						     BTRFS_MOD_LOG_KEY_REMOVE);
+		    BTRFS_MOD_LOG_KEY_REMOVE, GFP_NOFS);
 		if (!tm_list_rem[i]) {
 			ret = -ENOMEM;
 			goto free_tms;
 		}
 
 		tm_list_add[i] = alloc_tree_mod_elem(dst, i + dst_offset,
-						     BTRFS_MOD_LOG_KEY_ADD);
+						BTRFS_MOD_LOG_KEY_ADD, GFP_NOFS);
 		if (!tm_list_add[i]) {
 			ret = -ENOMEM;
 			goto free_tms;
@@ -567,7 +564,7 @@ int btrfs_tree_mod_log_free_eb(struct extent_buffer *eb)
 
 	for (i = 0; i < nritems; i++) {
 		tm_list[i] = alloc_tree_mod_elem(eb, i,
-				    BTRFS_MOD_LOG_KEY_REMOVE_WHILE_FREEING);
+		    BTRFS_MOD_LOG_KEY_REMOVE_WHILE_FREEING, GFP_NOFS);
 		if (!tm_list[i]) {
 			ret = -ENOMEM;
 			goto free_tms;
@@ -697,8 +694,8 @@ static void tree_mod_log_rewind(struct btrfs_fs_info *fs_info,
 			n--;
 			break;
 		case BTRFS_MOD_LOG_MOVE_KEYS:
-			o_dst = btrfs_node_key_ptr_offset(eb, tm->slot);
-			o_src = btrfs_node_key_ptr_offset(eb, tm->move.dst_slot);
+			o_dst = btrfs_node_key_ptr_offset(tm->slot);
+			o_src = btrfs_node_key_ptr_offset(tm->move.dst_slot);
 			memmove_extent_buffer(eb, o_dst, o_src,
 					      tm->move.nr_items * p_size);
 			break;
@@ -822,15 +819,10 @@ struct extent_buffer *btrfs_get_old_root(struct btrfs_root *root, u64 time_seq)
 
 	tm = tree_mod_log_search(fs_info, logical, time_seq);
 	if (old_root && tm && tm->op != BTRFS_MOD_LOG_KEY_REMOVE_WHILE_FREEING) {
-		struct btrfs_tree_parent_check check = { 0 };
-
 		btrfs_tree_read_unlock(eb_root);
 		free_extent_buffer(eb_root);
-
-		check.level = level;
-		check.owner_root = root->root_key.objectid;
-
-		old = read_tree_block(fs_info, logical, &check);
+		old = read_tree_block(fs_info, logical, root->root_key.objectid,
+				      0, level, NULL);
 		if (WARN_ON(IS_ERR(old) || !extent_buffer_uptodate(old))) {
 			if (!IS_ERR(old))
 				free_extent_buffer(old);

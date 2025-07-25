@@ -32,7 +32,6 @@ struct loongson_system_configuration {
 	int cores_per_node;
 	int cores_per_package;
 	unsigned long cores_io_master;
-	unsigned long suspend_addr;
 	const char *cpuname;
 };
 

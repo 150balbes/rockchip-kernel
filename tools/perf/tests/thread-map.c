@@ -11,7 +11,6 @@
 #include "util/synthetic-events.h"
 #include <linux/zalloc.h>
 #include <perf/event.h>
-#include <internal/threadmap.h>
 
 struct perf_sample;
 struct perf_tool;

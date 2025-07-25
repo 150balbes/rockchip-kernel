@@ -426,9 +426,6 @@ struct kvaser_usb_net_leaf_priv {
 	struct kvaser_usb_net_priv *net;
 
 	struct delayed_work chip_state_req_work;
-
-	/* started but not reported as bus-on yet */
-	bool joining_bus;
 };
 
 static const struct can_bittiming_const kvaser_usb_leaf_m16c_bittiming_const = {
@@ -968,7 +965,6 @@ kvaser_usb_leaf_rx_error_update_can_state(struct kvaser_usb_net_priv *priv,
 					const struct kvaser_usb_err_summary *es,
 					struct can_frame *cf)
 {
-	struct kvaser_usb_net_leaf_priv *leaf = priv->sub_priv;
 	struct kvaser_usb *dev = priv->dev;
 	struct net_device_stats *stats = &priv->netdev->stats;
 	enum can_state cur_state, new_state, tx_state, rx_state;
@@ -991,22 +987,6 @@ kvaser_usb_leaf_rx_error_update_can_state(struct kvaser_usb_net_priv *priv,
 		new_state = CAN_STATE_ERROR_WARNING;
 	} else {
 		new_state = CAN_STATE_ERROR_ACTIVE;
-	}
-
-	/* 0bfd:0124 FW 4.18.778 was observed to send the initial
-	 * CMD_CHIP_STATE_EVENT after CMD_START_CHIP with M16C_STATE_BUS_OFF
-	 * bit set if the channel was bus-off when it was last stopped (even
-	 * across chip resets). This bit will clear shortly afterwards, without
-	 * triggering a second unsolicited chip state event.
-	 * Ignore this initial bus-off.
-	 */
-	if (leaf->joining_bus) {
-		if (new_state == CAN_STATE_BUS_OFF) {
-			netdev_dbg(priv->netdev, "ignoring bus-off during startup");
-			new_state = cur_state;
-		} else {
-			leaf->joining_bus = false;
-		}
 	}
 
 	if (new_state != cur_state) {
@@ -1084,12 +1064,9 @@ static void kvaser_usb_leaf_rx_error(const struct kvaser_usb *dev,
 
 	/* If there are errors, request status updates periodically as we do
 	 * not get automatic notifications of improved state.
-	 * Also request updates if we saw a stale BUS_OFF during startup
-	 * (joining_bus).
 	 */
 	if (new_state < CAN_STATE_BUS_OFF &&
-	    (es->rxerr || es->txerr || new_state == CAN_STATE_ERROR_PASSIVE ||
-	     leaf->joining_bus))
+	    (es->rxerr || es->txerr || new_state == CAN_STATE_ERROR_PASSIVE))
 		schedule_delayed_work(&leaf->chip_state_req_work,
 				      msecs_to_jiffies(500));
 
@@ -1632,10 +1609,7 @@ static int kvaser_usb_leaf_set_opt_mode(const struct kvaser_usb_net_priv *priv)
 
 static int kvaser_usb_leaf_start_chip(struct kvaser_usb_net_priv *priv)
 {
-	struct kvaser_usb_net_leaf_priv *leaf = priv->sub_priv;
 	int err;
-
-	leaf->joining_bus = true;
 
 	reinit_completion(&priv->start_comp);
 
@@ -1781,14 +1755,11 @@ static int kvaser_usb_leaf_set_mode(struct net_device *netdev,
 				    enum can_mode mode)
 {
 	struct kvaser_usb_net_priv *priv = netdev_priv(netdev);
-	struct kvaser_usb_net_leaf_priv *leaf = priv->sub_priv;
 	int err;
 
 	switch (mode) {
 	case CAN_MODE_START:
 		kvaser_usb_unlink_tx_urbs(priv);
-
-		leaf->joining_bus = true;
 
 		err = kvaser_usb_leaf_simple_cmd_async(priv, CMD_START_CHIP);
 		if (err)

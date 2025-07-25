@@ -9,7 +9,6 @@
 #include <string.h>
 #include <errno.h>
 #include <sched.h>
-#include <net/if.h>
 #include <linux/compiler.h>
 #include <bpf/libbpf.h>
 
@@ -21,12 +20,10 @@ static struct test_btf_skc_cls_ingress *skel;
 static struct sockaddr_in6 srv_sa6;
 static __u32 duration;
 
+#define PROG_PIN_FILE "/sys/fs/bpf/btf_skc_cls_ingress"
+
 static int prepare_netns(void)
 {
-	LIBBPF_OPTS(bpf_tc_hook, qdisc_lo, .attach_point = BPF_TC_INGRESS);
-	LIBBPF_OPTS(bpf_tc_opts, tc_attach,
-		    .prog_fd = bpf_program__fd(skel->progs.cls_ingress));
-
 	if (CHECK(unshare(CLONE_NEWNET), "create netns",
 		  "unshare(CLONE_NEWNET): %s (%d)",
 		  strerror(errno), errno))
@@ -36,12 +33,12 @@ static int prepare_netns(void)
 		  "ip link set dev lo up", "failed\n"))
 		return -1;
 
-	qdisc_lo.ifindex = if_nametoindex("lo");
-	if (!ASSERT_OK(bpf_tc_hook_create(&qdisc_lo), "qdisc add dev lo clsact"))
+	if (CHECK(system("tc qdisc add dev lo clsact"),
+		  "tc qdisc add dev lo clsact", "failed\n"))
 		return -1;
 
-	if (!ASSERT_OK(bpf_tc_attach(&qdisc_lo, &tc_attach),
-		       "filter add dev lo ingress"))
+	if (CHECK(system("tc filter add dev lo ingress bpf direct-action object-pinned " PROG_PIN_FILE),
+		  "install tc cls-prog at ingress", "failed\n"))
 		return -1;
 
 	/* Ensure 20 bytes options (i.e. in total 40 bytes tcp header) for the
@@ -198,11 +195,18 @@ static struct test tests[] = {
 
 void test_btf_skc_cls_ingress(void)
 {
-	int i;
+	int i, err;
 
 	skel = test_btf_skc_cls_ingress__open_and_load();
 	if (CHECK(!skel, "test_btf_skc_cls_ingress__open_and_load", "failed\n"))
 		return;
+
+	err = bpf_program__pin(skel->progs.cls_ingress, PROG_PIN_FILE);
+	if (CHECK(err, "bpf_program__pin",
+		  "cannot pin bpf prog to %s. err:%d\n", PROG_PIN_FILE, err)) {
+		test_btf_skc_cls_ingress__destroy(skel);
+		return;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		if (!test__start_subtest(tests[i].desc))
@@ -217,5 +221,6 @@ void test_btf_skc_cls_ingress(void)
 		reset_test();
 	}
 
+	bpf_program__unpin(skel->progs.cls_ingress, PROG_PIN_FILE);
 	test_btf_skc_cls_ingress__destroy(skel);
 }

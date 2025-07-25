@@ -25,7 +25,7 @@ struct squashfs_stream {
 	local_lock_t	lock;
 };
 
-static void *squashfs_decompressor_create(struct squashfs_sb_info *msblk,
+void *squashfs_decompressor_create(struct squashfs_sb_info *msblk,
 						void *comp_opts)
 {
 	struct squashfs_stream *stream;
@@ -59,7 +59,7 @@ out:
 	return ERR_PTR(err);
 }
 
-static void squashfs_decompressor_destroy(struct squashfs_sb_info *msblk)
+void squashfs_decompressor_destroy(struct squashfs_sb_info *msblk)
 {
 	struct squashfs_stream __percpu *percpu =
 			(struct squashfs_stream __percpu *) msblk->stream;
@@ -75,21 +75,19 @@ static void squashfs_decompressor_destroy(struct squashfs_sb_info *msblk)
 	}
 }
 
-static int squashfs_decompress(struct squashfs_sb_info *msblk, struct bio *bio,
+int squashfs_decompress(struct squashfs_sb_info *msblk, struct bio *bio,
 	int offset, int length, struct squashfs_page_actor *output)
 {
 	struct squashfs_stream *stream;
-	struct squashfs_stream __percpu *percpu =
-			(struct squashfs_stream __percpu *) msblk->stream;
 	int res;
 
-	local_lock(&percpu->lock);
-	stream = this_cpu_ptr(percpu);
+	local_lock(&msblk->stream->lock);
+	stream = this_cpu_ptr(msblk->stream);
 
 	res = msblk->decompressor->decompress(msblk, stream->stream, bio,
 					      offset, length, output);
 
-	local_unlock(&percpu->lock);
+	local_unlock(&msblk->stream->lock);
 
 	if (res < 0)
 		ERROR("%s decompression failed, data probably corrupt\n",
@@ -98,14 +96,7 @@ static int squashfs_decompress(struct squashfs_sb_info *msblk, struct bio *bio,
 	return res;
 }
 
-static int squashfs_max_decompressors(void)
+int squashfs_max_decompressors(void)
 {
 	return num_possible_cpus();
 }
-
-const struct squashfs_decompressor_thread_ops squashfs_decompressor_percpu = {
-	.create = squashfs_decompressor_create,
-	.destroy = squashfs_decompressor_destroy,
-	.decompress = squashfs_decompress,
-	.max_decompressors = squashfs_max_decompressors,
-};

@@ -181,7 +181,8 @@ out:
 	return IRQ_HANDLED;
 }
 
-static int tm2_touchkey_probe(struct i2c_client *client)
+static int tm2_touchkey_probe(struct i2c_client *client,
+			      const struct i2c_device_id *id)
 {
 	struct device_node *np = client->dev.of_node;
 	struct tm2_touchkey_data *touchkey;
@@ -297,7 +298,7 @@ static int tm2_touchkey_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int tm2_touchkey_suspend(struct device *dev)
+static int __maybe_unused tm2_touchkey_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct tm2_touchkey_data *touchkey = i2c_get_clientdata(client);
@@ -308,7 +309,7 @@ static int tm2_touchkey_suspend(struct device *dev)
 	return 0;
 }
 
-static int tm2_touchkey_resume(struct device *dev)
+static int __maybe_unused tm2_touchkey_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct tm2_touchkey_data *touchkey = i2c_get_clientdata(client);
@@ -323,8 +324,8 @@ static int tm2_touchkey_resume(struct device *dev)
 	return ret;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(tm2_touchkey_pm_ops,
-				tm2_touchkey_suspend, tm2_touchkey_resume);
+static SIMPLE_DEV_PM_OPS(tm2_touchkey_pm_ops,
+			 tm2_touchkey_suspend, tm2_touchkey_resume);
 
 static const struct i2c_device_id tm2_touchkey_id_table[] = {
 	{ TM2_TOUCHKEY_DEV_NAME, 0 },
@@ -353,10 +354,10 @@ MODULE_DEVICE_TABLE(of, tm2_touchkey_of_match);
 static struct i2c_driver tm2_touchkey_driver = {
 	.driver = {
 		.name = TM2_TOUCHKEY_DEV_NAME,
-		.pm = pm_sleep_ptr(&tm2_touchkey_pm_ops),
+		.pm = &tm2_touchkey_pm_ops,
 		.of_match_table = of_match_ptr(tm2_touchkey_of_match),
 	},
-	.probe_new = tm2_touchkey_probe,
+	.probe = tm2_touchkey_probe,
 	.id_table = tm2_touchkey_id_table,
 };
 module_i2c_driver(tm2_touchkey_driver);

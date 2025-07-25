@@ -258,17 +258,6 @@ config PINCTRL_FALCON
 	depends on SOC_FALCON
 	depends on PINCTRL_LANTIQ
 
-config PINCTRL_LOONGSON2
-	tristate "Pinctrl driver for the Loongson-2 SoC"
-	depends on OF && (LOONGARCH || COMPILE_TEST)
-	select PINMUX
-	select GENERIC_PINCONF
-	help
-	 This selects pin control driver for the Loongson-2 SoC. It
-	 provides pin config functions multiplexing.  GPIO pin pull-up,
-	 pull-down functions are not supported. Say yes to enable
-	 pinctrl for Loongson-2 SoC.
-
 config PINCTRL_XWAY
 	bool
 	depends on SOC_TYPE_XWAY
@@ -293,6 +282,26 @@ config PINCTRL_MAX77620
 	  This PMIC has 8 GPIO pins that work as GPIO as well as special
 	  function in alternate mode. This driver also configure push-pull,
 	  open drain, FPS slots etc.
+
+config PINCTRL_MAX96745
+	tristate "MAX96745 Pincontrol support"
+	depends on MFD_MAX96745 && OF
+	select PINMUX
+	select GENERIC_PINMUX_FUNCTIONS
+	select GENERIC_PINCTRL_GROUPS
+	select GENERIC_PINCONF
+	help
+	  Say Yes here to enable Pin control support for Maxim MAX96745.
+
+config PINCTRL_MAX96755F
+	tristate "MAX96755F Pincontrol support"
+	depends on MFD_MAX96755F && OF
+	select PINMUX
+	select GENERIC_PINMUX_FUNCTIONS
+	select GENERIC_PINCTRL_GROUPS
+	select GENERIC_PINCONF
+	help
+	  Say Yes here to enable Pin control support for Maxim MAX96755F.
 
 config PINCTRL_MCP23S08_I2C
 	tristate
@@ -407,7 +416,7 @@ config PINCTRL_PISTACHIO
 
 config PINCTRL_RK805
 	tristate "Pinctrl and GPIO driver for RK805 PMIC"
-	depends on MFD_RK8XX
+	depends on MFD_RK808
 	select GPIOLIB
 	select PINMUX
 	select GENERIC_PINCONF
@@ -435,7 +444,7 @@ config PINCTRL_ROCKCHIP
 	select OF_GPIO
 	default ARCH_ROCKCHIP
 	help
-	  This support pinctrl and GPIO driver for Rockchip SoCs.
+          This support pinctrl and GPIO driver for Rockchip SoCs.
 
 config PINCTRL_SINGLE
 	tristate "One-register-per-pin type device tree based pinctrl driver"

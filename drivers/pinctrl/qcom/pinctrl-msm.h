@@ -5,11 +5,6 @@
 #ifndef __PINCTRL_MSM_H__
 #define __PINCTRL_MSM_H__
 
-#include <linux/pm.h>
-#include <linux/types.h>
-
-struct platform_device;
-
 struct pinctrl_pin_desc;
 
 /**

@@ -25,15 +25,9 @@
 #include "blk-rq-qos.h"
 #include "blk-cgroup.h"
 
-#define ALLOC_CACHE_THRESHOLD	16
-#define ALLOC_CACHE_SLACK	64
-#define ALLOC_CACHE_MAX		256
-
 struct bio_alloc_cache {
 	struct bio		*free_list;
-	struct bio		*free_list_irq;
 	unsigned int		nr;
-	unsigned int		nr_irq;
 };
 
 static struct biovec_slab {
@@ -414,22 +408,6 @@ static void punt_bios_to_rescuer(struct bio_set *bs)
 	queue_work(bs->rescue_workqueue, &bs->rescue_work);
 }
 
-static void bio_alloc_irq_cache_splice(struct bio_alloc_cache *cache)
-{
-	unsigned long flags;
-
-	/* cache->free_list must be empty */
-	if (WARN_ON_ONCE(cache->free_list))
-		return;
-
-	local_irq_save(flags);
-	cache->free_list = cache->free_list_irq;
-	cache->free_list_irq = NULL;
-	cache->nr += cache->nr_irq;
-	cache->nr_irq = 0;
-	local_irq_restore(flags);
-}
-
 static struct bio *bio_alloc_percpu_cache(struct block_device *bdev,
 		unsigned short nr_vecs, blk_opf_t opf, gfp_t gfp,
 		struct bio_set *bs)
@@ -439,12 +417,8 @@ static struct bio *bio_alloc_percpu_cache(struct block_device *bdev,
 
 	cache = per_cpu_ptr(bs->cache, get_cpu());
 	if (!cache->free_list) {
-		if (READ_ONCE(cache->nr_irq) >= ALLOC_CACHE_THRESHOLD)
-			bio_alloc_irq_cache_splice(cache);
-		if (!cache->free_list) {
-			put_cpu();
-			return NULL;
-		}
+		put_cpu();
+		return NULL;
 	}
 	bio = cache->free_list;
 	cache->free_list = bio->bi_next;
@@ -487,6 +461,9 @@ static struct bio *bio_alloc_percpu_cache(struct block_device *bdev,
  * mempools. Doing multiple allocations from the same mempool under
  * submit_bio_noacct() should be avoided - instead, use bio_set's front_pad
  * for per bio allocations.
+ *
+ * If REQ_ALLOC_CACHE is set, the final put of the bio MUST be done from process
+ * context, not hard/soft IRQ.
  *
  * Returns: Pointer to new bio on success, NULL on failure.
  */
@@ -549,8 +526,6 @@ struct bio *bio_alloc_bioset(struct block_device *bdev, unsigned short nr_vecs,
 	}
 	if (unlikely(!p))
 		return NULL;
-	if (!mempool_is_saturated(&bs->bio_pool))
-		opf &= ~REQ_ALLOC_CACHE;
 
 	bio = p + bs->front_pad;
 	if (nr_vecs > BIO_INLINE_VECS) {
@@ -701,8 +676,11 @@ void guard_bio_eod(struct bio *bio)
 	bio_truncate(bio, maxsector << 9);
 }
 
-static int __bio_alloc_cache_prune(struct bio_alloc_cache *cache,
-				   unsigned int nr)
+#define ALLOC_CACHE_MAX		512
+#define ALLOC_CACHE_SLACK	 64
+
+static void bio_alloc_cache_prune(struct bio_alloc_cache *cache,
+				  unsigned int nr)
 {
 	unsigned int i = 0;
 	struct bio *bio;
@@ -713,17 +691,6 @@ static int __bio_alloc_cache_prune(struct bio_alloc_cache *cache,
 		bio_free(bio);
 		if (++i == nr)
 			break;
-	}
-	return i;
-}
-
-static void bio_alloc_cache_prune(struct bio_alloc_cache *cache,
-				  unsigned int nr)
-{
-	nr -= __bio_alloc_cache_prune(cache, nr);
-	if (!READ_ONCE(cache->free_list)) {
-		bio_alloc_irq_cache_splice(cache);
-		__bio_alloc_cache_prune(cache, nr);
 	}
 }
 
@@ -758,35 +725,6 @@ static void bio_alloc_cache_destroy(struct bio_set *bs)
 	bs->cache = NULL;
 }
 
-static inline void bio_put_percpu_cache(struct bio *bio)
-{
-	struct bio_alloc_cache *cache;
-
-	cache = per_cpu_ptr(bio->bi_pool->cache, get_cpu());
-	if (READ_ONCE(cache->nr_irq) + cache->nr > ALLOC_CACHE_MAX) {
-		put_cpu();
-		bio_free(bio);
-		return;
-	}
-
-	bio_uninit(bio);
-
-	if ((bio->bi_opf & REQ_POLLED) && !WARN_ON_ONCE(in_interrupt())) {
-		bio->bi_next = cache->free_list;
-		cache->free_list = bio;
-		cache->nr++;
-	} else {
-		unsigned long flags;
-
-		local_irq_save(flags);
-		bio->bi_next = cache->free_list_irq;
-		cache->free_list_irq = bio;
-		cache->nr_irq++;
-		local_irq_restore(flags);
-	}
-	put_cpu();
-}
-
 /**
  * bio_put - release a reference to a bio
  * @bio:   bio to release reference to
@@ -802,10 +740,21 @@ void bio_put(struct bio *bio)
 		if (!atomic_dec_and_test(&bio->__bi_cnt))
 			return;
 	}
-	if (bio->bi_opf & REQ_ALLOC_CACHE)
-		bio_put_percpu_cache(bio);
-	else
+
+	if ((bio->bi_opf & REQ_ALLOC_CACHE) && !WARN_ON_ONCE(in_interrupt())) {
+		struct bio_alloc_cache *cache;
+
+		bio_uninit(bio);
+		cache = per_cpu_ptr(bio->bi_pool->cache, get_cpu());
+		bio->bi_next = cache->free_list;
+		bio->bi_bdev = NULL;
+		cache->free_list = bio;
+		if (++cache->nr > ALLOC_CACHE_MAX + ALLOC_CACHE_SLACK)
+			bio_alloc_cache_prune(cache, ALLOC_CACHE_SLACK);
+		put_cpu();
+	} else {
 		bio_free(bio);
+	}
 }
 EXPORT_SYMBOL(bio_put);
 
@@ -915,8 +864,6 @@ static inline bool page_is_mergeable(const struct bio_vec *bv,
 		return false;
 	if (xen_domain() && !xen_biovec_phys_mergeable(bv, page))
 		return false;
-	if (!zone_device_pages_have_same_pgmap(bv->bv_page, page))
-		return false;
 
 	*same_page = ((vec_end_addr & PAGE_MASK) == page_addr);
 	if (*same_page)
@@ -980,7 +927,7 @@ static bool bio_try_merge_hw_seg(struct request_queue *q, struct bio *bio,
 
 	if ((addr1 | mask) != (addr2 | mask))
 		return false;
-	if (bv->bv_len + len > queue_max_segment_size(q))
+	if (len > queue_max_segment_size(q) - bv->bv_len)
 		return false;
 	return __bio_try_merge_page(bio, page, len, offset, same_page);
 }
@@ -1029,10 +976,7 @@ int bio_add_hw_page(struct request_queue *q, struct bio *bio,
 	if (bio->bi_vcnt >= queue_max_segments(q))
 		return 0;
 
-	bvec = &bio->bi_io_vec[bio->bi_vcnt];
-	bvec->bv_page = page;
-	bvec->bv_len = len;
-	bvec->bv_offset = offset;
+	bvec_set_page(&bio->bi_io_vec[bio->bi_vcnt], page, len, offset);
 	bio->bi_vcnt++;
 	bio->bi_iter.bi_size += len;
 	return len;
@@ -1108,15 +1052,10 @@ EXPORT_SYMBOL_GPL(bio_add_zone_append_page);
 void __bio_add_page(struct bio *bio, struct page *page,
 		unsigned int len, unsigned int off)
 {
-	struct bio_vec *bv = &bio->bi_io_vec[bio->bi_vcnt];
-
 	WARN_ON_ONCE(bio_flagged(bio, BIO_CLONED));
 	WARN_ON_ONCE(bio_full(bio, len));
 
-	bv->bv_page = page;
-	bv->bv_offset = off;
-	bv->bv_len = len;
-
+	bvec_set_page(&bio->bi_io_vec[bio->bi_vcnt], page, len, off);
 	bio->bi_iter.bi_size += len;
 	bio->bi_vcnt++;
 }
@@ -1170,13 +1109,19 @@ bool bio_add_folio(struct bio *bio, struct folio *folio, size_t len,
 
 void __bio_release_pages(struct bio *bio, bool mark_dirty)
 {
-	struct bvec_iter_all iter_all;
-	struct bio_vec *bvec;
+	struct folio_iter fi;
 
-	bio_for_each_segment_all(bvec, bio, iter_all) {
-		if (mark_dirty && !PageCompound(bvec->bv_page))
-			set_page_dirty_lock(bvec->bv_page);
-		put_page(bvec->bv_page);
+	bio_for_each_folio_all(fi, bio) {
+		size_t nr_pages;
+
+		if (mark_dirty) {
+			folio_lock(fi.folio);
+			folio_mark_dirty(fi.folio);
+			folio_unlock(fi.folio);
+		}
+		nr_pages = (fi.offset + fi.length - 1) / PAGE_SIZE -
+			   fi.offset / PAGE_SIZE + 1;
+		folio_put_refs(fi.folio, nr_pages);
 	}
 }
 EXPORT_SYMBOL_GPL(__bio_release_pages);
@@ -1249,7 +1194,6 @@ static int __bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 	unsigned short entries_left = bio->bi_max_vecs - bio->bi_vcnt;
 	struct bio_vec *bv = bio->bi_io_vec + bio->bi_vcnt;
 	struct page **pages = (struct page **)bv;
-	unsigned int gup_flags = 0;
 	ssize_t size, left;
 	unsigned len, i = 0;
 	size_t offset, trim;
@@ -1263,9 +1207,6 @@ static int __bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 	BUILD_BUG_ON(PAGE_PTRS_PER_BVEC < 2);
 	pages += entries_left * (PAGE_PTRS_PER_BVEC - 1);
 
-	if (bio->bi_bdev && blk_queue_pci_p2pdma(bio->bi_bdev->bd_disk->queue))
-		gup_flags |= FOLL_PCI_P2PDMA;
-
 	/*
 	 * Each segment in the iov is required to be a block size multiple.
 	 * However, we may not be able to get the entire segment if it spans
@@ -1273,9 +1214,8 @@ static int __bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 	 * result to ensure the bio's total size is correct. The remainder of
 	 * the iov data will be picked up in the next bio iteration.
 	 */
-	size = iov_iter_get_pages(iter, pages,
-				  UINT_MAX - bio->bi_iter.bi_size,
-				  nr_pages, &offset, gup_flags);
+	size = iov_iter_get_pages2(iter, pages, UINT_MAX - bio->bi_iter.bi_size,
+				  nr_pages, &offset);
 	if (unlikely(size <= 0))
 		return size ? size : -EFAULT;
 
@@ -1401,6 +1341,27 @@ void __bio_advance(struct bio *bio, unsigned bytes)
 }
 EXPORT_SYMBOL(__bio_advance);
 
+void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
+			struct bio *src, struct bvec_iter *src_iter)
+{
+	while (src_iter->bi_size && dst_iter->bi_size) {
+		struct bio_vec src_bv = bio_iter_iovec(src, *src_iter);
+		struct bio_vec dst_bv = bio_iter_iovec(dst, *dst_iter);
+		unsigned int bytes = min(src_bv.bv_len, dst_bv.bv_len);
+		void *src_buf = bvec_kmap_local(&src_bv);
+		void *dst_buf = bvec_kmap_local(&dst_bv);
+
+		memcpy(dst_buf, src_buf, bytes);
+
+		kunmap_local(dst_buf);
+		kunmap_local(src_buf);
+
+		bio_advance_iter_single(src, src_iter, bytes);
+		bio_advance_iter_single(dst, dst_iter, bytes);
+	}
+}
+EXPORT_SYMBOL(bio_copy_data_iter);
+
 /**
  * bio_copy_data - copy contents of data buffers from one bio to another
  * @src: source bio
@@ -1414,21 +1375,7 @@ void bio_copy_data(struct bio *dst, struct bio *src)
 	struct bvec_iter src_iter = src->bi_iter;
 	struct bvec_iter dst_iter = dst->bi_iter;
 
-	while (src_iter.bi_size && dst_iter.bi_size) {
-		struct bio_vec src_bv = bio_iter_iovec(src, src_iter);
-		struct bio_vec dst_bv = bio_iter_iovec(dst, dst_iter);
-		unsigned int bytes = min(src_bv.bv_len, dst_bv.bv_len);
-		void *src_buf = bvec_kmap_local(&src_bv);
-		void *dst_buf = bvec_kmap_local(&dst_bv);
-
-		memcpy(dst_buf, src_buf, bytes);
-
-		kunmap_local(dst_buf);
-		kunmap_local(src_buf);
-
-		bio_advance_iter_single(src, &src_iter, bytes);
-		bio_advance_iter_single(dst, &dst_iter, bytes);
-	}
+	bio_copy_data_iter(dst, &dst_iter, src, &src_iter);
 }
 EXPORT_SYMBOL(bio_copy_data);
 
@@ -1473,12 +1420,12 @@ EXPORT_SYMBOL(bio_free_pages);
  */
 void bio_set_pages_dirty(struct bio *bio)
 {
-	struct bio_vec *bvec;
-	struct bvec_iter_all iter_all;
+	struct folio_iter fi;
 
-	bio_for_each_segment_all(bvec, bio, iter_all) {
-		if (!PageCompound(bvec->bv_page))
-			set_page_dirty_lock(bvec->bv_page);
+	bio_for_each_folio_all(fi, bio) {
+		folio_lock(fi.folio);
+		folio_mark_dirty(fi.folio);
+		folio_unlock(fi.folio);
 	}
 }
 
@@ -1521,12 +1468,11 @@ static void bio_dirty_fn(struct work_struct *work)
 
 void bio_check_pages_dirty(struct bio *bio)
 {
-	struct bio_vec *bvec;
+	struct folio_iter fi;
 	unsigned long flags;
-	struct bvec_iter_all iter_all;
 
-	bio_for_each_segment_all(bvec, bio, iter_all) {
-		if (!PageDirty(bvec->bv_page) && !PageCompound(bvec->bv_page))
+	bio_for_each_folio_all(fi, bio) {
+		if (!folio_test_dirty(fi.folio))
 			goto defer;
 	}
 

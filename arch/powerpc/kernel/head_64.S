@@ -18,7 +18,6 @@
  *  variants.
  */
 
-#include <linux/linkage.h>
 #include <linux/threads.h>
 #include <linux/init.h>
 #include <asm/reg.h>
@@ -425,7 +424,7 @@ generic_secondary_common_init:
 
 	/* Create a temp kernel stack for use before relocation is on.	*/
 	ld	r1,PACAEMERGSP(r13)
-	subi	r1,r1,STACK_FRAME_MIN_SIZE
+	subi	r1,r1,STACK_FRAME_OVERHEAD
 
 	/* See if we need to call a cpu state restore handler */
 	LOAD_REG_ADDR(r23, cur_cpu_spec)
@@ -463,7 +462,7 @@ generic_secondary_common_init:
  * Assumes we're mapped EA == RA if the MMU is on.
  */
 #ifdef CONFIG_PPC_BOOK3S
-SYM_FUNC_START_LOCAL(__mmu_off)
+__mmu_off:
 	mfmsr	r3
 	andi.	r0,r3,MSR_IR|MSR_DR
 	beqlr
@@ -474,7 +473,6 @@ SYM_FUNC_START_LOCAL(__mmu_off)
 	sync
 	rfid
 	b	.	/* prevent speculative execution */
-SYM_FUNC_END(__mmu_off)
 #endif
 
 
@@ -782,7 +780,7 @@ _GLOBAL(pmac_secondary_start)
 
 	/* Create a temp kernel stack for use before relocation is on.	*/
 	ld	r1,PACAEMERGSP(r13)
-	subi	r1,r1,STACK_FRAME_MIN_SIZE
+	subi	r1,r1,STACK_FRAME_OVERHEAD
 
 	b	__secondary_start
 
@@ -871,7 +869,7 @@ _GLOBAL(start_secondary_resume)
 /*
  * This subroutine clobbers r11 and r12
  */
-SYM_FUNC_START_LOCAL(enable_64b_mode)
+enable_64b_mode:
 	mfmsr	r11			/* grab the current MSR */
 #ifdef CONFIG_PPC_BOOK3E_64
 	oris	r11,r11,0x8000		/* CM bit set, we'll set ICM later */
@@ -883,7 +881,6 @@ SYM_FUNC_START_LOCAL(enable_64b_mode)
 	isync
 #endif
 	blr
-SYM_FUNC_END(enable_64b_mode)
 
 /*
  * This puts the TOC pointer into r2, offset by 0x8000 (as expected
@@ -961,7 +958,7 @@ start_here_multiplatform:
 	LOAD_REG_IMMEDIATE(r1,THREAD_SIZE)
 	add	r1,r3,r1
 	li	r0,0
-	stdu	r0,-STACK_FRAME_MIN_SIZE(r1)
+	stdu	r0,-STACK_FRAME_OVERHEAD(r1)
 
 	/*
 	 * Do very early kernel initializations, including initial hash table

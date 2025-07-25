@@ -54,7 +54,7 @@ exit:
 	return _SUCCESS;
 }
 
-int rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
+u32	rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 {
 	init_completion(&pcmdpriv->enqueue_cmd);
 	/* sema_init(&(pcmdpriv->cmd_done_sema), 0); */
@@ -71,7 +71,7 @@ int rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 					      GFP_KERNEL);
 
 	if (!pcmdpriv->cmd_allocated_buf)
-		return -ENOMEM;
+		return _FAIL;
 
 	pcmdpriv->cmd_buf = pcmdpriv->cmd_allocated_buf  +  CMDBUFF_ALIGN_SZ - ((size_t)(pcmdpriv->cmd_allocated_buf) & (CMDBUFF_ALIGN_SZ - 1));
 
@@ -79,7 +79,7 @@ int rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 
 	if (!pcmdpriv->rsp_allocated_buf) {
 		kfree(pcmdpriv->cmd_allocated_buf);
-		return -ENOMEM;
+		return _FAIL;
 	}
 
 	pcmdpriv->rsp_buf = pcmdpriv->rsp_allocated_buf  +  4 - ((size_t)(pcmdpriv->rsp_allocated_buf) & 3);
@@ -87,11 +87,13 @@ int rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 	pcmdpriv->cmd_done_cnt = 0;
 	pcmdpriv->rsp_cnt = 0;
 
-	return 0;
+	return _SUCCESS;
 }
 
-int rtw_init_evt_priv(struct evt_priv *pevtpriv)
+u32 rtw_init_evt_priv(struct evt_priv *pevtpriv)
 {
+	u32 res = _SUCCESS;
+
 	/* allocate DMA-able/Non-Page memory for cmd_buf and rsp_buf */
 	atomic_set(&pevtpriv->event_seq, 0);
 
@@ -99,9 +101,9 @@ int rtw_init_evt_priv(struct evt_priv *pevtpriv)
 	pevtpriv->c2h_wk_alive = false;
 	pevtpriv->c2h_queue = rtw_cbuf_alloc(C2H_QUEUE_MAX_LEN + 1);
 	if (!pevtpriv->c2h_queue)
-		return -ENOMEM;
+		res = _FAIL;
 
-	return 0;
+	return res;
 }
 
 void rtw_free_cmd_priv(struct	cmd_priv *pcmdpriv)
@@ -340,29 +342,33 @@ u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, 
 	return res;
 }
 
-int rtw_setdatarate_cmd(struct adapter *padapter, u8 *rateset)
+u8 rtw_setdatarate_cmd(struct adapter *padapter, u8 *rateset)
 {
 	struct cmd_obj *ph2c;
 	struct setdatarate_parm *pbsetdataratepara;
 	struct cmd_priv *pcmdpriv = &padapter->cmdpriv;
+	u8	res = _SUCCESS;
 
 	ph2c = kzalloc(sizeof(*ph2c), GFP_ATOMIC);
-	if (!ph2c)
-		return -ENOMEM;
+	if (!ph2c) {
+		res = _FAIL;
+		goto exit;
+	}
 
 	pbsetdataratepara = kzalloc(sizeof(*pbsetdataratepara), GFP_ATOMIC);
 	if (!pbsetdataratepara) {
 		kfree(ph2c);
-		return -ENOMEM;
+		res = _FAIL;
+		goto exit;
 	}
 
 	init_h2fwcmd_w_parm_no_rsp(ph2c, pbsetdataratepara, GEN_CMD_CODE(_SetDataRate));
 	pbsetdataratepara->mac_id = 5;
 	memcpy(pbsetdataratepara->datarates, rateset, NumRates);
-	if (rtw_enqueue_cmd(pcmdpriv, ph2c) == _FAIL)
-		return -EPERM;
+	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
+exit:
 
-	return 0;
+	return res;
 }
 
 void rtw_getbbrfreg_cmdrsp_callback(struct adapter *padapter,  struct cmd_obj *pcmd)

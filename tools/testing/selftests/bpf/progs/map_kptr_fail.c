@@ -3,7 +3,6 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
-#include "bpf_misc.h"
 
 struct map_value {
 	char buf[8];
@@ -24,7 +23,6 @@ extern struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **p, int a, int b) __ksym;
 
 SEC("?tc")
-__failure __msg("kptr access size must be BPF_DW")
 int size_not_bpf_dw(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -39,7 +37,6 @@ int size_not_bpf_dw(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("kptr access cannot have variable offset")
 int non_const_var_off(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -58,7 +55,6 @@ int non_const_var_off(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 doesn't have constant offset. kptr has to be")
 int non_const_var_off_kptr_xchg(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -77,7 +73,6 @@ int non_const_var_off_kptr_xchg(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("kptr access misaligned expected=8 off=7")
 int misaligned_access_write(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -93,7 +88,6 @@ int misaligned_access_write(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("kptr access misaligned expected=8 off=1")
 int misaligned_access_read(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -107,7 +101,6 @@ int misaligned_access_read(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("variable untrusted_ptr_ access var_off=(0x0; 0x1e0)")
 int reject_var_off_store(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *unref_ptr;
@@ -131,7 +124,6 @@ int reject_var_off_store(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("invalid kptr access, R1 type=untrusted_ptr_prog_test_ref_kfunc")
 int reject_bad_type_match(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *unref_ptr;
@@ -152,7 +144,6 @@ int reject_bad_type_match(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 type=untrusted_ptr_or_null_ expected=percpu_ptr_")
 int marked_as_untrusted_or_null(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -167,7 +158,6 @@ int marked_as_untrusted_or_null(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("access beyond struct prog_test_ref_kfunc at off 32 size 4")
 int correct_btf_id_check_size(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *p;
@@ -185,7 +175,6 @@ int correct_btf_id_check_size(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 type=untrusted_ptr_ expected=percpu_ptr_")
 int inherit_untrusted_on_walk(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *unref_ptr;
@@ -205,7 +194,6 @@ int inherit_untrusted_on_walk(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("off=8 kptr isn't referenced kptr")
 int reject_kptr_xchg_on_unref(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -220,7 +208,6 @@ int reject_kptr_xchg_on_unref(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("arg#0 expected pointer to map value")
 int reject_kptr_get_no_map_val(struct __sk_buff *ctx)
 {
 	bpf_kfunc_call_test_kptr_get((void *)&ctx, 0, 0);
@@ -228,7 +215,6 @@ int reject_kptr_get_no_map_val(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("arg#0 expected pointer to map value")
 int reject_kptr_get_no_null_map_val(struct __sk_buff *ctx)
 {
 	bpf_kfunc_call_test_kptr_get(bpf_map_lookup_elem(&array_map, &(int){0}), 0, 0);
@@ -236,7 +222,6 @@ int reject_kptr_get_no_null_map_val(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("arg#0 no referenced kptr at map value offset=0")
 int reject_kptr_get_no_kptr(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -251,7 +236,6 @@ int reject_kptr_get_no_kptr(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("arg#0 no referenced kptr at map value offset=8")
 int reject_kptr_get_on_unref(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -266,7 +250,6 @@ int reject_kptr_get_on_unref(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("kernel function bpf_kfunc_call_test_kptr_get args#0")
 int reject_kptr_get_bad_type_match(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -281,7 +264,6 @@ int reject_kptr_get_bad_type_match(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 type=untrusted_ptr_or_null_ expected=percpu_ptr_")
 int mark_ref_as_untrusted_or_null(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -296,7 +278,6 @@ int mark_ref_as_untrusted_or_null(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("store to referenced kptr disallowed")
 int reject_untrusted_store_to_ref(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *p;
@@ -316,7 +297,6 @@ int reject_untrusted_store_to_ref(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R2 type=untrusted_ptr_ expected=ptr_")
 int reject_untrusted_xchg(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *p;
@@ -335,8 +315,6 @@ int reject_untrusted_xchg(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure
-__msg("invalid kptr access, R2 type=ptr_prog_test_ref_kfunc expected=ptr_prog_test_member")
 int reject_bad_type_xchg(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *ref_ptr;
@@ -355,7 +333,6 @@ int reject_bad_type_xchg(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("invalid kptr access, R2 type=ptr_prog_test_ref_kfunc")
 int reject_member_of_ref_xchg(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *ref_ptr;
@@ -374,7 +351,6 @@ int reject_member_of_ref_xchg(struct __sk_buff *ctx)
 }
 
 SEC("?syscall")
-__failure __msg("kptr cannot be accessed indirectly by helper")
 int reject_indirect_helper_access(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -395,7 +371,6 @@ int write_func(int *p)
 }
 
 SEC("?tc")
-__failure __msg("kptr cannot be accessed indirectly by helper")
 int reject_indirect_global_func_access(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -409,7 +384,6 @@ int reject_indirect_global_func_access(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Unreleased reference id=5 alloc_insn=")
 int kptr_xchg_ref_state(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *p;
@@ -428,7 +402,6 @@ int kptr_xchg_ref_state(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Unreleased reference id=3 alloc_insn=")
 int kptr_get_ref_state(struct __sk_buff *ctx)
 {
 	struct map_value *v;

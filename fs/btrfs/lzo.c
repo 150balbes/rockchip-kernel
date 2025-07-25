@@ -13,10 +13,8 @@
 #include <linux/bio.h>
 #include <linux/lzo.h>
 #include <linux/refcount.h>
-#include "messages.h"
 #include "compression.h"
 #include "ctree.h"
-#include "super.h"
 
 #define LZO_LEN	4
 
@@ -427,7 +425,7 @@ out:
 	return ret;
 }
 
-int lzo_decompress(struct list_head *ws, const u8 *data_in,
+int lzo_decompress(struct list_head *ws, unsigned char *data_in,
 		struct page *dest_page, unsigned long start_byte, size_t srclen,
 		size_t destlen)
 {

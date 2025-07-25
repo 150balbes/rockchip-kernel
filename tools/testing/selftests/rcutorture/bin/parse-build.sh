@@ -15,8 +15,9 @@
 
 F=$1
 title=$2
-T="`mktemp -d ${TMPDIR-/tmp}/parse-build.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/parse-build.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
 . functions.sh
 

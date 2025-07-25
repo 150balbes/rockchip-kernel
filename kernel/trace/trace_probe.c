@@ -64,7 +64,7 @@ int PRINT_TYPE_FUNC_NAME(string)(struct trace_seq *s, void *data, void *ent)
 	int len = *(u32 *)data >> 16;
 
 	if (!len)
-		trace_seq_puts(s, "(fault)");
+		trace_seq_puts(s, FAULT_STRING);
 	else
 		trace_seq_printf(s, "\"%s\"",
 				 (const char *)get_loc_data(data, ent));
@@ -100,14 +100,9 @@ static const struct fetch_type probe_fetch_types[] = {
 	ASSIGN_FETCH_TYPE_END
 };
 
-static const struct fetch_type *find_fetch_type(const char *type, unsigned long flags)
+static const struct fetch_type *find_fetch_type(const char *type)
 {
 	int i;
-
-	/* Reject the symbol/symstr for uprobes */
-	if (type && (flags & TPARG_FL_USER) &&
-	    (!strcmp(type, "symbol") || !strcmp(type, "symstr")))
-		return NULL;
 
 	if (!type)
 		type = DEFAULT_FETCH_TYPE_STR;
@@ -126,13 +121,13 @@ static const struct fetch_type *find_fetch_type(const char *type, unsigned long 
 
 		switch (bs) {
 		case 8:
-			return find_fetch_type("u8", flags);
+			return find_fetch_type("u8");
 		case 16:
-			return find_fetch_type("u16", flags);
+			return find_fetch_type("u16");
 		case 32:
-			return find_fetch_type("u32", flags);
+			return find_fetch_type("u32");
 		case 64:
-			return find_fetch_type("u64", flags);
+			return find_fetch_type("u64");
 		default:
 			goto fail;
 		}
@@ -485,7 +480,7 @@ parse_probe_arg(char *arg, const struct fetch_type *type,
 					    DEREF_OPEN_BRACE);
 			return -EINVAL;
 		} else {
-			const struct fetch_type *t2 = find_fetch_type(NULL, flags);
+			const struct fetch_type *t2 = find_fetch_type(NULL);
 
 			*tmp = '\0';
 			ret = parse_probe_arg(arg, t2, &code, end, flags, offs);
@@ -637,9 +632,9 @@ static int traceprobe_parse_probe_arg_body(const char *argv, ssize_t *size,
 		/* The type of $comm must be "string", and not an array. */
 		if (parg->count || (t && strcmp(t, "string")))
 			goto out;
-		parg->type = find_fetch_type("string", flags);
+		parg->type = find_fetch_type("string");
 	} else
-		parg->type = find_fetch_type(t, flags);
+		parg->type = find_fetch_type(t);
 	if (!parg->type) {
 		trace_probe_log_err(offset + (t ? (t - arg) : 0), BAD_TYPE);
 		goto out;

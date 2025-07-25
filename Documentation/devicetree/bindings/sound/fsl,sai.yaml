@@ -18,12 +18,14 @@ description: |
 properties:
   compatible:
     oneOf:
-      - items:
-          - enum:
-              - fsl,imx6ul-sai
-              - fsl,imx7d-sai
-          - const: fsl,imx6sx-sai
-
+      - enum:
+          - fsl,vf610-sai
+          - fsl,imx6sx-sai
+          - fsl,imx6ul-sai
+          - fsl,imx7ulp-sai
+          - fsl,imx8mq-sai
+          - fsl,imx8qm-sai
+          - fsl,imx8ulp-sai
       - items:
           - enum:
               - fsl,imx8mm-sai
@@ -31,18 +33,18 @@ properties:
               - fsl,imx8mp-sai
           - const: fsl,imx8mq-sai
 
-      - items:
-          - enum:
-              - fsl,imx6sx-sai
-              - fsl,imx7ulp-sai
-              - fsl,imx8mq-sai
-              - fsl,imx8qm-sai
-              - fsl,imx8ulp-sai
-              - fsl,imx93-sai
-              - fsl,vf610-sai
-
   reg:
     maxItems: 1
+
+  interrupts:
+    items:
+      - description: receive and transmit interrupt
+
+  dmas:
+    maxItems: 2
+
+  dma-names:
+    maxItems: 2
 
   clocks:
     items:
@@ -65,7 +67,7 @@ properties:
           - const: mclk3
           - const: pll8k
           - const: pll11k
-        minItems: 5
+        minItems: 4
       - items:
           - const: bus
           - const: mclk1
@@ -75,35 +77,17 @@ properties:
           - const: pll11k
         minItems: 4
 
-  dmas:
-    maxItems: 2
-
-  dma-names:
-    maxItems: 2
-
-  interrupts:
-    items:
-      - description: receive and transmit interrupt
+  lsb-first:
+    description: |
+      Configures whether the LSB or the MSB is transmitted
+      first for the fifo data. If this property is absent,
+      the MSB is transmitted first as default, or the LSB
+      is transmitted first.
+    type: boolean
 
   big-endian:
     description: |
       required if all the SAI registers are big-endian rather than little-endian.
-    type: boolean
-
-  fsl,dataline:
-    $ref: /schemas/types.yaml#/definitions/uint32-matrix
-    description: |
-      Configure the dataline. It has 3 value for each configuration
-    maxItems: 16
-    items:
-      items:
-        - description: format Default(0), I2S(1) or PDM(2)
-          enum: [0, 1, 2]
-        - description: dataline mask for 'rx'
-        - description: dataline mask for 'tx'
-
-  fsl,sai-mclk-direction-output:
-    description: SAI will output the SAI MCLK clock.
     type: boolean
 
   fsl,sai-synchronous-rx:
@@ -124,16 +108,24 @@ properties:
       of transmitter.
     type: boolean
 
-  fsl,shared-interrupt:
-    description: Interrupt is shared with other modules.
+  fsl,dataline:
+    $ref: /schemas/types.yaml#/definitions/uint32-matrix
+    description: |
+      Configure the dataline. It has 3 value for each configuration
+    maxItems: 16
+    items:
+      items:
+        - description: format Default(0), I2S(1) or PDM(2)
+          enum: [0, 1, 2]
+        - description: dataline mask for 'rx'
+        - description: dataline mask for 'tx'
+
+  fsl,sai-mclk-direction-output:
+    description: SAI will output the SAI MCLK clock.
     type: boolean
 
-  lsb-first:
-    description: |
-      Configures whether the LSB or the MSB is transmitted
-      first for the fifo data. If this property is absent,
-      the MSB is transmitted first as default, or the LSB
-      is transmitted first.
+  fsl,shared-interrupt:
+    description: Interrupt is shared with other modules.
     type: boolean
 
   "#sound-dai-cells":
@@ -141,7 +133,6 @@ properties:
     description: optional, some dts node didn't add it.
 
 allOf:
-  - $ref: dai-common.yaml#
   - if:
       properties:
         compatible:
@@ -177,13 +168,13 @@ allOf:
 required:
   - compatible
   - reg
-  - clocks
-  - clock-names
+  - interrupts
   - dmas
   - dma-names
-  - interrupts
+  - clocks
+  - clock-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

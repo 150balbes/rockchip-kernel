@@ -190,16 +190,16 @@ int skl_pcm_link_dma_prepare(struct device *dev, struct skl_pipe_params *params)
 	dev_dbg(dev, "format_val=%d, rate=%d, ch=%d, format=%d\n",
 		format_val, params->s_freq, params->ch, params->format);
 
-	snd_hdac_ext_stream_reset(stream);
+	snd_hdac_ext_link_stream_reset(stream);
 
-	snd_hdac_ext_stream_setup(stream, format_val);
+	snd_hdac_ext_link_stream_setup(stream, format_val);
 
 	stream_tag = hstream->stream_tag;
 	if (stream->hstream.direction == SNDRV_PCM_STREAM_PLAYBACK) {
 		list_for_each_entry(link, &bus->hlink_list, list) {
 			if (link->index == params->link_index)
-				snd_hdac_ext_bus_link_set_stream_id(link,
-								    stream_tag);
+				snd_hdac_ext_link_set_stream_id(link,
+								stream_tag);
 		}
 	}
 
@@ -251,8 +251,10 @@ static int skl_pcm_open(struct snd_pcm_substream *substream,
 	snd_pcm_set_sync(substream);
 
 	mconfig = skl_tplg_fe_get_cpr_module(dai, substream->stream);
-	if (!mconfig)
+	if (!mconfig) {
+		kfree(dma_params);
 		return -EINVAL;
+	}
 
 	skl_tplg_d0i3_get(skl, mconfig->d0i3_caps);
 
@@ -467,7 +469,6 @@ static int skl_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
 	struct skl_module_cfg *mconfig;
 	struct hdac_bus *bus = get_bus_ctx(substream);
 	struct hdac_ext_stream *stream = get_hdac_ext_stream(substream);
-	struct hdac_stream *hstream = hdac_stream(stream);
 	struct snd_soc_dapm_widget *w;
 	int ret;
 
@@ -485,9 +486,11 @@ static int skl_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
 			 * dpib & lpib position to resume before starting the
 			 * DMA
 			 */
-			snd_hdac_stream_drsm_enable(bus, true, hstream->index);
-			snd_hdac_stream_set_dpibr(bus, hstream, hstream->lpib);
-			snd_hdac_stream_set_lpib(hstream, hstream->lpib);
+			snd_hdac_ext_stream_drsm_enable(bus, true,
+						hdac_stream(stream)->index);
+			snd_hdac_ext_stream_set_dpibr(bus, stream,
+							stream->lpib);
+			snd_hdac_ext_stream_set_lpib(stream, stream->lpib);
 		}
 		fallthrough;
 
@@ -519,13 +522,13 @@ static int skl_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
 		ret = skl_decoupled_trigger(substream, cmd);
 		if ((cmd == SNDRV_PCM_TRIGGER_SUSPEND) && !w->ignore_suspend) {
 			/* save the dpib and lpib positions */
-			hstream->dpib = readl(bus->remap_addr +
+			stream->dpib = readl(bus->remap_addr +
 					AZX_REG_VS_SDXDPIB_XBASE +
 					(AZX_REG_VS_SDXDPIB_XINTERVAL *
-					hstream->index));
+					hdac_stream(stream)->index));
 
-			hstream->lpib = snd_hdac_stream_get_pos_lpib(hstream);
-
+			stream->lpib = snd_hdac_stream_get_pos_lpib(
+							hdac_stream(stream));
 			snd_hdac_ext_stream_decouple(bus, stream, false);
 		}
 		break;
@@ -557,7 +560,7 @@ static int skl_link_hw_params(struct snd_pcm_substream *substream,
 
 	snd_soc_dai_set_dma_data(dai, substream, (void *)link_dev);
 
-	link = snd_hdac_ext_bus_get_hlink_by_name(bus, codec_dai->component->name);
+	link = snd_hdac_ext_bus_get_link(bus, codec_dai->component->name);
 	if (!link)
 		return -EINVAL;
 
@@ -611,13 +614,13 @@ static int skl_link_pcm_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		snd_hdac_ext_stream_start(link_dev);
+		snd_hdac_ext_link_stream_start(link_dev);
 		break;
 
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_STOP:
-		snd_hdac_ext_stream_clear(link_dev);
+		snd_hdac_ext_link_stream_clear(link_dev);
 		if (cmd == SNDRV_PCM_TRIGGER_SUSPEND)
 			snd_hdac_ext_stream_decouple(bus, stream, false);
 		break;
@@ -642,13 +645,13 @@ static int skl_link_hw_free(struct snd_pcm_substream *substream,
 
 	link_dev->link_prepared = 0;
 
-	link = snd_hdac_ext_bus_get_hlink_by_name(bus, asoc_rtd_to_codec(rtd, 0)->component->name);
+	link = snd_hdac_ext_bus_get_link(bus, asoc_rtd_to_codec(rtd, 0)->component->name);
 	if (!link)
 		return -EINVAL;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		stream_tag = hdac_stream(link_dev)->stream_tag;
-		snd_hdac_ext_bus_link_clear_stream_id(link, stream_tag);
+		snd_hdac_ext_link_clear_stream_id(link, stream_tag);
 	}
 
 	snd_hdac_ext_stream_release(link_dev, HDAC_EXT_STREAM_TYPE_LINK);
@@ -1470,6 +1473,7 @@ int skl_platform_register(struct device *dev)
 		dais = krealloc(skl->dais, sizeof(skl_fe_dai) +
 				sizeof(skl_platform_dai), GFP_KERNEL);
 		if (!dais) {
+			kfree(skl->dais);
 			ret = -ENOMEM;
 			goto err;
 		}
@@ -1482,8 +1486,10 @@ int skl_platform_register(struct device *dev)
 
 	ret = devm_snd_soc_register_component(dev, &skl_component,
 					 skl->dais, num_dais);
-	if (ret)
+	if (ret) {
+		kfree(skl->dais);
 		dev_err(dev, "soc component registration failed %d\n", ret);
+	}
 err:
 	return ret;
 }

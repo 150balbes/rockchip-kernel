@@ -10,10 +10,8 @@
 # Author: Rae Moar <rmoar@google.com>
 
 from __future__ import annotations
-from dataclasses import dataclass
 import re
 import sys
-import textwrap
 
 from enum import Enum, auto
 from typing import Iterable, Iterator, List, Optional, Tuple
@@ -60,10 +58,6 @@ class Test:
 		self.counts.errors += 1
 		stdout.print_with_timestamp(stdout.red('[ERROR]') + f' Test: {self.name}: {error_message}')
 
-	def ok_status(self) -> bool:
-		"""Returns true if the status was ok, i.e. passed or skipped."""
-		return self.status in (TestStatus.SUCCESS, TestStatus.SKIPPED)
-
 class TestStatus(Enum):
 	"""An enumeration class to represent the status of a test."""
 	SUCCESS = auto()
@@ -73,17 +67,27 @@ class TestStatus(Enum):
 	NO_TESTS = auto()
 	FAILURE_TO_PARSE_TESTS = auto()
 
-@dataclass
 class TestCounts:
 	"""
 	Tracks the counts of statuses of all test cases and any errors within
 	a Test.
+
+	Attributes:
+	passed : int - the number of tests that have passed
+	failed : int - the number of tests that have failed
+	crashed : int - the number of tests that have crashed
+	skipped : int - the number of tests that have skipped
+	errors : int - the number of errors in the test and subtests
 	"""
-	passed: int = 0
-	failed: int = 0
-	crashed: int = 0
-	skipped: int = 0
-	errors: int = 0
+	def __init__(self):
+		"""Creates TestCounts object with counts of all test
+		statuses and test errors set to 0.
+		"""
+		self.passed = 0
+		self.failed = 0
+		self.crashed = 0
+		self.skipped = 0
+		self.errors = 0
 
 	def __str__(self) -> str:
 		"""Returns the string representation of a TestCounts object."""
@@ -209,12 +213,12 @@ class LineStream:
 
 # Parsing helper methods:
 
-KTAP_START = re.compile(r'\s*KTAP version ([0-9]+)$')
-TAP_START = re.compile(r'\s*TAP version ([0-9]+)$')
-KTAP_END = re.compile(r'\s*(List of all partitions:|'
+KTAP_START = re.compile(r'KTAP version ([0-9]+)$')
+TAP_START = re.compile(r'TAP version ([0-9]+)$')
+KTAP_END = re.compile('(List of all partitions:|'
 	'Kernel panic - not syncing: VFS:|reboot: System halted)')
 
-def extract_tap_lines(kernel_output: Iterable[str]) -> LineStream:
+def extract_tap_lines(kernel_output: Iterable[str], lstrip=True) -> LineStream:
 	"""Extracts KTAP lines from the kernel output."""
 	def isolate_ktap_output(kernel_output: Iterable[str]) \
 			-> Iterator[Tuple[int, str]]:
@@ -240,8 +244,11 @@ def extract_tap_lines(kernel_output: Iterable[str]) -> LineStream:
 				# stop extracting KTAP lines
 				break
 			elif started:
-				# remove the prefix, if any.
+				# remove the prefix and optionally any leading
+				# whitespace. Our parsing logic relies on this.
 				line = line[prefix_len:]
+				if lstrip:
+					line = line.lstrip()
 				yield line_num, line
 	return LineStream(lines=isolate_ktap_output(kernel_output))
 
@@ -293,10 +300,10 @@ def parse_ktap_header(lines: LineStream, test: Test) -> bool:
 		check_version(version_num, TAP_VERSIONS, 'TAP', test)
 	else:
 		return False
-	lines.pop()
+	test.log.append(lines.pop())
 	return True
 
-TEST_HEADER = re.compile(r'^\s*# Subtest: (.*)$')
+TEST_HEADER = re.compile(r'^# Subtest: (.*)$')
 
 def parse_test_header(lines: LineStream, test: Test) -> bool:
 	"""
@@ -316,11 +323,11 @@ def parse_test_header(lines: LineStream, test: Test) -> bool:
 	match = TEST_HEADER.match(lines.peek())
 	if not match:
 		return False
+	test.log.append(lines.pop())
 	test.name = match.group(1)
-	lines.pop()
 	return True
 
-TEST_PLAN = re.compile(r'^\s*1\.\.([0-9]+)')
+TEST_PLAN = re.compile(r'1\.\.([0-9]+)')
 
 def parse_test_plan(lines: LineStream, test: Test) -> bool:
 	"""
@@ -343,14 +350,14 @@ def parse_test_plan(lines: LineStream, test: Test) -> bool:
 	if not match:
 		test.expected_count = None
 		return False
+	test.log.append(lines.pop())
 	expected_count = int(match.group(1))
 	test.expected_count = expected_count
-	lines.pop()
 	return True
 
-TEST_RESULT = re.compile(r'^\s*(ok|not ok) ([0-9]+) (- )?([^#]*)( # .*)?$')
+TEST_RESULT = re.compile(r'^(ok|not ok) ([0-9]+) (- )?([^#]*)( # .*)?$')
 
-TEST_RESULT_SKIP = re.compile(r'^\s*(ok|not ok) ([0-9]+) (- )?(.*) # SKIP(.*)$')
+TEST_RESULT_SKIP = re.compile(r'^(ok|not ok) ([0-9]+) (- )?(.*) # SKIP(.*)$')
 
 def peek_test_name_match(lines: LineStream, test: Test) -> bool:
 	"""
@@ -407,7 +414,7 @@ def parse_test_result(lines: LineStream, test: Test,
 	# Check if line matches test result line format
 	if not match:
 		return False
-	lines.pop()
+	test.log.append(lines.pop())
 
 	# Set name of test object
 	if skip_match:
@@ -439,7 +446,6 @@ def parse_diagnostic(lines: LineStream) -> List[str]:
 	- '# Subtest: [test name]'
 	- '[ok|not ok] [test number] [-] [test name] [optional skip
 		directive]'
-	- 'KTAP version [version number]'
 
 	Parameters:
 	lines - LineStream of KTAP output to parse
@@ -448,9 +454,8 @@ def parse_diagnostic(lines: LineStream) -> List[str]:
 	Log of diagnostic lines
 	"""
 	log = []  # type: List[str]
-	non_diagnostic_lines = [TEST_RESULT, TEST_HEADER, KTAP_START]
-	while lines and not any(re.match(lines.peek())
-			for re in non_diagnostic_lines):
+	while lines and not TEST_RESULT.match(lines.peek()) and not \
+			TEST_HEADER.match(lines.peek()):
 		log.append(lines.pop())
 	return log
 
@@ -496,22 +501,17 @@ def print_test_header(test: Test) -> None:
 	test - Test object representing current test being printed
 	"""
 	message = test.name
-	if message != "":
-		# Add a leading space before the subtest counts only if a test name
-		# is provided using a "# Subtest" header line.
-		message += " "
 	if test.expected_count:
 		if test.expected_count == 1:
-			message += '(1 subtest)'
+			message += ' (1 subtest)'
 		else:
-			message += f'({test.expected_count} subtests)'
+			message += f' ({test.expected_count} subtests)'
 	stdout.print_with_timestamp(format_test_divider(message, len(message)))
 
 def print_log(log: Iterable[str]) -> None:
 	"""Prints all strings in saved log for test in yellow."""
-	formatted = textwrap.dedent('\n'.join(log))
-	for line in formatted.splitlines():
-		stdout.print_with_timestamp(stdout.yellow(line))
+	for m in log:
+		stdout.print_with_timestamp(stdout.yellow(m))
 
 def format_test_result(test: Test) -> str:
 	"""
@@ -565,40 +565,6 @@ def print_test_footer(test: Test) -> None:
 	stdout.print_with_timestamp(format_test_divider(message,
 		len(message) - stdout.color_len()))
 
-
-
-def _summarize_failed_tests(test: Test) -> str:
-	"""Tries to summarize all the failing subtests in `test`."""
-
-	def failed_names(test: Test, parent_name: str) -> List[str]:
-		# Note: we use 'main' internally for the top-level test.
-		if not parent_name or parent_name == 'main':
-			full_name = test.name
-		else:
-			full_name = parent_name + '.' + test.name
-
-		if not test.subtests:  # this is a leaf node
-			return [full_name]
-
-		# If all the children failed, just say this subtest failed.
-		# Don't summarize it down "the top-level test failed", though.
-		failed_subtests = [sub for sub in test.subtests if not sub.ok_status()]
-		if parent_name and len(failed_subtests) ==  len(test.subtests):
-			return [full_name]
-
-		all_failures = []  # type: List[str]
-		for t in failed_subtests:
-			all_failures.extend(failed_names(t, full_name))
-		return all_failures
-
-	failures = failed_names(test, '')
-	# If there are too many failures, printing them out will just be noisy.
-	if len(failures) > 10:  # this is an arbitrary limit
-		return ''
-
-	return 'Failures: ' + ', '.join(failures)
-
-
 def print_summary_line(test: Test) -> None:
 	"""
 	Prints summary line of test object. Color of line is dependent on
@@ -620,15 +586,6 @@ def print_summary_line(test: Test) -> None:
 	else:
 		color = stdout.red
 	stdout.print_with_timestamp(color(f'Testing complete. {test.counts}'))
-
-	# Summarize failures that might have gone off-screen since we had a lot
-	# of tests (arbitrarily defined as >=100 for now).
-	if test.ok_status() or test.counts.total() < 100:
-		return
-	summarized = _summarize_failed_tests(test)
-	if not summarized:
-		return
-	stdout.print_with_timestamp(color(summarized))
 
 # Other methods:
 
@@ -652,7 +609,7 @@ def bubble_up_test_results(test: Test) -> None:
 	elif test.counts.get_status() == TestStatus.TEST_CRASHED:
 		test.status = TestStatus.TEST_CRASHED
 
-def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest: bool) -> Test:
+def parse_test(lines: LineStream, expected_num: int, log: List[str]) -> Test:
 	"""
 	Finds next test to parse in LineStream, creates new Test object,
 	parses any subtests of the test, populates Test object with all
@@ -670,28 +627,11 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 	1..4
 	[subtests]
 
-	- Subtest header (must include either the KTAP version line or
-	  "# Subtest" header line)
+	- Subtest header line
 
-	Example (preferred format with both KTAP version line and
-	"# Subtest" line):
-
-	KTAP version 1
-	# Subtest: name
-	1..3
-	[subtests]
-	ok 1 name
-
-	Example (only "# Subtest" line):
+	Example:
 
 	# Subtest: name
-	1..3
-	[subtests]
-	ok 1 name
-
-	Example (only KTAP version line, compliant with KTAP v1 spec):
-
-	KTAP version 1
 	1..3
 	[subtests]
 	ok 1 name
@@ -707,29 +647,28 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 	expected_num - expected test number for test to be parsed
 	log - list of strings containing any preceding diagnostic lines
 		corresponding to the current test
-	is_subtest - boolean indicating whether test is a subtest
 
 	Return:
 	Test object populated with characteristics and any subtests
 	"""
 	test = Test()
 	test.log.extend(log)
-	if not is_subtest:
-		# If parsing the main/top-level test, parse KTAP version line and
+	parent_test = False
+	main = parse_ktap_header(lines, test)
+	if main:
+		# If KTAP/TAP header is found, attempt to parse
 		# test plan
 		test.name = "main"
-		ktap_line = parse_ktap_header(lines, test)
 		parse_test_plan(lines, test)
 		parent_test = True
 	else:
-		# If not the main test, attempt to parse a test header containing
-		# the KTAP version line and/or subtest header line
-		ktap_line = parse_ktap_header(lines, test)
-		subtest_line = parse_test_header(lines, test)
-		parent_test = (ktap_line or subtest_line)
+		# If KTAP/TAP header is not found, test must be subtest
+		# header or test result line so parse attempt to parser
+		# subtest header
+		parent_test = parse_test_header(lines, test)
 		if parent_test:
-			# If KTAP version line and/or subtest header is found, attempt
-			# to parse test plan and print test header
+			# If subtest header is found, attempt to parse
+			# test plan and print header
 			parse_test_plan(lines, test)
 			print_test_header(test)
 	expected_count = test.expected_count
@@ -744,7 +683,7 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 		sub_log = parse_diagnostic(lines)
 		sub_test = Test()
 		if not lines or (peek_test_name_match(lines, test) and
-				is_subtest):
+				not main):
 			if expected_count and test_num <= expected_count:
 				# If parser reaches end of test before
 				# parsing expected number of subtests, print
@@ -758,19 +697,20 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 				test.log.extend(sub_log)
 				break
 		else:
-			sub_test = parse_test(lines, test_num, sub_log, True)
+			sub_test = parse_test(lines, test_num, sub_log)
 		subtests.append(sub_test)
 		test_num += 1
 	test.subtests = subtests
-	if is_subtest:
+	if not main:
 		# If not main test, look for test result line
 		test.log.extend(parse_diagnostic(lines))
-		if test.name != "" and not peek_test_name_match(lines, test):
-			test.add_error('missing subtest result line!')
-		else:
+		if (parent_test and peek_test_name_match(lines, test)) or \
+				not parent_test:
 			parse_test_result(lines, test, expected_num)
+		else:
+			test.add_error('missing subtest result line!')
 
-	# Check for there being no subtests within parent test
+	# Check for there being no tests
 	if parent_test and len(subtests) == 0:
 		# Don't override a bad status if this test had one reported.
 		# Assumption: no subtests means CRASHED is from Test.__init__()
@@ -780,11 +720,11 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 
 	# Add statuses to TestCounts attribute in Test object
 	bubble_up_test_results(test)
-	if parent_test and is_subtest:
+	if parent_test and not main:
 		# If test has subtests and is not the main test object, print
 		# footer.
 		print_test_footer(test)
-	elif is_subtest:
+	elif not main:
 		print_test_result(test)
 	return test
 
@@ -804,10 +744,10 @@ def parse_run_tests(kernel_output: Iterable[str]) -> Test:
 	test = Test()
 	if not lines:
 		test.name = '<missing>'
-		test.add_error('Could not find any KTAP output. Did any KUnit tests run?')
+		test.add_error('could not find any KTAP output!')
 		test.status = TestStatus.FAILURE_TO_PARSE_TESTS
 	else:
-		test = parse_test(lines, 0, [], False)
+		test = parse_test(lines, 0, [])
 		if test.status != TestStatus.NO_TESTS:
 			test.status = test.counts.get_status()
 	stdout.print_with_timestamp(DIVIDER)

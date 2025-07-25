@@ -78,8 +78,7 @@
 		reg = <0x0 0x2600000 0x0 0x210000>;
 		resets = <&bpmp TEGRA186_RESET_GPCDMA>;
 		reset-names = "gpcdma";
-		interrupts = <GIC_SPI 75 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 76 IRQ_TYPE_LEVEL_HIGH>,
+		interrupts = <GIC_SPI 76 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 77 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 78 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>,
@@ -113,7 +112,6 @@
 		#dma-cells = <1>;
 		iommus = <&smmu TEGRA186_SID_GPCDMA_0>;
 		dma-coherent;
-		dma-channel-mask = <0xfffffffe>;
 		status = "okay";
 	};
 
@@ -792,6 +790,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x3280000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM1>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM1>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -802,6 +801,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x3290000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM2>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM2>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -812,6 +812,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x32a0000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM3>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM3>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -822,6 +823,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x32c0000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM5>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM5>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -832,6 +834,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x32d0000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM6>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM6>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -842,6 +845,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x32e0000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM7>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM7>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -852,6 +856,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0x32f0000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM8>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM8>;
 		reset-names = "pwm";
 		status = "disabled";
@@ -1269,6 +1274,7 @@
 		compatible = "nvidia,tegra186-pwm";
 		reg = <0x0 0xc340000 0x0 0x10000>;
 		clocks = <&bpmp TEGRA186_CLK_PWM4>;
+		clock-names = "pwm";
 		resets = <&bpmp TEGRA186_RESET_PWM4>;
 		reset-names = "pwm";
 		status = "disabled";

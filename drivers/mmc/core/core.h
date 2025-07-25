@@ -17,6 +17,8 @@ struct mmc_request;
 
 #define MMC_CMD_RETRIES        3
 
+static const unsigned int freqs[] = { 400000, 300000, 200000, 100000 };
+
 struct mmc_bus_ops {
 	void (*remove)(struct mmc_host *);
 	void (*detect)(struct mmc_host *);
@@ -86,26 +88,11 @@ int mmc_attach_sdio(struct mmc_host *host);
 extern bool use_spi_crc;
 
 /* Debugfs information for hosts and cards */
-#ifdef CONFIG_DEBUG_FS
 void mmc_add_host_debugfs(struct mmc_host *host);
 void mmc_remove_host_debugfs(struct mmc_host *host);
 
 void mmc_add_card_debugfs(struct mmc_card *card);
 void mmc_remove_card_debugfs(struct mmc_card *card);
-#else
-static inline void mmc_add_host_debugfs(struct mmc_host *host)
-{
-}
-static inline void mmc_remove_host_debugfs(struct mmc_host *host)
-{
-}
-static inline void mmc_add_card_debugfs(struct mmc_card *card)
-{
-}
-static inline void mmc_remove_card_debugfs(struct mmc_card *card)
-{
-}
-#endif
 
 int mmc_execute_tuning(struct mmc_card *card);
 int mmc_hs200_to_hs400(struct mmc_card *card);

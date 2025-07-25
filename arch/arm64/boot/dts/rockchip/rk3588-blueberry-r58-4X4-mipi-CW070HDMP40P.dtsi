@@ -1,0 +1,349 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+#include "dt-bindings/usb/pd.h"
+
+
+
+&dsi0 {
+	status = "okay";
+	//rockchip,lane-rate = <1000>;
+	dsi0_panel: panel@0 {
+		status = "okay";
+		compatible = "simple-panel-dsi";
+		reg = <0>;
+		backlight = <&backlight_mipi>;
+		//power-supply = <&vcc3v3_mipi_lcd_power>;
+		reset-gpios =  <&gpio3 RK_PC4 GPIO_ACTIVE_HIGH>; 
+		enable-gpios = <&gpio2 RK_PB0 GPIO_ACTIVE_HIGH>;
+		reset-delay-ms = <80>;
+		enable-delay-ms = <20>;
+		init-delay-ms = <100>;
+		prepare-delay-ms = <10>;
+		unprepare-delay-ms = <10>;
+		disable-delay-ms = <60>;
+		dsi,flags = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
+			    MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_NO_EOT_PACKET)>;
+		dsi,format = <MIPI_DSI_FMT_RGB888>;
+		dsi,lanes  = <4>;
+
+		panel-init-sequence = [
+			29 00 04 FF 98 81 03
+
+			//GIP_1
+
+			23 00 02 01 00
+			23 00 02 02 00
+			23 00 02 03 72        //STVA 3H
+			23 00 02 04 00        //STVB
+			23 00 02 05 00        //STVC
+			23 00 02 06 09        //STVA_Rise
+			23 00 02 07 00        //STVB_Rise
+			23 00 02 08 00        //STVC_Rise
+			23 00 02 09 00        //STVA_non overlap 2.5us=14
+			23 00 02 0a 00        
+			23 00 02 0b 00        
+			23 00 02 0c 00        
+			23 00 02 0d 00        
+			23 00 02 0e 00        
+			23 00 02 0f 00        //CLKA_non overlap 2.5us=14
+			23 00 02 10 00        
+			23 00 02 11 00           
+			23 00 02 12 00        
+			23 00 02 13 00        
+			23 00 02 14 00
+			23 00 02 15 00        
+			23 00 02 16 00        
+			23 00 02 17 00        
+			23 00 02 18 00        
+			23 00 02 19 00
+			23 00 02 1a 00
+			23 00 02 1b 00   
+			23 00 02 1c 00
+			23 00 02 1d 00
+			23 00 02 1e 40        //CLKA 40自動反 C0手動反(X8參考CLKB)
+			23 00 02 1f 80        
+			23 00 02 20 05        //CLKA_Rise
+			23 00 02 21 02        //CLKA_Fall
+			23 00 02 22 00        
+			23 00 02 23 00        
+			23 00 02 24 00        
+			23 00 02 25 00        
+			23 00 02 26 00
+			23 00 02 27 00
+			23 00 02 28 33       //CLK Phase_NUM=8 
+			23 00 02 29 22       //CLK overlap 3H
+			23 00 02 2a 00  
+			23 00 02 2b 00
+			23 00 02 2c 00       
+			23 00 02 2d 00       
+			23 00 02 2e 00       
+			23 00 02 2f 00       
+			23 00 02 30 00
+			23 00 02 31 00
+			23 00 02 32 00       
+			23 00 02 33 00
+			23 00 02 34 04       //VDD1&2 non-overlap 04:2.62us
+			23 00 02 35 00              
+			23 00 02 36 00
+			23 00 02 37 00       
+			23 00 02 38 3C	    //VDD1&2 toggle 1sec
+			23 00 02 39 00
+			23 00 02 3a 00 
+			23 00 02 3b 00
+			23 00 02 3c 00
+			23 00 02 3d 00
+			23 00 02 3e 00
+			23 00 02 3f 00
+			23 00 02 40 00
+			23 00 02 41 00
+			23 00 02 42 00
+			23 00 02 43 00       
+			23 00 02 44 00
+
+
+			//GIP_2
+			23 00 02 50 10		//STV_1 2
+			23 00 02 51 32		//STV_3 4
+			23 00 02 52 54		//STV_5 6
+			23 00 02 53 76		//STV_7 8
+			23 00 02 54 98		//STV_9 10
+			23 00 02 55 ba		//STV_11 12
+			23 00 02 56 10		//CLK_1.2
+			23 00 02 57 32		//CLK_3 4
+			23 00 02 58 54       //CLK_5 6
+			23 00 02 59 76       //CLK_7 8
+			23 00 02 5a 98       //CLK_9 10
+			23 00 02 5b ba       //CLK_11 12
+			23 00 02 5c dc       //CLK_13 14
+			23 00 02 5d fe       //CLK_15 16
+
+			//GIP_3
+			23 00 02 5e 00
+			23 00 02 5f 01     //FW_CGOUT_L[1]    FW
+			23 00 02 60 00     //FW_CGOUT_L[2]    BW
+			23 00 02 61 15     //FW_CGOUT_L[3]    GPWR1
+			23 00 02 62 14     //FW_CGOUT_L[4]    GPWR2
+			23 00 02 63 0E     //FW_CGOUT_L[5]    CLK1_R
+			23 00 02 64 0F     //FW_CGOUT_L[6]    CLK2_R
+			23 00 02 65 0C     //FW_CGOUT_L[7]    CLK3_R
+			23 00 02 66 0D     //FW_CGOUT_L[8]    CLK4_R
+			23 00 02 67 06     //FW_CGOUT_L[9]    STV1_R (STVA_1)
+			23 00 02 68 02     //FW_CGOUT_L[10]   
+			23 00 02 69 02     //FW_CGOUT_L[11]   
+			23 00 02 6a 02     //FW_CGOUT_L[12]   
+			23 00 02 6b 02     //FW_CGOUT_L[13]   
+			23 00 02 6c 02     //FW_CGOUT_L[14]   
+			23 00 02 6d 02     //FW_CGOUT_L[15]   
+			23 00 02 6e 07     //FW_CGOUT_L[16]   STV2_R (STVA_3)
+			23 00 02 6f 02     //FW_CGOUT_L[17]   VGL
+			23 00 02 70 02     //FW_CGOUT_L[18]   VGL
+			23 00 02 71 02     //FW_CGOUT_L[19]   VGL
+			23 00 02 72 02     //FW_CGOUT_L[20]   
+			23 00 02 73 02     //FW_CGOUT_L[21]   
+			23 00 02 74 02     //FW_CGOUT_L[22]   
+
+			23 00 02 75 01     //BW_CGOUT_L[1]    FW
+			23 00 02 76 00     //BW_CGOUT_L[2]    BW
+			23 00 02 77 14     //BW_CGOUT_L[3]    GPWR1
+			23 00 02 78 15     //BW_CGOUT_L[4]    GPWR2
+			23 00 02 79 0E     //BW_CGOUT_L[5]    CLK1_R 
+			23 00 02 7a 0F     //BW_CGOUT_L[6]    CLK2_R
+			23 00 02 7b 0C     //BW_CGOUT_L[7]    CLK3_R
+			23 00 02 7c 0D     //BW_CGOUT_L[8]    CLK4_R
+			23 00 02 7d 06     //BW_CGOUT_L[9]    STV1_R 
+			23 00 02 7e 02     //BW_CGOUT_L[10]
+			23 00 02 7f 02     //BW_CGOUT_L[11]    
+			23 00 02 80 02     //BW_CGOUT_L[12]   
+			23 00 02 81 02     //BW_CGOUT_L[13] 
+			23 00 02 82 02     //BW_CGOUT_L[14]      
+			23 00 02 83 02     //BW_CGOUT_L[15]   
+			23 00 02 84 07     //BW_CGOUT_L[16]   STV2_R   
+			23 00 02 85 02     //BW_CGOUT_L[17]   VGL
+			23 00 02 86 02     //BW_CGOUT_L[18]   VGL
+			23 00 02 87 02     //BW_CGOUT_L[19]   VGL
+			23 00 02 88 02     //BW_CGOUT_L[20]   
+			23 00 02 89 02     //BW_CGOUT_L[21]   
+			23 00 02 8A 02     //BW_CGOUT_L[22]   
+
+
+
+			//CMD_Page 4
+			29 00 04 FF 98 81 04
+
+			23 00 02 6E 2A        //di_pwr_reg=0 for power mode 2A //VGH clamp 15V
+			23 00 02 6F 35        //reg vcl + pumping ratio VGH=3x VGL=-3x 
+			23 00 02 3A 24        //POWER SAVING
+			23 00 02 8D 14        //VGL clamp -10V
+			23 00 02 87 BA        //ESD               
+			23 00 02 26 76                
+			23 00 02 B2 D1        
+			23 00 02 B5 27        //GMA BIAS
+			23 00 02 31 75        //SRC BIAS
+			23 00 02 30 03        //SRC OUTPUT BIAS
+			23 00 02 3B 98        //PUMP SHIFT CLK
+			23 00 02 35 1F        //HZ_opt
+			23 00 02 33 14        //Blanking frame 設定為GND        
+			23 00 02 7A 0F
+			23 00 02 38 01
+			23 00 02 39 00
+
+
+
+			//CMD_Page 1
+			29 00 04 FF 98 81 01
+			23 00 02 22 0A          //BGR  SS
+			23 00 02 31 00          //Column inversion
+			23 00 02 53 45        //VCOM1 41  44  45  4A
+			23 00 02 55 4E          //VCOM2 4E
+			23 00 02 50 C7		   //VREG1OUT=5.1V
+			23 00 02 51 C2		   //VREG2OUT=-5.1V
+			23 00 02 60 25          //SDT=2.5us  蚕22蜊傖25
+			23 00 02 63 00
+
+
+
+
+
+
+			//============Gamma START=============
+
+			//Pos 29 00 02
+			23 00 02 A0 00	
+			23 00 02 A1 16	
+			23 00 02 A2 26	
+			23 00 02 A3 16	
+			23 00 02 A4 19	
+			23 00 02 A5 2B	
+			23 00 02 A6 1E	
+			23 00 02 A7 20	
+			23 00 02 A8 93	
+			23 00 02 A9 20	
+			23 00 02 AA 2C	
+			23 00 02 AB 87	
+			23 00 02 AC 1F	
+			23 00 02 AD 1F	
+			23 00 02 AE 53	
+			23 00 02 AF 27	
+			23 00 02 B0 2A	
+			23 00 02 B1 52	
+			23 00 02 B2 5B	
+			23 00 02 B3 23	
+
+
+
+
+			//Neg 29 00 02
+			23 00 02 C0 00
+			23 00 02 C1 11
+			23 00 02 C2 1E
+			23 00 02 C3 0F
+			23 00 02 C4 12
+			23 00 02 C5 26
+			23 00 02 C6 1C
+			23 00 02 C7 1E
+			23 00 02 C8 87
+			23 00 02 C9 19
+			23 00 02 CA 26
+			23 00 02 CB 7F
+			23 00 02 CC 20
+			23 00 02 CD 22
+			23 00 02 CE 58
+			23 00 02 CF 2A
+			23 00 02 D0 2E
+			23 00 02 D1 50
+			23 00 02 D2 5D
+			23 00 02 D3 23
+
+
+
+			//29 00 04 FF 98 81 04
+			//29 00 02 2F 01
+
+			//============ Gamma END===========			
+						
+
+			//CMD_Page 0			
+			29 00 04 FF 98 81 00
+			23 00 02 35 00
+			05 78 01 11   
+			//Delay 120
+			05 14 01 29 
+			//Delay 20
+				
+		];
+
+		panel-exit-sequence = [
+			05 00 01 28
+			05 00 01 10
+		];
+
+		display-timings {
+			native-mode = <&timing0>;
+			timing0: timing0 {
+				clock-frequency = <72000000>;  //159391260  159747840
+				hactive = <800>;
+				vactive = <1280>; 
+				hback-porch = <60>;
+				hfront-porch = <40>;
+				hsync-len = <4>;
+				vback-porch = <25>;
+				vfront-porch = <30>;
+				vsync-len = <4>;
+				hsync-active = <1>;
+				vsync-active = <1>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+				};
+		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi0: endpoint {
+					remote-endpoint = <&dsi0_out_panel>;
+				};
+			};
+		};
+	};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@1 {
+				reg = <1>;
+				dsi0_out_panel: endpoint {
+					remote-endpoint = <&panel_in_dsi0>;
+				};
+			};
+		};
+	
+};
+
+&dsi0 {
+	status = "okay";
+};
+
+&mipi_dcphy0 {
+	status = "okay";
+};
+
+&dsi0_in_vp2 {
+	status = "okay";
+};
+
+&dsi0_in_vp3 {
+	status = "disabled";
+};
+
+&route_dsi0 {
+	status = "okay";
+	connect = <&vp2_out_dsi0>;
+};

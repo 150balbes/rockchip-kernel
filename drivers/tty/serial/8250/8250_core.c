@@ -32,7 +32,6 @@
 #include <linux/nmi.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
-#include <linux/string_helpers.h>
 #include <linux/uaccess.h>
 #include <linux/io.h>
 #ifdef CONFIG_SPARC
@@ -553,6 +552,7 @@ static void __init serial8250_isa_init_ports(void)
 static void __init
 serial8250_register_ports(struct uart_driver *drv, struct device *dev)
 {
+#ifndef CONFIG_ARCH_ROCKCHIP
 	int i;
 
 	for (i = 0; i < nr_uarts; i++) {
@@ -566,12 +566,13 @@ serial8250_register_ports(struct uart_driver *drv, struct device *dev)
 
 		up->port.dev = dev;
 
-		if (uart_console_registered(&up->port))
+		if (uart_console_enabled(&up->port))
 			pm_runtime_get_sync(up->port.dev);
 
 		serial8250_apply_quirks(up);
 		uart_add_one_port(drv, &up->port);
 	}
+#endif
 }
 
 #ifdef CONFIG_SERIAL_8250_CONSOLE
@@ -1020,7 +1021,9 @@ int serial8250_register_8250_port(const struct uart_8250_port *up)
 		uart->rs485_stop_tx	= up->rs485_stop_tx;
 		uart->lsr_save_mask	= up->lsr_save_mask;
 		uart->dma		= up->dma;
-
+#ifdef CONFIG_ARCH_ROCKCHIP
+		uart->port.line		= up->port.line;
+#endif
 		/* Take tx_loadsz from fifosize if it wasn't set separately */
 		if (uart->port.fifosize && !uart->tx_loadsz)
 			uart->tx_loadsz = uart->port.fifosize;
@@ -1158,6 +1161,7 @@ void serial8250_unregister_port(int line)
 		uart->port.type = PORT_UNKNOWN;
 		uart->port.dev = &serial8250_isa_devs->dev;
 		uart->capabilities = 0;
+		serial8250_init_port(uart);
 		serial8250_apply_quirks(uart);
 		uart_add_one_port(&serial8250_reg, &uart->port);
 	} else {
@@ -1176,8 +1180,8 @@ static int __init serial8250_init(void)
 
 	serial8250_isa_init_ports();
 
-	pr_info("Serial: 8250/16550 driver, %d ports, IRQ sharing %s\n",
-		nr_uarts, str_enabled_disabled(share_irqs));
+	pr_info("Serial: 8250/16550 driver, %d ports, IRQ sharing %sabled\n",
+		nr_uarts, share_irqs ? "en" : "dis");
 
 #ifdef CONFIG_SPARC
 	ret = sunserial_register_minors(&serial8250_reg, UART_NR);
@@ -1247,7 +1251,11 @@ static void __exit serial8250_exit(void)
 #endif
 }
 
+#ifdef CONFIG_ROCKCHIP_THUNDER_BOOT
+rootfs_initcall(serial8250_init);
+#else
 module_init(serial8250_init);
+#endif
 module_exit(serial8250_exit);
 
 MODULE_LICENSE("GPL");

@@ -247,6 +247,7 @@ struct stmmac_priv {
 	u32 msg_enable;
 	int wolopts;
 	int wol_irq;
+	bool wol_irq_disabled;
 	int clk_csr;
 	struct timer_list eee_ctrl_timer;
 	int lpi_irq;
@@ -334,9 +335,17 @@ enum stmmac_state {
 
 int stmmac_mdio_unregister(struct net_device *ndev);
 int stmmac_mdio_register(struct net_device *ndev);
+int stmmac_mdio_idle(struct mii_bus *mii);
 int stmmac_mdio_reset(struct mii_bus *mii);
 int stmmac_xpcs_setup(struct mii_bus *mii);
+
+#ifdef CONFIG_STMMAC_ETHTOOL
 void stmmac_set_ethtool_ops(struct net_device *netdev);
+#else
+static inline void stmmac_set_ethtool_ops(struct net_device *netdev)
+{
+}
+#endif
 
 int stmmac_init_tstamp_counter(struct stmmac_priv *priv, u32 systime_flags);
 void stmmac_ptp_register(struct stmmac_priv *priv);

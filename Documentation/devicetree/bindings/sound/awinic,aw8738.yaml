@@ -15,7 +15,7 @@ description:
   function (primarily the power limit for the amplifier).
 
 allOf:
-  - $ref: dai-common.yaml#
+  - $ref: name-prefix.yaml#
 
 properties:
   compatible:

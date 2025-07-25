@@ -119,7 +119,8 @@ static int ibm_panel_i2c_slave_cb(struct i2c_client *client,
 	return 0;
 }
 
-static int ibm_panel_probe(struct i2c_client *client)
+static int ibm_panel_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
 	struct ibm_panel *panel;
 	int i;
@@ -189,7 +190,7 @@ static struct i2c_driver ibm_panel_driver = {
 		.name = DEVICE_NAME,
 		.of_match_table = ibm_panel_match,
 	},
-	.probe_new = ibm_panel_probe,
+	.probe = ibm_panel_probe,
 	.remove = ibm_panel_remove,
 };
 module_i2c_driver(ibm_panel_driver);

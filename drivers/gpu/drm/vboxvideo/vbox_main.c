@@ -11,6 +11,7 @@
 #include <linux/pci.h>
 #include <linux/vbox_err.h>
 
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 

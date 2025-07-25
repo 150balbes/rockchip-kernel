@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -51,7 +51,7 @@
  * @event_queue:            Timeline stream event queue
  * @bytes_collected:        Number of bytes read by user
  * @timeline_flags:         Zero, if timeline is disabled. Timeline stream flags
- *                          otherwise. See kbase_timeline_io_acquire().
+ *                          otherwise. See kbase_timeline_acquire().
  * @obj_header_btc:         Remaining bytes to copy for the object stream header
  * @aux_header_btc:         Remaining bytes to copy for the aux stream header
  * @last_acquire_time:      The time at which timeline was last acquired.
@@ -59,26 +59,45 @@
  */
 struct kbase_timeline {
 	struct kbase_tlstream streams[TL_STREAM_TYPE_COUNT];
-	struct list_head  tl_kctx_list;
-	struct mutex      tl_kctx_list_lock;
+	struct list_head tl_kctx_list;
+	struct mutex tl_kctx_list_lock;
 	struct timer_list autoflush_timer;
-	atomic_t          autoflush_timer_active;
-	struct mutex      reader_lock;
+	atomic_t autoflush_timer_active;
+	struct mutex reader_lock;
 	wait_queue_head_t event_queue;
 #if MALI_UNIT_TEST
-	atomic_t          bytes_collected;
+	atomic_t bytes_collected;
 #endif /* MALI_UNIT_TEST */
-	atomic_t         *timeline_flags;
-	size_t            obj_header_btc;
-	size_t            aux_header_btc;
-	ktime_t           last_acquire_time;
+	atomic_t *timeline_flags;
+	size_t obj_header_btc;
+	size_t aux_header_btc;
+	ktime_t last_acquire_time;
 #if MALI_USE_CSF
 	struct kbase_csf_tl_reader csf_tl_reader;
 #endif
 };
 
-extern const struct file_operations kbasep_tlstream_fops;
-
 void kbase_create_timeline_objects(struct kbase_device *kbdev);
+
+/**
+ * kbase_timeline_acquire - acquire timeline for a userspace client.
+ * @kbdev:     An instance of the GPU platform device, allocated from the probe
+ *             method of the driver.
+ * @flags:     Timeline stream flags
+ *
+ * Each timeline instance can be acquired by only one userspace client at a time.
+ *
+ * Return: Zero on success, error number on failure (e.g. if already acquired).
+ */
+int kbase_timeline_acquire(struct kbase_device *kbdev, u32 flags);
+
+/**
+ * kbase_timeline_release - release timeline for a userspace client.
+ * @timeline:     Timeline instance to be stopped. It must be previously acquired
+ *                with kbase_timeline_acquire().
+ *
+ * Releasing the timeline instance allows it to be acquired by another userspace client.
+ */
+void kbase_timeline_release(struct kbase_timeline *timeline);
 
 #endif /* _KBASE_TIMELINE_PRIV_H */

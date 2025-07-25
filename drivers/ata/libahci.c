@@ -1255,6 +1255,26 @@ static ssize_t ahci_activity_show(struct ata_device *dev, char *buf)
 	return sprintf(buf, "%d\n", emp->blink_policy);
 }
 
+static void ahci_port_clear_pending_irq(struct ata_port *ap)
+{
+	struct ahci_host_priv *hpriv = ap->host->private_data;
+	void __iomem *port_mmio = ahci_port_base(ap);
+	u32 tmp;
+
+	/* clear SError */
+	tmp = readl(port_mmio + PORT_SCR_ERR);
+	dev_dbg(ap->host->dev, "PORT_SCR_ERR 0x%x\n", tmp);
+	writel(tmp, port_mmio + PORT_SCR_ERR);
+
+	/* clear port IRQ */
+	tmp = readl(port_mmio + PORT_IRQ_STAT);
+	dev_dbg(ap->host->dev, "PORT_IRQ_STAT 0x%x\n", tmp);
+	if (tmp)
+		writel(tmp, port_mmio + PORT_IRQ_STAT);
+
+	writel(1 << ap->port_no, hpriv->mmio + HOST_IRQ_STAT);
+}
+
 static void ahci_port_init(struct device *dev, struct ata_port *ap,
 			   int port_no, void __iomem *mmio,
 			   void __iomem *port_mmio)
@@ -1269,18 +1289,7 @@ static void ahci_port_init(struct device *dev, struct ata_port *ap,
 	if (rc)
 		dev_warn(dev, "%s (%d)\n", emsg, rc);
 
-	/* clear SError */
-	tmp = readl(port_mmio + PORT_SCR_ERR);
-	dev_dbg(dev, "PORT_SCR_ERR 0x%x\n", tmp);
-	writel(tmp, port_mmio + PORT_SCR_ERR);
-
-	/* clear port IRQ */
-	tmp = readl(port_mmio + PORT_IRQ_STAT);
-	dev_dbg(dev, "PORT_IRQ_STAT 0x%x\n", tmp);
-	if (tmp)
-		writel(tmp, port_mmio + PORT_IRQ_STAT);
-
-	writel(1 << port_no, mmio + HOST_IRQ_STAT);
+	ahci_port_clear_pending_irq(ap);
 
 	/* mark esata ports */
 	tmp = readl(port_mmio + PORT_CMD);
@@ -1508,7 +1517,7 @@ int ahci_do_softreset(struct ata_link *link, unsigned int *class,
 		*class = ahci_dev_classify(ap);
 
 	/* re-enable FBS if disabled before */
-	if (fbs_disabled)
+	if (fbs_disabled || (!ata_is_host_link(link) && pp->fbs_supported))
 		ahci_enable_fbs(ap);
 
 	return 0;
@@ -1600,6 +1609,8 @@ int ahci_do_hardreset(struct ata_link *link, unsigned int *class,
 	ata_tf_init(link->device, &tf);
 	tf.status = ATA_BUSY;
 	ata_tf_to_fis(&tf, 0, 0, d2h_fis);
+
+	ahci_port_clear_pending_irq(ap);
 
 	rc = sata_link_hardreset(link, timing, deadline, online,
 				 ahci_check_ready);
@@ -2071,20 +2082,6 @@ static bool ahci_qc_fill_rtf(struct ata_queued_cmd *qc)
 	    !(qc->flags & ATA_QCFLAG_FAILED)) {
 		ata_tf_from_fis(rx_fis + RX_FIS_PIO_SETUP, &qc->result_tf);
 		qc->result_tf.status = (rx_fis + RX_FIS_PIO_SETUP)[15];
-
-	/*
-	 * For NCQ commands, we never get a D2H FIS, so reading the D2H Register
-	 * FIS area of the Received FIS Structure (which contains a copy of the
-	 * last D2H FIS received) will contain an outdated status code.
-	 * For NCQ commands, we instead get a SDB FIS, so read the SDB FIS area
-	 * instead. However, the SDB FIS does not contain the LBA, so we can't
-	 * use the ata_tf_from_fis() helper.
-	 */
-	} else if (ata_is_ncq(qc->tf.protocol)) {
-		const u8 *fis = rx_fis + RX_FIS_SDB;
-
-		qc->result_tf.status = fis[2];
-		qc->result_tf.error = fis[3];
 	} else
 		ata_tf_from_fis(rx_fis + RX_FIS_D2H_REG, &qc->result_tf);
 
@@ -2120,7 +2117,7 @@ void ahci_error_handler(struct ata_port *ap)
 {
 	struct ahci_host_priv *hpriv = ap->host->private_data;
 
-	if (!ata_port_is_frozen(ap)) {
+	if (!(ap->pflags & ATA_PFLAG_FROZEN)) {
 		/* restart engine */
 		hpriv->stop_engine(ap);
 		hpriv->start_engine(ap);
@@ -2311,7 +2308,7 @@ static void ahci_pmp_attach(struct ata_port *ap)
 	 * Note that during initialization, the port is marked as
 	 * frozen since the irq handler is not yet registered.
 	 */
-	if (!ata_port_is_frozen(ap))
+	if (!(ap->pflags & ATA_PFLAG_FROZEN))
 		writel(pp->intr_mask, port_mmio + PORT_IRQ_MASK);
 }
 
@@ -2330,7 +2327,7 @@ static void ahci_pmp_detach(struct ata_port *ap)
 	pp->intr_mask &= ~PORT_IRQ_BAD_PMP;
 
 	/* see comment above in ahci_pmp_attach() */
-	if (!ata_port_is_frozen(ap))
+	if (!(ap->pflags & ATA_PFLAG_FROZEN))
 		writel(pp->intr_mask, port_mmio + PORT_IRQ_MASK);
 }
 

@@ -1095,7 +1095,8 @@ static void rohm_ts_close(struct input_dev *input_dev)
 	ts->initialized = false;
 }
 
-static int rohm_bu21023_i2c_probe(struct i2c_client *client)
+static int rohm_bu21023_i2c_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct rohm_ts_data *ts;
@@ -1183,7 +1184,7 @@ static struct i2c_driver rohm_bu21023_i2c_driver = {
 	.driver = {
 		.name = BU21023_NAME,
 	},
-	.probe_new = rohm_bu21023_i2c_probe,
+	.probe = rohm_bu21023_i2c_probe,
 	.id_table = rohm_bu21023_i2c_id,
 };
 module_i2c_driver(rohm_bu21023_i2c_driver);

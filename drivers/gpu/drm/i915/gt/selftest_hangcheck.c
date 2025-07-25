@@ -99,6 +99,22 @@ static u64 hws_address(const struct i915_vma *hws,
 	return hws->node.start + offset_in_page(sizeof(u32)*rq->fence.context);
 }
 
+static int move_to_active(struct i915_vma *vma,
+			  struct i915_request *rq,
+			  unsigned int flags)
+{
+	int err;
+
+	i915_vma_lock(vma);
+	err = i915_request_await_object(rq, vma->obj,
+					flags & EXEC_OBJECT_WRITE);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, flags);
+	i915_vma_unlock(vma);
+
+	return err;
+}
+
 static struct i915_request *
 hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 {
@@ -159,11 +175,11 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 		goto unpin_hws;
 	}
 
-	err = igt_vma_move_to_active_unlocked(vma, rq, 0);
+	err = move_to_active(vma, rq, 0);
 	if (err)
 		goto cancel_rq;
 
-	err = igt_vma_move_to_active_unlocked(hws, rq, 0);
+	err = move_to_active(hws, rq, 0);
 	if (err)
 		goto cancel_rq;
 
@@ -1503,9 +1519,18 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 		}
 	}
 
-	err = igt_vma_move_to_active_unlocked(arg.vma, rq, flags);
-	if (err)
-		pr_err("[%s] Move to active failed: %d!\n", engine->name, err);
+	i915_vma_lock(arg.vma);
+	err = i915_request_await_object(rq, arg.vma->obj,
+					flags & EXEC_OBJECT_WRITE);
+	if (err == 0) {
+		err = i915_vma_move_to_active(arg.vma, rq, flags);
+		if (err)
+			pr_err("[%s] Move to active failed: %d!\n", engine->name, err);
+	} else {
+		pr_err("[%s] Request await failed: %d!\n", engine->name, err);
+	}
+
+	i915_vma_unlock(arg.vma);
 
 	if (flags & EXEC_OBJECT_NEEDS_FENCE)
 		i915_vma_unpin_fence(arg.vma);

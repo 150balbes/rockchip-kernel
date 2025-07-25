@@ -18,8 +18,6 @@
 #include <linux/err.h>
 #include <linux/sys.h>
 #include <linux/threads.h>
-#include <linux/linkage.h>
-
 #include <asm/reg.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
@@ -76,18 +74,17 @@ _ASM_NOKPROBE_SYMBOL(prepare_transfer_to_handler)
 #endif /* CONFIG_PPC_BOOK3S_32 || CONFIG_PPC_E500 */
 
 #if defined(CONFIG_PPC_KUEP) && defined(CONFIG_PPC_BOOK3S_32)
-SYM_FUNC_START(__kuep_lock)
+	.globl	__kuep_lock
+__kuep_lock:
 	lwz	r9, THREAD+THSR0(r2)
 	update_user_segments_by_4 r9, r10, r11, r12
 	blr
-SYM_FUNC_END(__kuep_lock)
 
-SYM_FUNC_START_LOCAL(__kuep_unlock)
+__kuep_unlock:
 	lwz	r9, THREAD+THSR0(r2)
 	rlwinm  r9,r9,0,~SR_NX
 	update_user_segments_by_4 r9, r10, r11, r12
 	blr
-SYM_FUNC_END(__kuep_unlock)
 
 .macro	kuep_lock
 	bl	__kuep_lock
@@ -117,7 +114,7 @@ transfer_to_syscall:
 	addi	r12,r12,STACK_FRAME_REGS_MARKER@l
 	stw	r9,_MSR(r1)
 	li	r2, INTERRUPT_SYSCALL
-	stw	r12,STACK_INT_FRAME_MARKER(r1)
+	stw	r12,8(r1)
 	stw	r2,_TRAP(r1)
 	SAVE_GPR(0, r1)
 	SAVE_GPRS(3, 8, r1)
@@ -126,20 +123,21 @@ transfer_to_syscall:
 	kuep_lock
 
 	/* Calling convention has r3 = regs, r4 = orig r0 */
-	addi	r3,r1,STACK_INT_FRAME_REGS
+	addi	r3,r1,STACK_FRAME_OVERHEAD
 	mr	r4,r0
 	bl	system_call_exception
 
 ret_from_syscall:
-	addi    r4,r1,STACK_INT_FRAME_REGS
+	addi    r4,r1,STACK_FRAME_OVERHEAD
 	li	r5,0
 	bl	syscall_exit_prepare
 #ifdef CONFIG_PPC_47x
 	lis	r4,icache_44x_need_flush@ha
 	lwz	r5,icache_44x_need_flush@l(r4)
 	cmplwi	cr0,r5,0
-	bne-	2f
+	bne-	.L44x_icache_flush
 #endif /* CONFIG_PPC_47x */
+.L44x_icache_flush_return:
 	kuep_unlock
 	lwz	r4,_LINK(r1)
 	lwz	r5,_CCR(r1)
@@ -173,10 +171,11 @@ syscall_exit_finish:
 	b	1b
 
 #ifdef CONFIG_44x
-2:	li	r7,0
+.L44x_icache_flush:
+	li	r7,0
 	iccci	r0,r0
 	stw	r7,icache_44x_need_flush@l(r4)
-	b	1b
+	b	.L44x_icache_flush_return
 #endif  /* CONFIG_44x */
 
 	.globl	ret_from_fork
@@ -218,9 +217,9 @@ ret_from_kernel_thread:
  * in arch/ppc/kernel/process.c
  */
 _GLOBAL(_switch)
-	stwu	r1,-SWITCH_FRAME_SIZE(r1)
+	stwu	r1,-INT_FRAME_SIZE(r1)
 	mflr	r0
-	stw	r0,SWITCH_FRAME_SIZE+4(r1)
+	stw	r0,INT_FRAME_SIZE+4(r1)
 	/* r3-r12 are caller saved -- Cort */
 	SAVE_NVGPRS(r1)
 	stw	r0,_NIP(r1)	/* Return to switch caller */
@@ -251,7 +250,7 @@ _GLOBAL(_switch)
 
 	lwz	r4,_NIP(r1)	/* Return to _switch caller in new task */
 	mtlr	r4
-	addi	r1,r1,SWITCH_FRAME_SIZE
+	addi	r1,r1,INT_FRAME_SIZE
 	blr
 
 	.globl	fast_exception_return
@@ -296,7 +295,7 @@ _ASM_NOKPROBE_SYMBOL(fast_exception_return)
 	.globl interrupt_return
 interrupt_return:
 	lwz	r4,_MSR(r1)
-	addi	r3,r1,STACK_INT_FRAME_REGS
+	addi	r3,r1,STACK_FRAME_OVERHEAD
 	andi.	r0,r4,MSR_PR
 	beq	.Lkernel_interrupt_return
 	bl	interrupt_exit_user_prepare

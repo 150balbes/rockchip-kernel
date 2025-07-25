@@ -69,7 +69,8 @@ static int ad714x_i2c_read(struct ad714x_chip *chip,
 	return 0;
 }
 
-static int ad714x_i2c_probe(struct i2c_client *client)
+static int ad714x_i2c_probe(struct i2c_client *client,
+					const struct i2c_device_id *id)
 {
 	struct ad714x_chip *chip;
 
@@ -98,7 +99,7 @@ static struct i2c_driver ad714x_i2c_driver = {
 		.name = "ad714x_captouch",
 		.pm   = &ad714x_i2c_pm,
 	},
-	.probe_new = ad714x_i2c_probe,
+	.probe    = ad714x_i2c_probe,
 	.id_table = ad714x_id,
 };
 

@@ -7,6 +7,8 @@
 
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/miscdevice.h>
+#include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
@@ -191,6 +193,7 @@ static const struct dma_fence_ops timeline_fence_ops = {
  */
 static void sync_timeline_signal(struct sync_timeline *obj, unsigned int inc)
 {
+	LIST_HEAD(signalled);
 	struct sync_pt *pt, *next;
 
 	trace_sync_timeline(obj);
@@ -203,21 +206,20 @@ static void sync_timeline_signal(struct sync_timeline *obj, unsigned int inc)
 		if (!timeline_fence_signaled(&pt->base))
 			break;
 
-		list_del_init(&pt->link);
+		dma_fence_get(&pt->base);
+
+		list_move_tail(&pt->link, &signalled);
 		rb_erase(&pt->node, &obj->pt_tree);
 
-		/*
-		 * A signal callback may release the last reference to this
-		 * fence, causing it to be freed. That operation has to be
-		 * last to avoid a use after free inside this loop, and must
-		 * be after we remove the fence from the timeline in order to
-		 * prevent deadlocking on timeline->lock inside
-		 * timeline_fence_release().
-		 */
 		dma_fence_signal_locked(&pt->base);
 	}
 
 	spin_unlock_irq(&obj->lock);
+
+	list_for_each_entry_safe(pt, next, &signalled, link) {
+		list_del_init(&pt->link);
+		dma_fence_put(&pt->base);
+	}
 }
 
 /**
@@ -410,3 +412,13 @@ const struct file_operations sw_sync_debugfs_fops = {
 	.unlocked_ioctl = sw_sync_ioctl,
 	.compat_ioctl	= compat_ptr_ioctl,
 };
+
+static struct miscdevice sw_sync_dev = {
+	.minor	= MISC_DYNAMIC_MINOR,
+	.name	= "sw_sync",
+	.fops	= &sw_sync_debugfs_fops,
+};
+
+module_misc_device(sw_sync_dev);
+
+MODULE_LICENSE("GPL v2");

@@ -11,8 +11,7 @@
 #define LINUX_OPAL_H
 
 #include <uapi/linux/sed-opal.h>
-#include <linux/compiler_types.h>
-#include <linux/types.h>
+#include <linux/kernel.h>
 
 struct opal_dev;
 

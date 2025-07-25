@@ -33,7 +33,7 @@
 
 	leds {
 		compatible = "gpio-leds";
-		led-hps0 {
+		hps0 {
 			label = "hps_led0";
 			gpios = <&portb 24 0>;
 			linux,default-trigger = "heartbeat";

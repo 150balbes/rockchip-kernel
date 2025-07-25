@@ -10,7 +10,6 @@
 #include <linux/vmalloc.h>
 #include <linux/crc32.h>
 #include <linux/firmware.h>
-#include <linux/kstrtox.h>
 
 #include "core.h"
 #include "debug.h"
@@ -1140,7 +1139,7 @@ void ath10k_debug_get_et_strings(struct ieee80211_hw *hw,
 				 u32 sset, u8 *data)
 {
 	if (sset == ETH_SS_STATS)
-		memcpy(data, *ath10k_gstrings_stats,
+		memcpy(data, ath10k_gstrings_stats,
 		       sizeof(ath10k_gstrings_stats));
 }
 
@@ -1976,7 +1975,7 @@ static ssize_t ath10k_write_btcoex(struct file *file,
 
 	buf[buf_size] = '\0';
 
-	if (kstrtobool(buf, &val) != 0)
+	if (strtobool(buf, &val) != 0)
 		return -EINVAL;
 
 	if (!ar->coex_support)
@@ -2114,7 +2113,7 @@ static ssize_t ath10k_write_peer_stats(struct file *file,
 
 	buf[buf_size] = '\0';
 
-	if (kstrtobool(buf, &val) != 0)
+	if (strtobool(buf, &val) != 0)
 		return -EINVAL;
 
 	mutex_lock(&ar->conf_mutex);

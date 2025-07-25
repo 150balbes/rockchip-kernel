@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/interrupt-controller/nuvoton,wpcm450-aic.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Nuvoton WPCM450 Advanced Interrupt Controller
+title: Nuvoton WPCM450 Advanced Interrupt Controller bindings
 
 maintainers:
   - Jonathan Neuschäfer <j.neuschaefer@gmx.net>

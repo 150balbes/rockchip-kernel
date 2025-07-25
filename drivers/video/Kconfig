@@ -11,10 +11,6 @@ config APERTURE_HELPERS
 	  Support tracking and hand-over of aperture ownership. Required
 	  by graphics drivers for firmware-provided framebuffers.
 
-config VIDEO_NOMODESET
-	bool
-	default n
-
 if HAS_IOMEM
 
 config HAVE_FB_ATMEL
@@ -35,6 +31,10 @@ source "drivers/video/fbdev/Kconfig"
 endmenu
 
 source "drivers/video/backlight/Kconfig"
+
+menu "Rockchip Misc Video driver"
+source "drivers/video/rockchip/Kconfig"
+endmenu
 
 config VGASTATE
        tristate

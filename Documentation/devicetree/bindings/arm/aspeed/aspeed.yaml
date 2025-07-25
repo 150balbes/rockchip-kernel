@@ -17,7 +17,6 @@ properties:
       - description: AST2400 based boards
         items:
           - enum:
-              - delta,ahe50dc-bmc
               - facebook,galaxy100-bmc
               - facebook,wedge100-bmc
               - facebook,wedge40-bmc
@@ -83,7 +82,7 @@ properties:
               - ibm,tacoma-bmc
               - inventec,transformer-bmc
               - jabil,rbp-bmc
-              - qcom,dc-scm-v1-bmc
+              - nuvia,dc-scm-bmc
               - quanta,s6q-bmc
           - const: aspeed,ast2600
 

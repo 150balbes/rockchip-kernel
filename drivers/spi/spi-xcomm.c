@@ -202,7 +202,8 @@ static int spi_xcomm_transfer_one(struct spi_master *master,
 	return status;
 }
 
-static int spi_xcomm_probe(struct i2c_client *i2c)
+static int spi_xcomm_probe(struct i2c_client *i2c,
+	const struct i2c_device_id *id)
 {
 	struct spi_xcomm *spi_xcomm;
 	struct spi_master *master;
@@ -241,7 +242,7 @@ static struct i2c_driver spi_xcomm_driver = {
 		.name	= "spi-xcomm",
 	},
 	.id_table	= spi_xcomm_ids,
-	.probe_new	= spi_xcomm_probe,
+	.probe		= spi_xcomm_probe,
 };
 module_i2c_driver(spi_xcomm_driver);
 

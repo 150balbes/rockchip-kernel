@@ -115,7 +115,7 @@ struct kfd_dev *kfd_device_by_pci_dev(const struct pci_dev *pdev)
 	down_read(&topology_lock);
 
 	list_for_each_entry(top_dev, &topology_device_list, list)
-		if (top_dev->gpu && top_dev->gpu->adev->pdev == pdev) {
+		if (top_dev->gpu && top_dev->gpu->pdev == pdev) {
 			device = top_dev->gpu;
 			break;
 		}
@@ -801,7 +801,7 @@ static int kfd_build_sysfs_node_entry(struct kfd_topology_device *dev,
 
 		p2plink->attr.name = "properties";
 		p2plink->attr.mode = KFD_SYSFS_FILE_MODE;
-		sysfs_attr_init(&iolink->attr);
+		sysfs_attr_init(&p2plink->attr);
 		ret = sysfs_create_file(p2plink->kobj, &p2plink->attr);
 		if (ret < 0)
 			return ret;
@@ -1169,12 +1169,13 @@ static uint32_t kfd_generate_gpu_id(struct kfd_dev *gpu)
 
 	local_mem_size = gpu->local_mem_info.local_mem_size_private +
 			gpu->local_mem_info.local_mem_size_public;
-	buf[0] = gpu->adev->pdev->devfn;
-	buf[1] = gpu->adev->pdev->subsystem_vendor |
-		(gpu->adev->pdev->subsystem_device << 16);
-	buf[2] = pci_domain_nr(gpu->adev->pdev->bus);
-	buf[3] = gpu->adev->pdev->device;
-	buf[4] = gpu->adev->pdev->bus->number;
+
+	buf[0] = gpu->pdev->devfn;
+	buf[1] = gpu->pdev->subsystem_vendor |
+		(gpu->pdev->subsystem_device << 16);
+	buf[2] = pci_domain_nr(gpu->pdev->bus);
+	buf[3] = gpu->pdev->device;
+	buf[4] = gpu->pdev->bus->number;
 	buf[5] = lower_32_bits(local_mem_size);
 	buf[6] = upper_32_bits(local_mem_size);
 
@@ -1266,7 +1267,7 @@ static void kfd_set_iolink_no_atomics(struct kfd_topology_device *dev,
 	if (target_gpu_dev) {
 		uint32_t cap;
 
-		pcie_capability_read_dword(target_gpu_dev->gpu->adev->pdev,
+		pcie_capability_read_dword(target_gpu_dev->gpu->pdev,
 				PCI_EXP_DEVCAP2, &cap);
 
 		if (!(cap & (PCI_EXP_DEVCAP2_ATOMIC_COMP32 |
@@ -1402,10 +1403,11 @@ static int kfd_create_indirect_link_prop(struct kfd_topology_device *kdev, int g
 		num_cpu++;
 	}
 
+	if (list_empty(&kdev->io_link_props))
+		return -ENODATA;
+
 	gpu_link = list_first_entry(&kdev->io_link_props,
-					struct kfd_iolink_properties, list);
-	if (!gpu_link)
-		return -ENOMEM;
+				    struct kfd_iolink_properties, list);
 
 	for (i = 0; i < num_cpu; i++) {
 		/* CPU <--> GPU */
@@ -1483,15 +1485,17 @@ static int kfd_add_peer_prop(struct kfd_topology_device *kdev,
 				peer->gpu->adev))
 		return ret;
 
+	if (list_empty(&kdev->io_link_props))
+		return -ENODATA;
+
 	iolink1 = list_first_entry(&kdev->io_link_props,
-							struct kfd_iolink_properties, list);
-	if (!iolink1)
-		return -ENOMEM;
+				   struct kfd_iolink_properties, list);
+
+	if (list_empty(&peer->io_link_props))
+		return -ENODATA;
 
 	iolink2 = list_first_entry(&peer->io_link_props,
-							struct kfd_iolink_properties, list);
-	if (!iolink2)
-		return -ENOMEM;
+				   struct kfd_iolink_properties, list);
 
 	props = kfd_alloc_struct(props);
 	if (!props)
@@ -1509,17 +1513,19 @@ static int kfd_add_peer_prop(struct kfd_topology_device *kdev,
 		/* CPU->CPU  link*/
 		cpu_dev = kfd_topology_device_by_proximity_domain(iolink1->node_to);
 		if (cpu_dev) {
-			list_for_each_entry(iolink3, &cpu_dev->io_link_props, list)
-				if (iolink3->node_to == iolink2->node_to)
-					break;
+			list_for_each_entry(iolink3, &cpu_dev->io_link_props, list) {
+				if (iolink3->node_to != iolink2->node_to)
+					continue;
 
-			props->weight += iolink3->weight;
-			props->min_latency += iolink3->min_latency;
-			props->max_latency += iolink3->max_latency;
-			props->min_bandwidth = min(props->min_bandwidth,
-							iolink3->min_bandwidth);
-			props->max_bandwidth = min(props->max_bandwidth,
-							iolink3->max_bandwidth);
+				props->weight += iolink3->weight;
+				props->min_latency += iolink3->min_latency;
+				props->max_latency += iolink3->max_latency;
+				props->min_bandwidth = min(props->min_bandwidth,
+							   iolink3->min_bandwidth);
+				props->max_bandwidth = min(props->max_bandwidth,
+							   iolink3->max_bandwidth);
+				break;
+			}
 		} else {
 			WARN(1, "CPU node not found");
 		}
@@ -1723,7 +1729,7 @@ static int fill_in_l2_l3_pcache(struct kfd_cache_properties **props_ext,
 /* kfd_fill_cache_non_crat_info - Fill GPU cache info using kfd_gpu_cache_info
  * tables
  */
-static void kfd_fill_cache_non_crat_info(struct kfd_topology_device *dev, struct kfd_dev *kdev)
+void kfd_fill_cache_non_crat_info(struct kfd_topology_device *dev, struct kfd_dev *kdev)
 {
 	struct kfd_gpu_cache_info *pcache_info = NULL;
 	int i, j, k;
@@ -1805,74 +1811,20 @@ static void kfd_fill_cache_non_crat_info(struct kfd_topology_device *dev, struct
 	pr_debug("Added [%d] GPU cache entries\n", num_of_entries);
 }
 
-static int kfd_topology_add_device_locked(struct kfd_dev *gpu, uint32_t gpu_id,
-					  struct kfd_topology_device **dev)
-{
-	int proximity_domain = ++topology_crat_proximity_domain;
-	struct list_head temp_topology_device_list;
-	void *crat_image = NULL;
-	size_t image_size = 0;
-	int res;
-
-	res = kfd_create_crat_image_virtual(&crat_image, &image_size,
-					    COMPUTE_UNIT_GPU, gpu,
-					    proximity_domain);
-	if (res) {
-		pr_err("Error creating VCRAT for GPU (ID: 0x%x)\n",
-		       gpu_id);
-		topology_crat_proximity_domain--;
-		goto err;
-	}
-
-	INIT_LIST_HEAD(&temp_topology_device_list);
-
-	res = kfd_parse_crat_table(crat_image,
-				   &temp_topology_device_list,
-				   proximity_domain);
-	if (res) {
-		pr_err("Error parsing VCRAT for GPU (ID: 0x%x)\n",
-		       gpu_id);
-		topology_crat_proximity_domain--;
-		goto err;
-	}
-
-	kfd_topology_update_device_list(&temp_topology_device_list,
-					&topology_device_list);
-
-	*dev = kfd_assign_gpu(gpu);
-	if (WARN_ON(!*dev)) {
-		res = -ENODEV;
-		goto err;
-	}
-
-	/* Fill the cache affinity information here for the GPUs
-	 * using VCRAT
-	 */
-	kfd_fill_cache_non_crat_info(*dev, gpu);
-
-	/* Update the SYSFS tree, since we added another topology
-	 * device
-	 */
-	res = kfd_topology_update_sysfs();
-	if (!res)
-		sys_props.generation_count++;
-	else
-		pr_err("Failed to update GPU (ID: 0x%x) to sysfs topology. res=%d\n",
-		       gpu_id, res);
-
-err:
-	kfd_destroy_crat_image(crat_image);
-	return res;
-}
-
 int kfd_topology_add_device(struct kfd_dev *gpu)
 {
 	uint32_t gpu_id;
 	struct kfd_topology_device *dev;
 	struct kfd_cu_info cu_info;
 	int res = 0;
+	struct list_head temp_topology_device_list;
+	void *crat_image = NULL;
+	size_t image_size = 0;
+	int proximity_domain;
 	int i;
 	const char *asic_name = amdgpu_asic_name[gpu->adev->asic_type];
+
+	INIT_LIST_HEAD(&temp_topology_device_list);
 
 	gpu_id = kfd_generate_gpu_id(gpu);
 	pr_debug("Adding new GPU (ID: 0x%x) to topology\n", gpu_id);
@@ -1885,11 +1837,54 @@ int kfd_topology_add_device(struct kfd_dev *gpu)
 	 */
 	down_write(&topology_lock);
 	dev = kfd_assign_gpu(gpu);
-	if (!dev)
-		res = kfd_topology_add_device_locked(gpu, gpu_id, &dev);
+	if (!dev) {
+		proximity_domain = ++topology_crat_proximity_domain;
+
+		res = kfd_create_crat_image_virtual(&crat_image, &image_size,
+						    COMPUTE_UNIT_GPU, gpu,
+						    proximity_domain);
+		if (res) {
+			pr_err("Error creating VCRAT for GPU (ID: 0x%x)\n",
+			       gpu_id);
+			topology_crat_proximity_domain--;
+			return res;
+		}
+
+		res = kfd_parse_crat_table(crat_image,
+					   &temp_topology_device_list,
+					   proximity_domain);
+		if (res) {
+			pr_err("Error parsing VCRAT for GPU (ID: 0x%x)\n",
+			       gpu_id);
+			topology_crat_proximity_domain--;
+			goto err;
+		}
+
+		kfd_topology_update_device_list(&temp_topology_device_list,
+			&topology_device_list);
+
+		dev = kfd_assign_gpu(gpu);
+		if (WARN_ON(!dev)) {
+			res = -ENODEV;
+			goto err;
+		}
+
+		/* Fill the cache affinity information here for the GPUs
+		 * using VCRAT
+		 */
+		kfd_fill_cache_non_crat_info(dev, gpu);
+
+		/* Update the SYSFS tree, since we added another topology
+		 * device
+		 */
+		res = kfd_topology_update_sysfs();
+		if (!res)
+			sys_props.generation_count++;
+		else
+			pr_err("Failed to update GPU (ID: 0x%x) to sysfs topology. res=%d\n",
+						gpu_id, res);
+	}
 	up_write(&topology_lock);
-	if (res)
-		return res;
 
 	dev->gpu_id = gpu_id;
 	gpu->id = gpu_id;
@@ -1917,13 +1912,13 @@ int kfd_topology_add_device(struct kfd_dev *gpu)
 		cu_info.num_shader_arrays_per_engine;
 
 	dev->node_props.gfx_target_version = gpu->device_info.gfx_target_version;
-	dev->node_props.vendor_id = gpu->adev->pdev->vendor;
-	dev->node_props.device_id = gpu->adev->pdev->device;
+	dev->node_props.vendor_id = gpu->pdev->vendor;
+	dev->node_props.device_id = gpu->pdev->device;
 	dev->node_props.capability |=
 		((dev->gpu->adev->rev_id << HSA_CAP_ASIC_REVISION_SHIFT) &
 			HSA_CAP_ASIC_REVISION_MASK);
-	dev->node_props.location_id = pci_dev_id(gpu->adev->pdev);
-	dev->node_props.domain = pci_domain_nr(gpu->adev->pdev->bus);
+	dev->node_props.location_id = pci_dev_id(gpu->pdev);
+	dev->node_props.domain = pci_domain_nr(gpu->pdev->bus);
 	dev->node_props.max_engine_clk_fcompute =
 		amdgpu_amdkfd_get_max_engine_clock_in_mhz(dev->gpu->adev);
 	dev->node_props.max_engine_clk_ccompute =
@@ -2012,9 +2007,11 @@ int kfd_topology_add_device(struct kfd_dev *gpu)
 
 	kfd_debug_print_topology();
 
-	kfd_notify_gpu_change(gpu_id, 1);
-
-	return 0;
+	if (!res)
+		kfd_notify_gpu_change(gpu_id, 1);
+err:
+	kfd_destroy_crat_image(crat_image);
+	return res;
 }
 
 /**

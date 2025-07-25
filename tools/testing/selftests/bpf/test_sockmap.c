@@ -1690,42 +1690,24 @@ static void test_txmsg_apply(int cgrp, struct sockmap_options *opt)
 {
 	txmsg_pass = 1;
 	txmsg_redir = 0;
-	txmsg_ingress = 0;
 	txmsg_apply = 1;
 	txmsg_cork = 0;
 	test_send_one(opt, cgrp);
 
 	txmsg_pass = 0;
 	txmsg_redir = 1;
-	txmsg_ingress = 0;
-	txmsg_apply = 1;
-	txmsg_cork = 0;
-	test_send_one(opt, cgrp);
-
-	txmsg_pass = 0;
-	txmsg_redir = 1;
-	txmsg_ingress = 1;
 	txmsg_apply = 1;
 	txmsg_cork = 0;
 	test_send_one(opt, cgrp);
 
 	txmsg_pass = 1;
 	txmsg_redir = 0;
-	txmsg_ingress = 0;
 	txmsg_apply = 1024;
 	txmsg_cork = 0;
 	test_send_large(opt, cgrp);
 
 	txmsg_pass = 0;
 	txmsg_redir = 1;
-	txmsg_ingress = 0;
-	txmsg_apply = 1024;
-	txmsg_cork = 0;
-	test_send_large(opt, cgrp);
-
-	txmsg_pass = 0;
-	txmsg_redir = 1;
-	txmsg_ingress = 1;
 	txmsg_apply = 1024;
 	txmsg_cork = 0;
 	test_send_large(opt, cgrp);
@@ -2104,9 +2086,9 @@ out:
 		free(options.whitelist);
 	if (options.blacklist)
 		free(options.blacklist);
+	close(cg_fd);
 	if (cg_created)
 		cleanup_cgroup_environment();
-	close(cg_fd);
 	return err;
 }
 

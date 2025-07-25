@@ -23,7 +23,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-#include "reg.h"
 #include "utils.h"
 
 #define THREADS		100	/* Max threads */
@@ -42,23 +41,31 @@
 /* Prilvilege state DSCR access */
 inline unsigned long get_dscr(void)
 {
-	return mfspr(SPRN_DSCR_PRIV);
+	unsigned long ret;
+
+	asm volatile("mfspr %0,%1" : "=r" (ret) : "i" (SPRN_DSCR_PRIV));
+
+	return ret;
 }
 
 inline void set_dscr(unsigned long val)
 {
-	mtspr(SPRN_DSCR_PRIV, val);
+	asm volatile("mtspr %1,%0" : : "r" (val), "i" (SPRN_DSCR_PRIV));
 }
 
 /* Problem state DSCR access */
 inline unsigned long get_dscr_usr(void)
 {
-	return mfspr(SPRN_DSCR);
+	unsigned long ret;
+
+	asm volatile("mfspr %0,%1" : "=r" (ret) : "i" (SPRN_DSCR));
+
+	return ret;
 }
 
 inline void set_dscr_usr(unsigned long val)
 {
-	mtspr(SPRN_DSCR, val);
+	asm volatile("mtspr %1,%0" : : "r" (val), "i" (SPRN_DSCR));
 }
 
 /* Default DSCR access */

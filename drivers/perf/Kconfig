@@ -93,7 +93,7 @@ config ARM_PMU_ACPI
 config ARM_SMMU_V3_PMU
 	 tristate "ARM SMMUv3 Performance Monitors Extension"
 	 depends on (ARM64 && ACPI) || (COMPILE_TEST && 64BIT)
-	 depends on GENERIC_MSI_IRQ
+	 depends on GENERIC_MSI_IRQ_DOMAIN
 	   help
 	   Provides support for the ARM SMMUv3 Performance Monitor Counter
 	   Groups (PMCG), which provide monitoring of transactions passing
@@ -199,8 +199,11 @@ config MARVELL_CN10K_DDR_PMU
 	  Enable perf support for Marvell DDR Performance monitoring
 	  event on CN10K platform.
 
-source "drivers/perf/arm_cspmu/Kconfig"
-
-source "drivers/perf/amlogic/Kconfig"
+config DWC_PCIE_PMU
+	tristate "Synopsys DesignWare PCIe PMU"
+	depends on PCI
+	help
+	  Enable perf support for Synopsys DesignWare PCIe PMU Performance
+	  monitoring event on platform including the Alibaba Yitian 710.
 
 endmenu

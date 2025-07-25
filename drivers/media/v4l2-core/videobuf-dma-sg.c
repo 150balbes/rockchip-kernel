@@ -151,16 +151,17 @@ static void videobuf_dma_init(struct videobuf_dmabuf *dma)
 static int videobuf_dma_init_user_locked(struct videobuf_dmabuf *dma,
 			int direction, unsigned long data, unsigned long size)
 {
-	unsigned int gup_flags = FOLL_LONGTERM;
 	unsigned long first, last;
-	int err;
+	int err, rw = 0;
+	unsigned int flags = FOLL_FORCE;
 
 	dma->direction = direction;
 	switch (dma->direction) {
 	case DMA_FROM_DEVICE:
-		gup_flags |= FOLL_WRITE;
+		rw = READ;
 		break;
 	case DMA_TO_DEVICE:
+		rw = WRITE;
 		break;
 	default:
 		BUG();
@@ -176,11 +177,14 @@ static int videobuf_dma_init_user_locked(struct videobuf_dmabuf *dma,
 	if (NULL == dma->pages)
 		return -ENOMEM;
 
+	if (rw == READ)
+		flags |= FOLL_WRITE;
+
 	dprintk(1, "init user [0x%lx+0x%lx => %lu pages]\n",
 		data, size, dma->nr_pages);
 
-	err = pin_user_pages(data & PAGE_MASK, dma->nr_pages, gup_flags,
-			     dma->pages, NULL);
+	err = pin_user_pages(data & PAGE_MASK, dma->nr_pages,
+			     flags | FOLL_LONGTERM, dma->pages, NULL);
 
 	if (err != dma->nr_pages) {
 		dma->nr_pages = (err >= 0) ? err : 0;

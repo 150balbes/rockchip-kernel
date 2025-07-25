@@ -34,8 +34,6 @@
 #include <drm/drm_probe_helper.h>
 
 #include "i915_drv.h"
-#include "i915_irq.h"
-#include "i915_reg.h"
 #include "intel_connector.h"
 #include "intel_crt.h"
 #include "intel_crtc.h"
@@ -345,7 +343,12 @@ intel_crt_mode_valid(struct drm_connector *connector,
 	struct drm_device *dev = connector->dev;
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	int max_dotclk = dev_priv->max_dotclk_freq;
+	enum drm_mode_status status;
 	int max_clock;
+
+	status = intel_cpu_transcoder_mode_valid(dev_priv, mode);
+	if (status != MODE_OK)
+		return status;
 
 	if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
 		return MODE_NO_DBLESCAN;
@@ -1046,14 +1049,17 @@ void intel_crt_init(struct drm_i915_private *dev_priv)
 	intel_connector_attach_encoder(intel_connector, &crt->base);
 
 	crt->base.type = INTEL_OUTPUT_ANALOG;
-	crt->base.cloneable = BIT(INTEL_OUTPUT_DVO) | BIT(INTEL_OUTPUT_HDMI);
+	crt->base.cloneable = (1 << INTEL_OUTPUT_DVO) | (1 << INTEL_OUTPUT_HDMI);
 	if (IS_I830(dev_priv))
 		crt->base.pipe_mask = BIT(PIPE_A);
 	else
 		crt->base.pipe_mask = ~0;
 
-	if (DISPLAY_VER(dev_priv) != 2)
-		connector->interlace_allowed = true;
+	if (DISPLAY_VER(dev_priv) == 2)
+		connector->interlace_allowed = 0;
+	else
+		connector->interlace_allowed = 1;
+	connector->doublescan_allowed = 0;
 
 	crt->adpa_reg = adpa_reg;
 

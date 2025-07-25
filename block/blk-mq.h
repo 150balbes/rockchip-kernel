@@ -362,8 +362,7 @@ static inline bool hctx_may_queue(struct blk_mq_hw_ctx *hctx,
 			return true;
 	}
 
-	users = atomic_read(&hctx->tags->active_queues);
-
+	users = READ_ONCE(hctx->tags->active_queues);
 	if (!users)
 		return true;
 
@@ -377,17 +376,17 @@ static inline bool hctx_may_queue(struct blk_mq_hw_ctx *hctx,
 /* run the code block in @dispatch_ops with rcu/srcu read lock held */
 #define __blk_mq_run_dispatch_ops(q, check_sleep, dispatch_ops)	\
 do {								\
-	if ((q)->tag_set->flags & BLK_MQ_F_BLOCKING) {		\
-		int srcu_idx;					\
-								\
-		might_sleep_if(check_sleep);			\
-		srcu_idx = srcu_read_lock((q)->tag_set->srcu);	\
-		(dispatch_ops);					\
-		srcu_read_unlock((q)->tag_set->srcu, srcu_idx);	\
-	} else {						\
+	if (!blk_queue_has_srcu(q)) {				\
 		rcu_read_lock();				\
 		(dispatch_ops);					\
 		rcu_read_unlock();				\
+	} else {						\
+		int srcu_idx;					\
+								\
+		might_sleep_if(check_sleep);			\
+		srcu_idx = srcu_read_lock((q)->srcu);		\
+		(dispatch_ops);					\
+		srcu_read_unlock((q)->srcu, srcu_idx);		\
 	}							\
 } while (0)
 

@@ -84,7 +84,7 @@ int kvm_arch_init(void *opaque)
 		return -ENODEV;
 	}
 
-	if (sbi_probe_extension(SBI_EXT_RFENCE) <= 0) {
+	if (!sbi_probe_extension(SBI_EXT_RFENCE)) {
 		kvm_info("require SBI RFENCE extension\n");
 		return -ENODEV;
 	}
@@ -127,9 +127,3 @@ static int __init riscv_kvm_init(void)
 	return kvm_init(NULL, sizeof(struct kvm_vcpu), 0, THIS_MODULE);
 }
 module_init(riscv_kvm_init);
-
-static void __exit riscv_kvm_exit(void)
-{
-	kvm_exit();
-}
-module_exit(riscv_kvm_exit);

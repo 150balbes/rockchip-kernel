@@ -32,6 +32,7 @@
 #include <linux/io.h>
 #include <linux/math64.h>
 #include <linux/module.h>
+#include <linux/rational.h>
 
 #include "clk-regmap.h"
 #include "clk-pll.h"
@@ -276,15 +277,15 @@ static int meson_clk_pll_wait_lock(struct clk_hw *hw)
 {
 	struct clk_regmap *clk = to_clk_regmap(hw);
 	struct meson_clk_pll_data *pll = meson_clk_pll_data(clk);
-	int delay = 5000;
+	int delay = 24000000;
 
 	do {
-		/* Is the clock locked now ? Time out after 100ms. */
+		/* Is the clock locked now ? */
 		if (meson_parm_read(clk->map, &pll->l))
 			return 0;
 
-		udelay(20);
-	} while (--delay);
+		delay--;
+	} while (delay > 0);
 
 	return -ETIMEDOUT;
 }
@@ -319,16 +320,12 @@ static int meson_clk_pll_is_enabled(struct clk_hw *hw)
 
 static int meson_clk_pcie_pll_enable(struct clk_hw *hw)
 {
-	int retries = 10;
+	meson_clk_pll_init(hw);
 
-	do {
-		meson_clk_pll_init(hw);
-		if (!meson_clk_pll_wait_lock(hw))
-			return 0;
-		pr_info("Retry enabling PCIe PLL clock\n");
-	} while (--retries);
+	if (meson_clk_pll_wait_lock(hw))
+		return -EIO;
 
-	return -EIO;
+	return 0;
 }
 
 static int meson_clk_pll_enable(struct clk_hw *hw)

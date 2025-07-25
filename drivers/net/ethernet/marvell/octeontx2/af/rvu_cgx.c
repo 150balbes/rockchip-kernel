@@ -114,7 +114,7 @@ static void rvu_map_cgx_nix_block(struct rvu *rvu, int pf,
 	p2x = cgx_lmac_get_p2x(cgx_id, lmac_id);
 	/* Firmware sets P2X_SELECT as either NIX0 or NIX1 */
 	pfvf->nix_blkaddr = BLKADDR_NIX0;
-	if (p2x == CMR_P2X_SEL_NIX1)
+	if (is_rvu_supports_nix1(rvu) && p2x == CMR_P2X_SEL_NIX1)
 		pfvf->nix_blkaddr = BLKADDR_NIX1;
 }
 
@@ -160,6 +160,8 @@ static int rvu_map_cgx_lmac_pf(struct rvu *rvu)
 			continue;
 		lmac_bmap = cgx_get_lmac_bmap(rvu_cgx_pdata(cgx, rvu));
 		for_each_set_bit(iter, &lmac_bmap, rvu->hw->lmac_per_cgx) {
+			if (iter >= MAX_LMAC_COUNT)
+				continue;
 			lmac = cgx_get_lmacid(rvu_cgx_pdata(cgx, rvu),
 					      iter);
 			rvu->pf2cgxlmac_map[pf] = cgxlmac_id_to_bmap(cgx, lmac);
@@ -232,7 +234,7 @@ static void cgx_notify_pfs(struct cgx_link_event *event, struct rvu *rvu)
 	struct cgx_link_user_info *linfo;
 	struct cgx_link_info_msg *msg;
 	unsigned long pfmap;
-	int err, pfid;
+	int pfid;
 
 	linfo = &event->link_uinfo;
 	pfmap = cgxlmac_to_pfmap(rvu, event->cgx_id, event->lmac_id);
@@ -250,16 +252,22 @@ static void cgx_notify_pfs(struct cgx_link_event *event, struct rvu *rvu)
 			continue;
 		}
 
+		mutex_lock(&rvu->mbox_lock);
+
 		/* Send mbox message to PF */
 		msg = otx2_mbox_alloc_msg_cgx_link_event(rvu, pfid);
-		if (!msg)
+		if (!msg) {
+			mutex_unlock(&rvu->mbox_lock);
 			continue;
+		}
+
 		msg->link_info = *linfo;
-		otx2_mbox_msg_send(&rvu->afpf_wq_info.mbox_up, pfid);
-		err = otx2_mbox_wait_for_rsp(&rvu->afpf_wq_info.mbox_up, pfid);
-		if (err)
-			dev_warn(rvu->dev, "notification to pf %d failed\n",
-				 pfid);
+
+		otx2_mbox_wait_for_zero(&rvu->afpf_wq_info.mbox_up, pfid);
+
+		otx2_mbox_msg_send_up(&rvu->afpf_wq_info.mbox_up, pfid);
+
+		mutex_unlock(&rvu->mbox_lock);
 	} while (pfmap);
 }
 
@@ -460,6 +468,23 @@ int rvu_cgx_config_rxtx(struct rvu *rvu, u16 pcifunc, bool start)
 	return mac_ops->mac_rx_tx_enable(cgxd, lmac_id, start);
 }
 
+int rvu_cgx_tx_enable(struct rvu *rvu, u16 pcifunc, bool enable)
+{
+	int pf = rvu_get_pf(pcifunc);
+	struct mac_ops *mac_ops;
+	u8 cgx_id, lmac_id;
+	void *cgxd;
+
+	if (!is_cgx_config_permitted(rvu, pcifunc))
+		return LMAC_AF_ERR_PERM_DENIED;
+
+	rvu_get_cgx_lmac_id(rvu->pf2cgxlmac_map[pf], &cgx_id, &lmac_id);
+	cgxd = rvu_cgx_pdata(cgx_id, rvu);
+	mac_ops = get_mac_ops(cgxd);
+
+	return mac_ops->mac_tx_enable(cgxd, lmac_id, enable);
+}
+
 int rvu_cgx_config_tx(void *cgxd, int lmac_id, bool enable)
 {
 	struct mac_ops *mac_ops;
@@ -472,7 +497,6 @@ void rvu_cgx_disable_dmac_entries(struct rvu *rvu, u16 pcifunc)
 {
 	int pf = rvu_get_pf(pcifunc);
 	int i = 0, lmac_count = 0;
-	struct mac_ops *mac_ops;
 	u8 max_dmac_filters;
 	u8 cgx_id, lmac_id;
 	void *cgx_dev;
@@ -488,12 +512,7 @@ void rvu_cgx_disable_dmac_entries(struct rvu *rvu, u16 pcifunc)
 	rvu_get_cgx_lmac_id(rvu->pf2cgxlmac_map[pf], &cgx_id, &lmac_id);
 	cgx_dev = cgx_get_pdata(cgx_id);
 	lmac_count = cgx_get_lmac_cnt(cgx_dev);
-
-	mac_ops = get_mac_ops(cgx_dev);
-	if (!mac_ops)
-		return;
-
-	max_dmac_filters = mac_ops->dmac_filter_count / lmac_count;
+	max_dmac_filters = MAX_DMAC_ENTRIES_PER_CGX / lmac_count;
 
 	for (i = 0; i < max_dmac_filters; i++)
 		cgx_lmac_addr_del(cgx_id, lmac_id, i);
@@ -579,7 +598,6 @@ int rvu_mbox_handler_cgx_fec_stats(struct rvu *rvu,
 				   struct cgx_fec_stats_rsp *rsp)
 {
 	int pf = rvu_get_pf(req->hdr.pcifunc);
-	struct mac_ops *mac_ops;
 	u8 cgx_idx, lmac;
 	void *cgxd;
 
@@ -588,8 +606,7 @@ int rvu_mbox_handler_cgx_fec_stats(struct rvu *rvu,
 	rvu_get_cgx_lmac_id(rvu->pf2cgxlmac_map[pf], &cgx_idx, &lmac);
 
 	cgxd = rvu_cgx_pdata(cgx_idx, rvu);
-	mac_ops = get_mac_ops(cgxd);
-	return  mac_ops->get_fec_stats(cgxd, lmac, rsp);
+	return cgx_get_fec_stats(cgxd, lmac, rsp);
 }
 
 int rvu_mbox_handler_cgx_mac_addr_set(struct rvu *rvu,
@@ -763,7 +780,7 @@ static int rvu_cgx_ptp_rx_cfg(struct rvu *rvu, u16 pcifunc, bool enable)
 	cgxd = rvu_cgx_pdata(cgx_id, rvu);
 
 	mac_ops = get_mac_ops(cgxd);
-	mac_ops->mac_enadis_ptp_config(cgxd, lmac_id, true);
+	mac_ops->mac_enadis_ptp_config(cgxd, lmac_id, enable);
 	/* If PTP is enabled then inform NPC that packets to be
 	 * parsed by this PF will have their data shifted by 8 bytes
 	 * and if PTP is disabled then no shift is required
@@ -773,6 +790,8 @@ static int rvu_cgx_ptp_rx_cfg(struct rvu *rvu, u16 pcifunc, bool enable)
 	/* This flag is required to clean up CGX conf if app gets killed */
 	pfvf->hw_rx_tstamp_en = enable;
 
+	/* Inform MCS about 8B RX header */
+	rvu_mcs_ptp_cfg(rvu, cgx_id, lmac_id, enable);
 	return 0;
 }
 
@@ -1122,15 +1141,8 @@ int rvu_mbox_handler_cgx_get_aux_link_info(struct rvu *rvu, struct msg_req *req,
 
 	rvu_get_cgx_lmac_id(rvu->pf2cgxlmac_map[pf], &cgx_id, &lmac_id);
 
-	if (rvu->hw->lmac_per_cgx == CGX_LMACS_USX)
-		memcpy(&rsp->fwdata,
-		       &rvu->fwdata->cgx_fw_data_usx[cgx_id][lmac_id],
-		       sizeof(struct cgx_lmac_fwdata_s));
-	else
-		memcpy(&rsp->fwdata,
-		       &rvu->fwdata->cgx_fw_data[cgx_id][lmac_id],
-		       sizeof(struct cgx_lmac_fwdata_s));
-
+	memcpy(&rsp->fwdata, &rvu->fwdata->cgx_fw_data[cgx_id][lmac_id],
+	       sizeof(struct cgx_lmac_fwdata_s));
 	return 0;
 }
 

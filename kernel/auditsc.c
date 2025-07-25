@@ -806,40 +806,6 @@ static int audit_in_mask(const struct audit_krule *rule, unsigned long val)
 }
 
 /**
- * __audit_filter_op - common filter helper for operations (syscall/uring/etc)
- * @tsk: associated task
- * @ctx: audit context
- * @list: audit filter list
- * @name: audit_name (can be NULL)
- * @op: current syscall/uring_op
- *
- * Run the udit filters specified in @list against @tsk using @ctx,
- * @name, and @op, as necessary; the caller is responsible for ensuring
- * that the call is made while the RCU read lock is held. The @name
- * parameter can be NULL, but all others must be specified.
- * Returns 1/true if the filter finds a match, 0/false if none are found.
- */
-static int __audit_filter_op(struct task_struct *tsk,
-			   struct audit_context *ctx,
-			   struct list_head *list,
-			   struct audit_names *name,
-			   unsigned long op)
-{
-	struct audit_entry *e;
-	enum audit_state state;
-
-	list_for_each_entry_rcu(e, list, list) {
-		if (audit_in_mask(&e->rule, op) &&
-		    audit_filter_rules(tsk, &e->rule, ctx, name,
-				       &state, false)) {
-			ctx->current_state = state;
-			return 1;
-		}
-	}
-	return 0;
-}
-
-/**
  * audit_filter_uring - apply filters to an io_uring operation
  * @tsk: associated task
  * @ctx: audit context
@@ -847,12 +813,23 @@ static int __audit_filter_op(struct task_struct *tsk,
 static void audit_filter_uring(struct task_struct *tsk,
 			       struct audit_context *ctx)
 {
+	struct audit_entry *e;
+	enum audit_state state;
+
 	if (auditd_test_task(tsk))
 		return;
 
 	rcu_read_lock();
-	__audit_filter_op(tsk, ctx, &audit_filter_list[AUDIT_FILTER_URING_EXIT],
-			NULL, ctx->uring_op);
+	list_for_each_entry_rcu(e, &audit_filter_list[AUDIT_FILTER_URING_EXIT],
+				list) {
+		if (audit_in_mask(&e->rule, ctx->uring_op) &&
+		    audit_filter_rules(tsk, &e->rule, ctx, NULL, &state,
+				       false)) {
+			rcu_read_unlock();
+			ctx->current_state = state;
+			return;
+		}
+	}
 	rcu_read_unlock();
 }
 
@@ -864,13 +841,24 @@ static void audit_filter_uring(struct task_struct *tsk,
 static void audit_filter_syscall(struct task_struct *tsk,
 				 struct audit_context *ctx)
 {
+	struct audit_entry *e;
+	enum audit_state state;
+
 	if (auditd_test_task(tsk))
 		return;
 
 	rcu_read_lock();
-	__audit_filter_op(tsk, ctx, &audit_filter_list[AUDIT_FILTER_EXIT],
-			NULL, ctx->major);
+	list_for_each_entry_rcu(e, &audit_filter_list[AUDIT_FILTER_EXIT], list) {
+		if (audit_in_mask(&e->rule, ctx->major) &&
+		    audit_filter_rules(tsk, &e->rule, ctx, NULL,
+				       &state, false)) {
+			rcu_read_unlock();
+			ctx->current_state = state;
+			return;
+		}
+	}
 	rcu_read_unlock();
+	return;
 }
 
 /*
@@ -882,8 +870,17 @@ static int audit_filter_inode_name(struct task_struct *tsk,
 				   struct audit_context *ctx) {
 	int h = audit_hash_ino((u32)n->ino);
 	struct list_head *list = &audit_inode_hash[h];
+	struct audit_entry *e;
+	enum audit_state state;
 
-	return __audit_filter_op(tsk, ctx, list, n, ctx->major);
+	list_for_each_entry_rcu(e, list, list) {
+		if (audit_in_mask(&e->rule, ctx->major) &&
+		    audit_filter_rules(tsk, &e->rule, ctx, n, &state, false)) {
+			ctx->current_state = state;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 /* At syscall exit time, this filter is called if any audit_names have been
@@ -2211,7 +2208,7 @@ __audit_reusename(const __user char *uptr)
 		if (!n->name)
 			continue;
 		if (n->name->uptr == uptr) {
-			n->name->refcnt++;
+			atomic_inc(&n->name->refcnt);
 			return n->name;
 		}
 	}
@@ -2240,7 +2237,7 @@ void __audit_getname(struct filename *name)
 	n->name = name;
 	n->name_len = AUDIT_NAME_FULL;
 	name->aname = n;
-	name->refcnt++;
+	atomic_inc(&name->refcnt);
 }
 
 static inline int audit_copy_fcaps(struct audit_names *name,
@@ -2372,7 +2369,7 @@ out_alloc:
 		return;
 	if (name) {
 		n->name = name;
-		name->refcnt++;
+		atomic_inc(&name->refcnt);
 	}
 
 out:
@@ -2459,6 +2456,8 @@ void __audit_inode_child(struct inode *parent,
 		}
 	}
 
+	cond_resched();
+
 	/* is there a matching child entry? */
 	list_for_each_entry(n, &context->names_list, list) {
 		/* can only match entries that have a name */
@@ -2497,7 +2496,7 @@ void __audit_inode_child(struct inode *parent,
 		if (found_parent) {
 			found_child->name = found_parent->name;
 			found_child->name_len = AUDIT_NAME_FULL;
-			found_child->name->refcnt++;
+			atomic_inc(&found_child->name->refcnt);
 		}
 	}
 

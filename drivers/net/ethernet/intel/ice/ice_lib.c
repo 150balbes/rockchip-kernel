@@ -117,14 +117,8 @@ static int ice_vsi_alloc_arrays(struct ice_vsi *vsi)
 	if (!vsi->q_vectors)
 		goto err_vectors;
 
-	vsi->af_xdp_zc_qps = bitmap_zalloc(max_t(int, vsi->alloc_txq, vsi->alloc_rxq), GFP_KERNEL);
-	if (!vsi->af_xdp_zc_qps)
-		goto err_zc_qps;
-
 	return 0;
 
-err_zc_qps:
-	devm_kfree(dev, vsi->q_vectors);
 err_vectors:
 	devm_kfree(dev, vsi->rxq_map);
 err_rxq_map:
@@ -320,31 +314,17 @@ static void ice_vsi_free_arrays(struct ice_vsi *vsi)
 
 	dev = ice_pf_to_dev(pf);
 
-	if (vsi->af_xdp_zc_qps) {
-		bitmap_free(vsi->af_xdp_zc_qps);
-		vsi->af_xdp_zc_qps = NULL;
-	}
 	/* free the ring and vector containers */
-	if (vsi->q_vectors) {
-		devm_kfree(dev, vsi->q_vectors);
-		vsi->q_vectors = NULL;
-	}
-	if (vsi->tx_rings) {
-		devm_kfree(dev, vsi->tx_rings);
-		vsi->tx_rings = NULL;
-	}
-	if (vsi->rx_rings) {
-		devm_kfree(dev, vsi->rx_rings);
-		vsi->rx_rings = NULL;
-	}
-	if (vsi->txq_map) {
-		devm_kfree(dev, vsi->txq_map);
-		vsi->txq_map = NULL;
-	}
-	if (vsi->rxq_map) {
-		devm_kfree(dev, vsi->rxq_map);
-		vsi->rxq_map = NULL;
-	}
+	devm_kfree(dev, vsi->q_vectors);
+	vsi->q_vectors = NULL;
+	devm_kfree(dev, vsi->tx_rings);
+	vsi->tx_rings = NULL;
+	devm_kfree(dev, vsi->rx_rings);
+	vsi->rx_rings = NULL;
+	devm_kfree(dev, vsi->txq_map);
+	vsi->txq_map = NULL;
+	devm_kfree(dev, vsi->rxq_map);
+	vsi->rxq_map = NULL;
 }
 
 /**
@@ -445,49 +425,6 @@ static irqreturn_t ice_eswitch_msix_clean_rings(int __always_unused irq, void *d
 	rcu_read_unlock();
 
 	return IRQ_HANDLED;
-}
-
-/**
- * ice_vsi_alloc_stat_arrays - Allocate statistics arrays
- * @vsi: VSI pointer
- */
-static int ice_vsi_alloc_stat_arrays(struct ice_vsi *vsi)
-{
-	struct ice_vsi_stats *vsi_stat;
-	struct ice_pf *pf = vsi->back;
-
-	if (vsi->type == ICE_VSI_CHNL)
-		return 0;
-	if (!pf->vsi_stats)
-		return -ENOENT;
-
-	vsi_stat = kzalloc(sizeof(*vsi_stat), GFP_KERNEL);
-	if (!vsi_stat)
-		return -ENOMEM;
-
-	vsi_stat->tx_ring_stats =
-		kcalloc(vsi->alloc_txq, sizeof(*vsi_stat->tx_ring_stats),
-			GFP_KERNEL);
-	if (!vsi_stat->tx_ring_stats)
-		goto err_alloc_tx;
-
-	vsi_stat->rx_ring_stats =
-		kcalloc(vsi->alloc_rxq, sizeof(*vsi_stat->rx_ring_stats),
-			GFP_KERNEL);
-	if (!vsi_stat->rx_ring_stats)
-		goto err_alloc_rx;
-
-	pf->vsi_stats[vsi->idx] = vsi_stat;
-
-	return 0;
-
-err_alloc_rx:
-	kfree(vsi_stat->rx_ring_stats);
-err_alloc_tx:
-	kfree(vsi_stat->tx_ring_stats);
-	kfree(vsi_stat);
-	pf->vsi_stats[vsi->idx] = NULL;
-	return -ENOMEM;
 }
 
 /**
@@ -603,11 +540,6 @@ ice_vsi_alloc(struct ice_pf *pf, enum ice_vsi_type vsi_type,
 
 	if (vsi->type == ICE_VSI_CTRL && vf)
 		vf->ctrl_vsi_idx = vsi->idx;
-
-	/* allocate memory for Tx/Rx ring stat pointers */
-	if (ice_vsi_alloc_stat_arrays(vsi))
-		goto err_rings;
-
 	goto unlock_pf;
 
 err_rings:
@@ -835,10 +767,8 @@ static void ice_rss_clean(struct ice_vsi *vsi)
 
 	dev = ice_pf_to_dev(pf);
 
-	if (vsi->rss_hkey_user)
-		devm_kfree(dev, vsi->rss_hkey_user);
-	if (vsi->rss_lut_user)
-		devm_kfree(dev, vsi->rss_lut_user);
+	devm_kfree(dev, vsi->rss_hkey_user);
+	devm_kfree(dev, vsi->rss_lut_user);
 
 	ice_vsi_clean_rss_flow_fld(vsi);
 	/* remove RSS replay list */
@@ -926,7 +856,8 @@ static void ice_set_dflt_vsi_ctx(struct ice_hw *hw, struct ice_vsi_ctx *ctxt)
 	 */
 	if (ice_is_dvm_ena(hw)) {
 		ctxt->info.inner_vlan_flags |=
-			ICE_AQ_VSI_INNER_VLAN_EMODE_NOTHING;
+			FIELD_PREP(ICE_AQ_VSI_INNER_VLAN_EMODE_M,
+				   ICE_AQ_VSI_INNER_VLAN_EMODE_NOTHING);
 		ctxt->info.outer_vlan_flags =
 			(ICE_AQ_VSI_OUTER_VLAN_TX_MODE_ALL <<
 			 ICE_AQ_VSI_OUTER_VLAN_TX_MODE_S) &
@@ -1133,12 +1064,12 @@ static void ice_set_rss_vsi_ctx(struct ice_vsi_ctx *ctxt, struct ice_vsi *vsi)
 	case ICE_VSI_PF:
 		/* PF VSI will inherit RSS instance of PF */
 		lut_type = ICE_AQ_VSI_Q_OPT_RSS_LUT_PF;
-		hash_type = ICE_AQ_VSI_Q_OPT_RSS_TPLZ;
+		hash_type = ICE_AQ_VSI_Q_OPT_RSS_HASH_TPLZ;
 		break;
 	case ICE_VSI_VF:
 		/* VF VSI will gets a small RSS table which is a VSI LUT type */
 		lut_type = ICE_AQ_VSI_Q_OPT_RSS_LUT_VSI;
-		hash_type = ICE_AQ_VSI_Q_OPT_RSS_TPLZ;
+		hash_type = ICE_AQ_VSI_Q_OPT_RSS_HASH_TPLZ;
 		break;
 	default:
 		dev_dbg(dev, "Unsupported VSI type %s\n",
@@ -1148,8 +1079,7 @@ static void ice_set_rss_vsi_ctx(struct ice_vsi_ctx *ctxt, struct ice_vsi *vsi)
 
 	ctxt->info.q_opt_rss = ((lut_type << ICE_AQ_VSI_Q_OPT_RSS_LUT_S) &
 				ICE_AQ_VSI_Q_OPT_RSS_LUT_M) |
-				((hash_type << ICE_AQ_VSI_Q_OPT_RSS_HASH_S) &
-				 ICE_AQ_VSI_Q_OPT_RSS_HASH_M);
+				(hash_type & ICE_AQ_VSI_Q_OPT_RSS_HASH_M);
 }
 
 static void
@@ -1584,106 +1514,6 @@ err_out:
 }
 
 /**
- * ice_vsi_free_stats - Free the ring statistics structures
- * @vsi: VSI pointer
- */
-static void ice_vsi_free_stats(struct ice_vsi *vsi)
-{
-	struct ice_vsi_stats *vsi_stat;
-	struct ice_pf *pf = vsi->back;
-	int i;
-
-	if (vsi->type == ICE_VSI_CHNL)
-		return;
-	if (!pf->vsi_stats)
-		return;
-
-	vsi_stat = pf->vsi_stats[vsi->idx];
-	if (!vsi_stat)
-		return;
-
-	ice_for_each_alloc_txq(vsi, i) {
-		if (vsi_stat->tx_ring_stats[i]) {
-			kfree_rcu(vsi_stat->tx_ring_stats[i], rcu);
-			WRITE_ONCE(vsi_stat->tx_ring_stats[i], NULL);
-		}
-	}
-
-	ice_for_each_alloc_rxq(vsi, i) {
-		if (vsi_stat->rx_ring_stats[i]) {
-			kfree_rcu(vsi_stat->rx_ring_stats[i], rcu);
-			WRITE_ONCE(vsi_stat->rx_ring_stats[i], NULL);
-		}
-	}
-
-	kfree(vsi_stat->tx_ring_stats);
-	kfree(vsi_stat->rx_ring_stats);
-	kfree(vsi_stat);
-	pf->vsi_stats[vsi->idx] = NULL;
-}
-
-/**
- * ice_vsi_alloc_ring_stats - Allocates Tx and Rx ring stats for the VSI
- * @vsi: VSI which is having stats allocated
- */
-static int ice_vsi_alloc_ring_stats(struct ice_vsi *vsi)
-{
-	struct ice_ring_stats **tx_ring_stats;
-	struct ice_ring_stats **rx_ring_stats;
-	struct ice_vsi_stats *vsi_stats;
-	struct ice_pf *pf = vsi->back;
-	u16 i;
-
-	vsi_stats = pf->vsi_stats[vsi->idx];
-	tx_ring_stats = vsi_stats->tx_ring_stats;
-	rx_ring_stats = vsi_stats->rx_ring_stats;
-
-	/* Allocate Tx ring stats */
-	ice_for_each_alloc_txq(vsi, i) {
-		struct ice_ring_stats *ring_stats;
-		struct ice_tx_ring *ring;
-
-		ring = vsi->tx_rings[i];
-		ring_stats = tx_ring_stats[i];
-
-		if (!ring_stats) {
-			ring_stats = kzalloc(sizeof(*ring_stats), GFP_KERNEL);
-			if (!ring_stats)
-				goto err_out;
-
-			WRITE_ONCE(tx_ring_stats[i], ring_stats);
-		}
-
-		ring->ring_stats = ring_stats;
-	}
-
-	/* Allocate Rx ring stats */
-	ice_for_each_alloc_rxq(vsi, i) {
-		struct ice_ring_stats *ring_stats;
-		struct ice_rx_ring *ring;
-
-		ring = vsi->rx_rings[i];
-		ring_stats = rx_ring_stats[i];
-
-		if (!ring_stats) {
-			ring_stats = kzalloc(sizeof(*ring_stats), GFP_KERNEL);
-			if (!ring_stats)
-				goto err_out;
-
-			 WRITE_ONCE(rx_ring_stats[i], ring_stats);
-		}
-
-		ring->ring_stats = ring_stats;
-	}
-
-	return 0;
-
-err_out:
-	ice_vsi_free_stats(vsi);
-	return -ENOMEM;
-}
-
-/**
  * ice_vsi_manage_rss_lut - disable/enable RSS
  * @vsi: the VSI being changed
  * @ena: boolean value indicating if this is an enable or disable request
@@ -1943,14 +1773,10 @@ void ice_update_eth_stats(struct ice_vsi *vsi)
 {
 	struct ice_eth_stats *prev_es, *cur_es;
 	struct ice_hw *hw = &vsi->back->hw;
-	struct ice_pf *pf = vsi->back;
 	u16 vsi_num = vsi->vsi_num;    /* HW absolute index of a VSI */
 
 	prev_es = &vsi->eth_stats_prev;
 	cur_es = &vsi->eth_stats;
-
-	if (ice_is_reset_in_progress(pf->state))
-		vsi->stat_offsets_loaded = false;
 
 	ice_stat_update40(hw, GLV_GORCL(vsi_num), vsi->stat_offsets_loaded,
 			  &prev_es->rx_bytes, &cur_es->rx_bytes);
@@ -2728,10 +2554,6 @@ ice_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi,
 		if (ret)
 			goto unroll_vector_base;
 
-		ret = ice_vsi_alloc_ring_stats(vsi);
-		if (ret)
-			goto unroll_vector_base;
-
 		ice_vsi_map_rings_to_vectors(vsi);
 
 		/* ICE_VSI_CTRL does not need RSS so skip RSS processing */
@@ -2770,9 +2592,6 @@ ice_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi,
 		if (ret)
 			goto unroll_vector_base;
 
-		ret = ice_vsi_alloc_ring_stats(vsi);
-		if (ret)
-			goto unroll_vector_base;
 		/* Do not exit if configuring RSS had an issue, at least
 		 * receive traffic on first queue. Hence no need to capture
 		 * return value
@@ -2786,11 +2605,6 @@ ice_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi,
 		ret = ice_vsi_alloc_rings(vsi);
 		if (ret)
 			goto unroll_vsi_init;
-
-		ret = ice_vsi_alloc_ring_stats(vsi);
-		if (ret)
-			goto unroll_vector_base;
-
 		break;
 	default:
 		/* clean up the resources and exit */
@@ -2850,7 +2664,6 @@ unroll_vector_base:
 unroll_alloc_q_vector:
 	ice_vsi_free_q_vectors(vsi);
 unroll_vsi_init:
-	ice_vsi_free_stats(vsi);
 	ice_vsi_delete(vsi);
 unroll_get_qs:
 	ice_vsi_put_qs(vsi);
@@ -3242,7 +3055,7 @@ int ice_vsi_release(struct ice_vsi *vsi)
 	    vsi->agg_node && vsi->agg_node->valid)
 		vsi->agg_node->num_vsis--;
 	ice_vsi_clear_rings(vsi);
-	ice_vsi_free_stats(vsi);
+
 	ice_vsi_put_qs(vsi);
 
 	/* retain SW VSI data structure since it is needed to unregister and
@@ -3370,47 +3183,6 @@ ice_vsi_rebuild_set_coalesce(struct ice_vsi *vsi,
 }
 
 /**
- * ice_vsi_realloc_stat_arrays - Frees unused stat structures
- * @vsi: VSI pointer
- * @prev_txq: Number of Tx rings before ring reallocation
- * @prev_rxq: Number of Rx rings before ring reallocation
- */
-static int
-ice_vsi_realloc_stat_arrays(struct ice_vsi *vsi, int prev_txq, int prev_rxq)
-{
-	struct ice_vsi_stats *vsi_stat;
-	struct ice_pf *pf = vsi->back;
-	int i;
-
-	if (!prev_txq || !prev_rxq)
-		return 0;
-	if (vsi->type == ICE_VSI_CHNL)
-		return 0;
-
-	vsi_stat = pf->vsi_stats[vsi->idx];
-
-	if (vsi->num_txq < prev_txq) {
-		for (i = vsi->num_txq; i < prev_txq; i++) {
-			if (vsi_stat->tx_ring_stats[i]) {
-				kfree_rcu(vsi_stat->tx_ring_stats[i], rcu);
-				WRITE_ONCE(vsi_stat->tx_ring_stats[i], NULL);
-			}
-		}
-	}
-
-	if (vsi->num_rxq < prev_rxq) {
-		for (i = vsi->num_rxq; i < prev_rxq; i++) {
-			if (vsi_stat->rx_ring_stats[i]) {
-				kfree_rcu(vsi_stat->rx_ring_stats[i], rcu);
-				WRITE_ONCE(vsi_stat->rx_ring_stats[i], NULL);
-			}
-		}
-	}
-
-	return 0;
-}
-
-/**
  * ice_vsi_rebuild - Rebuild VSI after reset
  * @vsi: VSI to be rebuild
  * @init_vsi: is this an initialization or a reconfigure of the VSI
@@ -3421,10 +3193,10 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 {
 	u16 max_txqs[ICE_MAX_TRAFFIC_CLASS] = { 0 };
 	struct ice_coalesce_stored *coalesce;
-	int ret, i, prev_txq, prev_rxq;
 	int prev_num_q_vectors = 0;
 	enum ice_vsi_type vtype;
 	struct ice_pf *pf;
+	int ret, i;
 
 	if (!vsi)
 		return -EINVAL;
@@ -3442,9 +3214,6 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 		return -ENOMEM;
 
 	prev_num_q_vectors = ice_vsi_rebuild_get_coalesce(vsi, coalesce);
-
-	prev_txq = vsi->num_txq;
-	prev_rxq = vsi->num_rxq;
 
 	ice_rm_vsi_lan_cfg(vsi->port_info, vsi->idx);
 	ret = ice_rm_vsi_rdma_cfg(vsi->port_info, vsi->idx);
@@ -3512,13 +3281,7 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 		if (ret)
 			goto err_vectors;
 
-		ret = ice_vsi_alloc_ring_stats(vsi);
-		if (ret)
-			goto err_vectors;
-
 		ice_vsi_map_rings_to_vectors(vsi);
-
-		vsi->stat_offsets_loaded = false;
 		if (ice_is_xdp_ena_vsi(vsi)) {
 			ret = ice_vsi_determine_xdp_res(vsi);
 			if (ret)
@@ -3555,11 +3318,6 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 		if (ret)
 			goto err_vectors;
 
-		ret = ice_vsi_alloc_ring_stats(vsi);
-		if (ret)
-			goto err_vectors;
-
-		vsi->stat_offsets_loaded = false;
 		break;
 	case ICE_VSI_CHNL:
 		if (test_bit(ICE_FLAG_RSS_ENA, pf->flags)) {
@@ -3607,10 +3365,6 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 			return ice_schedule_reset(pf, ICE_RESET_PFR);
 		}
 	}
-
-	if (ice_vsi_realloc_stat_arrays(vsi, prev_txq, prev_rxq))
-		goto err_vectors;
-
 	ice_vsi_rebuild_set_coalesce(vsi, coalesce, prev_num_q_vectors);
 	kfree(coalesce);
 
@@ -3952,9 +3706,9 @@ static void ice_update_ring_stats(struct ice_q_stats *stats, u64 pkts, u64 bytes
  */
 void ice_update_tx_ring_stats(struct ice_tx_ring *tx_ring, u64 pkts, u64 bytes)
 {
-	u64_stats_update_begin(&tx_ring->ring_stats->syncp);
-	ice_update_ring_stats(&tx_ring->ring_stats->stats, pkts, bytes);
-	u64_stats_update_end(&tx_ring->ring_stats->syncp);
+	u64_stats_update_begin(&tx_ring->syncp);
+	ice_update_ring_stats(&tx_ring->stats, pkts, bytes);
+	u64_stats_update_end(&tx_ring->syncp);
 }
 
 /**
@@ -3965,9 +3719,9 @@ void ice_update_tx_ring_stats(struct ice_tx_ring *tx_ring, u64 pkts, u64 bytes)
  */
 void ice_update_rx_ring_stats(struct ice_rx_ring *rx_ring, u64 pkts, u64 bytes)
 {
-	u64_stats_update_begin(&rx_ring->ring_stats->syncp);
-	ice_update_ring_stats(&rx_ring->ring_stats->stats, pkts, bytes);
-	u64_stats_update_end(&rx_ring->ring_stats->syncp);
+	u64_stats_update_begin(&rx_ring->syncp);
+	ice_update_ring_stats(&rx_ring->stats, pkts, bytes);
+	u64_stats_update_end(&rx_ring->syncp);
 }
 
 /**
@@ -4074,11 +3828,33 @@ int ice_clear_dflt_vsi(struct ice_vsi *vsi)
  */
 int ice_get_link_speed_mbps(struct ice_vsi *vsi)
 {
-	unsigned int link_speed;
-
-	link_speed = vsi->port_info->phy.link_info.link_speed;
-
-	return (int)ice_get_link_speed(fls(link_speed) - 1);
+	switch (vsi->port_info->phy.link_info.link_speed) {
+	case ICE_AQ_LINK_SPEED_100GB:
+		return SPEED_100000;
+	case ICE_AQ_LINK_SPEED_50GB:
+		return SPEED_50000;
+	case ICE_AQ_LINK_SPEED_40GB:
+		return SPEED_40000;
+	case ICE_AQ_LINK_SPEED_25GB:
+		return SPEED_25000;
+	case ICE_AQ_LINK_SPEED_20GB:
+		return SPEED_20000;
+	case ICE_AQ_LINK_SPEED_10GB:
+		return SPEED_10000;
+	case ICE_AQ_LINK_SPEED_5GB:
+		return SPEED_5000;
+	case ICE_AQ_LINK_SPEED_2500MB:
+		return SPEED_2500;
+	case ICE_AQ_LINK_SPEED_1000MB:
+		return SPEED_1000;
+	case ICE_AQ_LINK_SPEED_100MB:
+		return SPEED_100;
+	case ICE_AQ_LINK_SPEED_10MB:
+		return SPEED_10;
+	case ICE_AQ_LINK_SPEED_UNKNOWN:
+	default:
+		return 0;
+	}
 }
 
 /**

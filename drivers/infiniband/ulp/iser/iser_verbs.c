@@ -135,7 +135,6 @@ iser_create_fastreg_desc(struct iser_device *device,
 			goto err_alloc_mr_integrity;
 		}
 	}
-	desc->rsc.mr_valid = 0;
 
 	return desc;
 
@@ -347,6 +346,22 @@ static void iser_device_try_release(struct iser_device *device)
 	mutex_unlock(&ig.device_list_mutex);
 }
 
+/*
+ * Called with state mutex held
+ */
+static int iser_conn_state_comp_exch(struct iser_conn *iser_conn,
+				     enum iser_conn_state comp,
+				     enum iser_conn_state exch)
+{
+	int ret;
+
+	ret = (iser_conn->state == comp);
+	if (ret)
+		iser_conn->state = exch;
+
+	return ret;
+}
+
 void iser_release_work(struct work_struct *work)
 {
 	struct iser_conn *iser_conn;
@@ -448,13 +463,11 @@ int iser_conn_terminate(struct iser_conn *iser_conn)
 	struct ib_conn *ib_conn = &iser_conn->ib_conn;
 	int err = 0;
 
-	lockdep_assert_held(&iser_conn->state_mutex);
-
 	/* terminate the iser conn only if the conn state is UP */
-	if (iser_conn->state != ISER_CONN_UP)
+	if (!iser_conn_state_comp_exch(iser_conn, ISER_CONN_UP,
+				       ISER_CONN_TERMINATING))
 		return 0;
 
-	iser_conn->state = ISER_CONN_TERMINATING;
 	iser_info("iser_conn %p state %d\n", iser_conn, iser_conn->state);
 
 	/* suspend queuing of new iscsi commands */
@@ -484,10 +497,9 @@ int iser_conn_terminate(struct iser_conn *iser_conn)
  */
 static void iser_connect_error(struct rdma_cm_id *cma_id)
 {
-	struct iser_conn *iser_conn = cma_id->context;
+	struct iser_conn *iser_conn;
 
-	lockdep_assert_held(&iser_conn->state_mutex);
-
+	iser_conn = cma_id->context;
 	iser_conn->state = ISER_CONN_TERMINATING;
 }
 
@@ -529,13 +541,12 @@ static void iser_calc_scsi_params(struct iser_conn *iser_conn,
  */
 static void iser_addr_handler(struct rdma_cm_id *cma_id)
 {
-	struct iser_conn *iser_conn = cma_id->context;
 	struct iser_device *device;
+	struct iser_conn *iser_conn;
 	struct ib_conn *ib_conn;
 	int    ret;
 
-	lockdep_assert_held(&iser_conn->state_mutex);
-
+	iser_conn = cma_id->context;
 	if (iser_conn->state != ISER_CONN_PENDING)
 		/* bailout */
 		return;
@@ -585,8 +596,6 @@ static void iser_route_handler(struct rdma_cm_id *cma_id)
 	struct ib_conn *ib_conn = &iser_conn->ib_conn;
 	struct ib_device *ib_dev = ib_conn->device->ib_device;
 
-	lockdep_assert_held(&iser_conn->state_mutex);
-
 	if (iser_conn->state != ISER_CONN_PENDING)
 		/* bailout */
 		return;
@@ -619,18 +628,14 @@ failure:
 	iser_connect_error(cma_id);
 }
 
-/*
- * Called with state mutex held
- */
 static void iser_connected_handler(struct rdma_cm_id *cma_id,
 				   const void *private_data)
 {
-	struct iser_conn *iser_conn = cma_id->context;
+	struct iser_conn *iser_conn;
 	struct ib_qp_attr attr;
 	struct ib_qp_init_attr init_attr;
 
-	lockdep_assert_held(&iser_conn->state_mutex);
-
+	iser_conn = cma_id->context;
 	if (iser_conn->state != ISER_CONN_PENDING)
 		/* bailout */
 		return;
@@ -651,20 +656,10 @@ static void iser_connected_handler(struct rdma_cm_id *cma_id,
 	complete(&iser_conn->up_completion);
 }
 
-/*
- * Called with state mutex held
- */
-static void iser_cleanup_handler(struct rdma_cm_id *cma_id,
-				 bool destroy)
+static void iser_disconnected_handler(struct rdma_cm_id *cma_id)
 {
 	struct iser_conn *iser_conn = cma_id->context;
 
-	lockdep_assert_held(&iser_conn->state_mutex);
-	/*
-	 * We are not guaranteed that we visited disconnected_handler
-	 * by now, call it here to be safe that we handle CM drep
-	 * and flush errors.
-	 */
 	if (iser_conn_terminate(iser_conn)) {
 		if (iser_conn->iscsi_conn)
 			iscsi_conn_failure(iser_conn->iscsi_conn,
@@ -672,6 +667,19 @@ static void iser_cleanup_handler(struct rdma_cm_id *cma_id,
 		else
 			iser_err("iscsi_iser connection isn't bound\n");
 	}
+}
+
+static void iser_cleanup_handler(struct rdma_cm_id *cma_id,
+				 bool destroy)
+{
+	struct iser_conn *iser_conn = cma_id->context;
+
+	/*
+	 * We are not guaranteed that we visited disconnected_handler
+	 * by now, call it here to be safe that we handle CM drep
+	 * and flush errors.
+	 */
+	iser_disconnected_handler(cma_id);
 	iser_free_ib_conn_res(iser_conn, destroy);
 	complete(&iser_conn->ib_completion);
 }

@@ -44,9 +44,8 @@
 
 #include "kvm_util.h"
 #include "test_util.h"
-#include "memstress.h"
+#include "perf_test_util.h"
 #include "guest_modes.h"
-#include "processor.h"
 
 /* Global variable used to synchronize all of the vCPU threads. */
 static int iteration;
@@ -58,6 +57,9 @@ static enum {
 	/* Mark the vCPU's memory idle in page_idle. */
 	ITERATION_MARK_IDLE,
 } iteration_work;
+
+/* Set to true when vCPU threads should exit. */
+static bool done;
 
 /* The iteration that was last completed by each vCPU. */
 static int vcpu_last_completed_iteration[KVM_MAX_VCPUS];
@@ -124,7 +126,7 @@ static void mark_page_idle(int page_idle_fd, uint64_t pfn)
 }
 
 static void mark_vcpu_memory_idle(struct kvm_vm *vm,
-				  struct memstress_vcpu_args *vcpu_args)
+				  struct perf_test_vcpu_args *vcpu_args)
 {
 	int vcpu_idx = vcpu_args->vcpu_idx;
 	uint64_t base_gva = vcpu_args->gva;
@@ -146,7 +148,7 @@ static void mark_vcpu_memory_idle(struct kvm_vm *vm,
 	TEST_ASSERT(pagemap_fd > 0, "Failed to open pagemap.");
 
 	for (page = 0; page < pages; page++) {
-		uint64_t gva = base_gva + page * memstress_args.guest_page_size;
+		uint64_t gva = base_gva + page * perf_test_args.guest_page_size;
 		uint64_t pfn = lookup_pfn(pagemap_fd, vm, gva);
 
 		if (!pfn) {
@@ -178,21 +180,16 @@ static void mark_vcpu_memory_idle(struct kvm_vm *vm,
 	 * access tracking but low enough as to not make the test too brittle
 	 * over time and across architectures.
 	 *
-	 * When running the guest as a nested VM, "warn" instead of asserting
-	 * as the TLB size is effectively unlimited and the KVM doesn't
-	 * explicitly flush the TLB when aging SPTEs.  As a result, more pages
-	 * are cached and the guest won't see the "idle" bit cleared.
+	 * Note that when run in nested virtualization, this check will trigger
+	 * much more frequently because TLB size is unlimited and since no flush
+	 * happens, much more pages are cached there and guest won't see the
+	 * "idle" bit cleared.
 	 */
-	if (still_idle >= pages / 10) {
-#ifdef __x86_64__
-		TEST_ASSERT(this_cpu_has(X86_FEATURE_HYPERVISOR),
-			    "vCPU%d: Too many pages still idle (%lu out of %lu)",
-			    vcpu_idx, still_idle, pages);
-#endif
-		printf("WARNING: vCPU%d: Too many pages still idle (%lu out of %lu), "
-		       "this will affect performance results.\n",
+	if (still_idle < pages / 10)
+		printf("WARNING: vCPU%d: Too many pages still idle (%" PRIu64
+		       "out of %" PRIu64 "), this will affect performance results"
+		       ".\n",
 		       vcpu_idx, still_idle, pages);
-	}
 
 	close(page_idle_fd);
 	close(pagemap_fd);
@@ -214,7 +211,7 @@ static bool spin_wait_for_next_iteration(int *current_iteration)
 	int last_iteration = *current_iteration;
 
 	do {
-		if (READ_ONCE(memstress_args.stop_vcpus))
+		if (READ_ONCE(done))
 			return false;
 
 		*current_iteration = READ_ONCE(iteration);
@@ -223,10 +220,10 @@ static bool spin_wait_for_next_iteration(int *current_iteration)
 	return true;
 }
 
-static void vcpu_thread_main(struct memstress_vcpu_args *vcpu_args)
+static void vcpu_thread_main(struct perf_test_vcpu_args *vcpu_args)
 {
 	struct kvm_vcpu *vcpu = vcpu_args->vcpu;
-	struct kvm_vm *vm = memstress_args.vm;
+	struct kvm_vm *vm = perf_test_args.vm;
 	int vcpu_idx = vcpu_args->vcpu_idx;
 	int current_iteration = 0;
 
@@ -282,7 +279,7 @@ static void run_iteration(struct kvm_vm *vm, int nr_vcpus, const char *descripti
 static void access_memory(struct kvm_vm *vm, int nr_vcpus,
 			  enum access_type access, const char *description)
 {
-	memstress_set_write_percent(vm, (access == ACCESS_READ) ? 0 : 100);
+	perf_test_set_wr_fract(vm, (access == ACCESS_READ) ? INT_MAX : 1);
 	iteration_work = ITERATION_ACCESS_MEMORY;
 	run_iteration(vm, nr_vcpus, description);
 }
@@ -306,10 +303,10 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 	struct kvm_vm *vm;
 	int nr_vcpus = params->nr_vcpus;
 
-	vm = memstress_create_vm(mode, nr_vcpus, params->vcpu_memory_bytes, 1,
+	vm = perf_test_create_vm(mode, nr_vcpus, params->vcpu_memory_bytes, 1,
 				 params->backing_src, !overlap_memory_access);
 
-	memstress_start_vcpu_threads(nr_vcpus, vcpu_thread_main);
+	perf_test_start_vcpu_threads(nr_vcpus, vcpu_thread_main);
 
 	pr_info("\n");
 	access_memory(vm, nr_vcpus, ACCESS_WRITE, "Populating memory");
@@ -324,8 +321,11 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 	mark_memory_idle(vm, nr_vcpus);
 	access_memory(vm, nr_vcpus, ACCESS_READ, "Reading from idle memory");
 
-	memstress_join_vcpu_threads(nr_vcpus);
-	memstress_destroy_vm(vm);
+	/* Set done to signal the vCPU threads to exit */
+	done = true;
+
+	perf_test_join_vcpu_threads(nr_vcpus);
+	perf_test_destroy_vm(vm);
 }
 
 static void help(char *name)
@@ -368,7 +368,7 @@ int main(int argc, char *argv[])
 			params.vcpu_memory_bytes = parse_size(optarg);
 			break;
 		case 'v':
-			params.nr_vcpus = atoi_positive("Number of vCPUs", optarg);
+			params.nr_vcpus = atoi(optarg);
 			break;
 		case 'o':
 			overlap_memory_access = true;

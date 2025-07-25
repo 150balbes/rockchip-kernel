@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
+ * Copyright (C) Rockchip Electronics Co., Ltd.
  * Author:Mark Yao <mark.yao@rock-chips.com>
  */
 
 #ifndef _ROCKCHIP_DRM_FBDEV_H
 #define _ROCKCHIP_DRM_FBDEV_H
 
-#ifdef CONFIG_DRM_FBDEV_EMULATION
+#if defined(CONFIG_DRM_FBDEV_EMULATION)
 int rockchip_drm_fbdev_init(struct drm_device *dev);
 void rockchip_drm_fbdev_fini(struct drm_device *dev);
 #else

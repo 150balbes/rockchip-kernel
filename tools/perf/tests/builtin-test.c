@@ -38,11 +38,9 @@ struct test_suite *__weak arch_tests[] = {
 
 static struct test_suite *generic_tests[] = {
 	&suite__vmlinux_matches_kallsyms,
-#ifdef HAVE_LIBTRACEEVENT
 	&suite__openat_syscall_event,
 	&suite__openat_syscall_event_on_all_cpus,
 	&suite__basic_mmap,
-#endif
 	&suite__mem,
 	&suite__parse_events,
 	&suite__expr,
@@ -53,10 +51,8 @@ static struct test_suite *generic_tests[] = {
 	&suite__dso_data_cache,
 	&suite__dso_data_reopen,
 	&suite__perf_evsel__roundtrip_name_test,
-#ifdef HAVE_LIBTRACEEVENT
 	&suite__perf_evsel__tp_sched_test,
 	&suite__syscall_openat_tp_fields,
-#endif
 	&suite__attr,
 	&suite__hists_link,
 	&suite__python_use,
@@ -75,9 +71,7 @@ static struct test_suite *generic_tests[] = {
 	&suite__thread_maps_share,
 	&suite__hists_output,
 	&suite__hists_cumulate,
-#ifdef HAVE_LIBTRACEEVENT
 	&suite__switch_tracking,
-#endif
 	&suite__fdarray__filter,
 	&suite__fdarray__add,
 	&suite__kmod_path__parse,
@@ -116,7 +110,6 @@ static struct test_suite *generic_tests[] = {
 	&suite__perf_time_to_tsc,
 	&suite__dlfilter,
 	&suite__sigtrap,
-	&suite__event_groups,
 	NULL,
 };
 
@@ -305,7 +298,7 @@ static int shell_test__run(struct test_suite *test, int subdir __maybe_unused)
 
 	path__join(script, sizeof(script) - 3, st->dir, st->file);
 
-	if (verbose > 0)
+	if (verbose)
 		strncat(script, " -v", sizeof(script) - strlen(script) - 1);
 
 	err = system(script);

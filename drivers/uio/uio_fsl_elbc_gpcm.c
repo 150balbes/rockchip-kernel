@@ -390,13 +390,13 @@ static int uio_fsl_elbc_gpcm_probe(struct platform_device *pdev)
 	info->priv = priv;
 	info->name = uio_name;
 	info->version = "0.0.1";
-	if (irq) {
+	if (irq != NO_IRQ) {
 		if (priv->irq_handler) {
 			info->irq = irq;
 			info->irq_flags = IRQF_SHARED;
 			info->handler = priv->irq_handler;
 		} else {
-			irq = 0;
+			irq = NO_IRQ;
 			dev_warn(priv->dev, "ignoring irq, no handler\n");
 		}
 	}
@@ -417,7 +417,7 @@ static int uio_fsl_elbc_gpcm_probe(struct platform_device *pdev)
 	dev_info(priv->dev,
 		 "eLBC/GPCM device (%s) at 0x%llx, bank %d, irq=%d\n",
 		 priv->name, (unsigned long long)res.start, priv->bank,
-		 irq ? : -1);
+		 irq != NO_IRQ ? irq : -1);
 
 	return 0;
 out_err2:

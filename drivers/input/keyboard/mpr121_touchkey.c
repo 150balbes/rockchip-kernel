@@ -230,7 +230,8 @@ err_i2c_write:
 	return ret;
 }
 
-static int mpr_touchkey_probe(struct i2c_client *client)
+static int mpr_touchkey_probe(struct i2c_client *client,
+			      const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct regulator *vdd_supply;
@@ -340,7 +341,7 @@ static int mpr_touchkey_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int mpr_suspend(struct device *dev)
+static int __maybe_unused mpr_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 
@@ -352,7 +353,7 @@ static int mpr_suspend(struct device *dev)
 	return 0;
 }
 
-static int mpr_resume(struct device *dev)
+static int __maybe_unused mpr_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct mpr121_touchkey *mpr121 = i2c_get_clientdata(client);
@@ -366,7 +367,7 @@ static int mpr_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(mpr121_touchkey_pm_ops, mpr_suspend, mpr_resume);
+static SIMPLE_DEV_PM_OPS(mpr121_touchkey_pm_ops, mpr_suspend, mpr_resume);
 
 static const struct i2c_device_id mpr121_id[] = {
 	{ "mpr121_touchkey", 0 },
@@ -385,11 +386,11 @@ MODULE_DEVICE_TABLE(of, mpr121_touchkey_dt_match_table);
 static struct i2c_driver mpr_touchkey_driver = {
 	.driver = {
 		.name	= "mpr121",
-		.pm	= pm_sleep_ptr(&mpr121_touchkey_pm_ops),
+		.pm	= &mpr121_touchkey_pm_ops,
 		.of_match_table = of_match_ptr(mpr121_touchkey_dt_match_table),
 	},
 	.id_table	= mpr121_id,
-	.probe_new	= mpr_touchkey_probe,
+	.probe		= mpr_touchkey_probe,
 };
 
 module_i2c_driver(mpr_touchkey_driver);

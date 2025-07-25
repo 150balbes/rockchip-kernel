@@ -2347,7 +2347,6 @@ hi_command(struct i2c_device_addr *dev_addr, const struct drxj_hi_cmd *cmd, u16 
 		do {
 			nr_retries++;
 			if (nr_retries > DRXJ_MAX_RETRIES) {
-				rc = -ETIMEDOUT;
 				pr_err("timeout\n");
 				goto rw_error;
 			}
@@ -12369,7 +12368,7 @@ error:
 
 	return NULL;
 }
-EXPORT_SYMBOL(drx39xxj_attach);
+EXPORT_SYMBOL_GPL(drx39xxj_attach);
 
 static const struct dvb_frontend_ops drx39xxj_ops = {
 	.delsys = { SYS_ATSC, SYS_DVBC_ANNEX_B },

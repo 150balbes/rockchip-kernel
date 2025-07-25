@@ -20,12 +20,12 @@
 #include <linux/kdebug.h>
 #include <linux/slab.h>
 #include <linux/moduleloader.h>
-#include <linux/set_memory.h>
 #include <asm/code-patching.h>
 #include <asm/cacheflush.h>
 #include <asm/sstep.h>
 #include <asm/sections.h>
 #include <asm/inst.h>
+#include <asm/set_memory.h>
 #include <linux/uaccess.h>
 
 DEFINE_PER_CPU(struct kprobe *, current_kprobe) = NULL;
@@ -134,9 +134,10 @@ void *alloc_insn_page(void)
 	if (!page)
 		return NULL;
 
-	if (strict_module_rwx_enabled())
-		set_memory_rox((unsigned long)page, 1);
-
+	if (strict_module_rwx_enabled()) {
+		set_memory_ro((unsigned long)page, 1);
+		set_memory_x((unsigned long)page, 1);
+	}
 	return page;
 }
 
@@ -157,7 +158,9 @@ int arch_prepare_kprobe(struct kprobe *p)
 		printk("Cannot register a kprobe on the second word of prefixed instruction\n");
 		ret = -EINVAL;
 	}
+	preempt_disable();
 	prev = get_kprobe(p->addr - 1);
+	preempt_enable_no_resched();
 
 	/*
 	 * When prev is a ftrace-based kprobe, we don't have an insn, and it
@@ -368,7 +371,7 @@ int kprobe_handler(struct pt_regs *regs)
 
 			if (ret > 0) {
 				restore_previous_kprobe(kcb);
-				preempt_enable();
+				preempt_enable_no_resched();
 				return 1;
 			}
 		}
@@ -381,7 +384,7 @@ int kprobe_handler(struct pt_regs *regs)
 	if (p->pre_handler && p->pre_handler(p, regs)) {
 		/* handler changed execution path, so skip ss setup */
 		reset_current_kprobe();
-		preempt_enable();
+		preempt_enable_no_resched();
 		return 1;
 	}
 
@@ -394,7 +397,7 @@ int kprobe_handler(struct pt_regs *regs)
 
 			kcb->kprobe_status = KPROBE_HIT_SSDONE;
 			reset_current_kprobe();
-			preempt_enable();
+			preempt_enable_no_resched();
 			return 1;
 		}
 	}
@@ -403,7 +406,7 @@ int kprobe_handler(struct pt_regs *regs)
 	return 1;
 
 no_kprobe:
-	preempt_enable();
+	preempt_enable_no_resched();
 	return ret;
 }
 NOKPROBE_SYMBOL(kprobe_handler);
@@ -489,7 +492,7 @@ int kprobe_post_handler(struct pt_regs *regs)
 	}
 	reset_current_kprobe();
 out:
-	preempt_enable();
+	preempt_enable_no_resched();
 
 	/*
 	 * if somebody else is singlestepping across a probe point, msr
@@ -528,7 +531,7 @@ int kprobe_fault_handler(struct pt_regs *regs, int trapnr)
 			restore_previous_kprobe(kcb);
 		else
 			reset_current_kprobe();
-		preempt_enable();
+		preempt_enable_no_resched();
 		break;
 	case KPROBE_HIT_ACTIVE:
 	case KPROBE_HIT_SSDONE:

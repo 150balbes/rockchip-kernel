@@ -43,7 +43,8 @@ static const struct of_device_id of_lp87565_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, of_lp87565_match_table);
 
-static int lp87565_probe(struct i2c_client *client)
+static int lp87565_probe(struct i2c_client *client,
+			 const struct i2c_device_id *ids)
 {
 	struct lp87565 *lp87565;
 	const struct of_device_id *of_id;
@@ -119,7 +120,7 @@ static struct i2c_driver lp87565_driver = {
 		.name	= "lp87565",
 		.of_match_table = of_lp87565_match_table,
 	},
-	.probe_new = lp87565_probe,
+	.probe = lp87565_probe,
 	.shutdown = lp87565_shutdown,
 	.id_table = lp87565_id_table,
 };

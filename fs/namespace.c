@@ -75,22 +75,6 @@ static DECLARE_RWSEM(namespace_sem);
 static HLIST_HEAD(unmounted);	/* protected by namespace_sem */
 static LIST_HEAD(ex_mountpoints); /* protected by namespace_sem */
 
-struct mnt_idmap {
-	struct user_namespace *owner;
-	refcount_t count;
-};
-
-/*
- * Carries the initial idmapping of 0:0:4294967295 which is an identity
- * mapping. This means that {g,u}id 0 is mapped to {g,u}id 0, {g,u}id 1 is
- * mapped to {g,u}id 1, [...], {g,u}id 1000 to {g,u}id 1000, [...].
- */
-struct mnt_idmap nop_mnt_idmap = {
-	.owner	= &init_user_ns,
-	.count	= REFCOUNT_INIT(1),
-};
-EXPORT_SYMBOL_GPL(nop_mnt_idmap);
-
 struct mount_kattr {
 	unsigned int attr_set;
 	unsigned int attr_clr;
@@ -98,7 +82,6 @@ struct mount_kattr {
 	unsigned int lookup_flags;
 	bool recurse;
 	struct user_namespace *mnt_userns;
-	struct mnt_idmap *mnt_idmap;
 };
 
 /* /sys/fs */
@@ -210,104 +193,6 @@ int mnt_get_count(struct mount *mnt)
 #endif
 }
 
-/**
- * mnt_idmap_owner - retrieve owner of the mount's idmapping
- * @idmap: mount idmapping
- *
- * This helper will go away once the conversion to use struct mnt_idmap
- * everywhere has finished at which point the helper will be unexported.
- *
- * Only code that needs to perform permission checks based on the owner of the
- * idmapping will get access to it. All other code will solely rely on
- * idmappings. This will get us type safety so it's impossible to conflate
- * filesystems idmappings with mount idmappings.
- *
- * Return: The owner of the idmapping.
- */
-struct user_namespace *mnt_idmap_owner(const struct mnt_idmap *idmap)
-{
-	return idmap->owner;
-}
-EXPORT_SYMBOL_GPL(mnt_idmap_owner);
-
-/**
- * mnt_user_ns - retrieve owner of an idmapped mount
- * @mnt: the relevant vfsmount
- *
- * This helper will go away once the conversion to use struct mnt_idmap
- * everywhere has finished at which point the helper will be unexported.
- *
- * Only code that needs to perform permission checks based on the owner of the
- * idmapping will get access to it. All other code will solely rely on
- * idmappings. This will get us type safety so it's impossible to conflate
- * filesystems idmappings with mount idmappings.
- *
- * Return: The owner of the idmapped.
- */
-struct user_namespace *mnt_user_ns(const struct vfsmount *mnt)
-{
-	struct mnt_idmap *idmap = mnt_idmap(mnt);
-
-	/* Return the actual owner of the filesystem instead of the nop. */
-	if (idmap == &nop_mnt_idmap &&
-	    !initial_idmapping(mnt->mnt_sb->s_user_ns))
-		return mnt->mnt_sb->s_user_ns;
-	return mnt_idmap_owner(idmap);
-}
-EXPORT_SYMBOL_GPL(mnt_user_ns);
-
-/**
- * alloc_mnt_idmap - allocate a new idmapping for the mount
- * @mnt_userns: owning userns of the idmapping
- *
- * Allocate a new struct mnt_idmap which carries the idmapping of the mount.
- *
- * Return: On success a new idmap, on error an error pointer is returned.
- */
-static struct mnt_idmap *alloc_mnt_idmap(struct user_namespace *mnt_userns)
-{
-	struct mnt_idmap *idmap;
-
-	idmap = kzalloc(sizeof(struct mnt_idmap), GFP_KERNEL_ACCOUNT);
-	if (!idmap)
-		return ERR_PTR(-ENOMEM);
-
-	idmap->owner = get_user_ns(mnt_userns);
-	refcount_set(&idmap->count, 1);
-	return idmap;
-}
-
-/**
- * mnt_idmap_get - get a reference to an idmapping
- * @idmap: the idmap to bump the reference on
- *
- * If @idmap is not the @nop_mnt_idmap bump the reference count.
- *
- * Return: @idmap with reference count bumped if @not_mnt_idmap isn't passed.
- */
-static inline struct mnt_idmap *mnt_idmap_get(struct mnt_idmap *idmap)
-{
-	if (idmap != &nop_mnt_idmap)
-		refcount_inc(&idmap->count);
-
-	return idmap;
-}
-
-/**
- * mnt_idmap_put - put a reference to an idmapping
- * @idmap: the idmap to put the reference on
- *
- * If this is a non-initial idmapping, put the reference count when a mount is
- * released and free it if we're the last user.
- */
-static inline void mnt_idmap_put(struct mnt_idmap *idmap)
-{
-	if (idmap != &nop_mnt_idmap && refcount_dec_and_test(&idmap->count)) {
-		put_user_ns(idmap->owner);
-		kfree(idmap);
-	}
-}
-
 static struct mount *alloc_vfsmnt(const char *name)
 {
 	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
@@ -347,7 +232,7 @@ static struct mount *alloc_vfsmnt(const char *name)
 		INIT_HLIST_NODE(&mnt->mnt_mp_list);
 		INIT_LIST_HEAD(&mnt->mnt_umounting);
 		INIT_HLIST_HEAD(&mnt->mnt_stuck_children);
-		mnt->mnt.mnt_idmap = &nop_mnt_idmap;
+		mnt->mnt.mnt_userns = &init_user_ns;
 	}
 	return mnt;
 
@@ -717,7 +602,11 @@ int sb_prepare_remount_readonly(struct super_block *sb)
 
 static void free_vfsmnt(struct mount *mnt)
 {
-	mnt_idmap_put(mnt_idmap(&mnt->mnt));
+	struct user_namespace *mnt_userns;
+
+	mnt_userns = mnt_user_ns(&mnt->mnt);
+	if (!initial_idmapping(mnt_userns))
+		put_user_ns(mnt_userns);
 	kfree_const(mnt->mnt_devname);
 #ifdef CONFIG_SMP
 	free_percpu(mnt->mnt_pcp);
@@ -1120,6 +1009,7 @@ static struct mount *skip_mnt_tree(struct mount *p)
 struct vfsmount *vfs_create_mount(struct fs_context *fc)
 {
 	struct mount *mnt;
+	struct user_namespace *fs_userns;
 
 	if (!fc->root)
 		return ERR_PTR(-EINVAL);
@@ -1136,6 +1026,10 @@ struct vfsmount *vfs_create_mount(struct fs_context *fc)
 	mnt->mnt.mnt_root	= dget(fc->root);
 	mnt->mnt_mountpoint	= mnt->mnt.mnt_root;
 	mnt->mnt_parent		= mnt;
+
+	fs_userns = mnt->mnt.mnt_sb->s_user_ns;
+	if (!initial_idmapping(fs_userns))
+		mnt->mnt.mnt_userns = get_user_ns(fs_userns);
 
 	lock_mount_hash();
 	list_add_tail(&mnt->mnt_instance, &mnt->mnt.mnt_sb->s_mounts);
@@ -1226,8 +1120,9 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
 
 	atomic_inc(&sb->s_active);
-	mnt->mnt.mnt_idmap = mnt_idmap_get(mnt_idmap(&old->mnt));
-
+	mnt->mnt.mnt_userns = mnt_user_ns(&old->mnt);
+	if (!initial_idmapping(mnt->mnt.mnt_userns))
+		mnt->mnt.mnt_userns = get_user_ns(mnt->mnt.mnt_userns);
 	mnt->mnt.mnt_sb = sb;
 	mnt->mnt.mnt_root = dget(root);
 	mnt->mnt_mountpoint = mnt->mnt.mnt_root;
@@ -2798,7 +2693,12 @@ static int do_remount(struct path *path, int ms_flags, int sb_flags,
 	if (IS_ERR(fc))
 		return PTR_ERR(fc);
 
+	/*
+	 * Indicate to the filesystem that the remount request is coming
+	 * from the legacy mount system call.
+	 */
 	fc->oldapi = true;
+
 	err = parse_monolithic_mount_data(fc, data);
 	if (!err) {
 		down_write(&sb->s_umount);
@@ -3131,6 +3031,12 @@ static int do_new_mount(struct path *path, const char *fstype, int sb_flags,
 	put_filesystem(type);
 	if (IS_ERR(fc))
 		return PTR_ERR(fc);
+
+	/*
+	 * Indicate to the filesystem that the mount request is coming
+	 * from the legacy mount system call.
+	 */
+	fc->oldapi = true;
 
 	if (subtype)
 		err = vfs_parse_fs_string(fc, "subtype",
@@ -3620,9 +3526,8 @@ struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
 		q = next_mnt(q, new);
 		if (!q)
 			break;
-		// an mntns binding we'd skipped?
 		while (p->mnt.mnt_root != q->mnt.mnt_root)
-			p = next_mnt(skip_mnt_tree(p), old);
+			p = next_mnt(p, old);
 	}
 	namespace_unlock();
 
@@ -4087,14 +3992,14 @@ static int can_idmap_mount(const struct mount_kattr *kattr, struct mount *mnt)
 	struct vfsmount *m = &mnt->mnt;
 	struct user_namespace *fs_userns = m->mnt_sb->s_user_ns;
 
-	if (!kattr->mnt_idmap)
+	if (!kattr->mnt_userns)
 		return 0;
 
 	/*
 	 * Creating an idmapped mount with the filesystem wide idmapping
 	 * doesn't make sense so block that. We don't allow mushy semantics.
 	 */
-	if (mnt_idmap_owner(kattr->mnt_idmap) == fs_userns)
+	if (kattr->mnt_userns == fs_userns)
 		return -EINVAL;
 
 	/*
@@ -4134,7 +4039,7 @@ static inline bool mnt_allow_writers(const struct mount_kattr *kattr,
 {
 	return (!(kattr->attr_set & MNT_READONLY) ||
 		(mnt->mnt.mnt_flags & MNT_READONLY)) &&
-	       !kattr->mnt_idmap;
+	       !kattr->mnt_userns;
 }
 
 static int mount_setattr_prepare(struct mount_kattr *kattr, struct mount *mnt)
@@ -4188,18 +4093,27 @@ static int mount_setattr_prepare(struct mount_kattr *kattr, struct mount *mnt)
 
 static void do_idmap_mount(const struct mount_kattr *kattr, struct mount *mnt)
 {
-	if (!kattr->mnt_idmap)
+	struct user_namespace *mnt_userns, *old_mnt_userns;
+
+	if (!kattr->mnt_userns)
 		return;
 
 	/*
-	 * Pairs with smp_load_acquire() in mnt_idmap().
-	 *
-	 * Since we only allow a mount to change the idmapping once and
-	 * verified this in can_idmap_mount() we know that the mount has
-	 * @nop_mnt_idmap attached to it. So there's no need to drop any
-	 * references.
+	 * We're the only ones able to change the mount's idmapping. So
+	 * mnt->mnt.mnt_userns is stable and we can retrieve it directly.
 	 */
-	smp_store_release(&mnt->mnt.mnt_idmap, mnt_idmap_get(kattr->mnt_idmap));
+	old_mnt_userns = mnt->mnt.mnt_userns;
+
+	mnt_userns = get_user_ns(kattr->mnt_userns);
+	/* Pairs with smp_load_acquire() in mnt_user_ns(). */
+	smp_store_release(&mnt->mnt.mnt_userns, mnt_userns);
+
+	/*
+	 * If this is an idmapped filesystem drop the reference we've taken
+	 * in vfs_create_mount() before.
+	 */
+	if (!initial_idmapping(old_mnt_userns))
+		put_user_ns(old_mnt_userns);
 }
 
 static void mount_setattr_commit(struct mount_kattr *kattr, struct mount *mnt)
@@ -4233,15 +4147,6 @@ static int do_mount_setattr(struct path *path, struct mount_kattr *kattr)
 	if (path->dentry != mnt->mnt.mnt_root)
 		return -EINVAL;
 
-	if (kattr->mnt_userns) {
-		struct mnt_idmap *mnt_idmap;
-
-		mnt_idmap = alloc_mnt_idmap(kattr->mnt_userns);
-		if (IS_ERR(mnt_idmap))
-			return PTR_ERR(mnt_idmap);
-		kattr->mnt_idmap = mnt_idmap;
-	}
-
 	if (kattr->propagation) {
 		/*
 		 * Only take namespace_lock() if we're actually changing
@@ -4267,10 +4172,15 @@ static int do_mount_setattr(struct path *path, struct mount_kattr *kattr)
 	/*
 	 * If this is an attached mount make sure it's located in the callers
 	 * mount namespace. If it's not don't let the caller interact with it.
-	 * If this is a detached mount make sure it has an anonymous mount
-	 * namespace attached to it, i.e. we've created it via OPEN_TREE_CLONE.
+	 *
+	 * If this mount doesn't have a parent it's most often simply a
+	 * detached mount with an anonymous mount namespace. IOW, something
+	 * that's simply not attached yet. But there are apparently also users
+	 * that do change mount properties on the rootfs itself. That obviously
+	 * neither has a parent nor is it a detached mount so we cannot
+	 * unconditionally check for detached mounts.
 	 */
-	if (!(mnt_has_parent(mnt) ? check_mnt(mnt) : is_anon_ns(mnt->mnt_ns)))
+	if ((mnt_has_parent(mnt) || !is_anon_ns(mnt->mnt_ns)) && !check_mnt(mnt))
 		goto out;
 
 	/*
@@ -4286,9 +4196,9 @@ out:
 	unlock_mount_hash();
 
 	if (kattr->propagation) {
-		namespace_unlock();
 		if (err)
 			cleanup_group_ids(mnt, NULL);
+		namespace_unlock();
 	}
 
 	return err;
@@ -4429,9 +4339,6 @@ static void finish_mount_kattr(struct mount_kattr *kattr)
 {
 	put_user_ns(kattr->mnt_userns);
 	kattr->mnt_userns = NULL;
-
-	if (kattr->mnt_idmap)
-		mnt_idmap_put(kattr->mnt_idmap);
 }
 
 SYSCALL_DEFINE5(mount_setattr, int, dfd, const char __user *, path,

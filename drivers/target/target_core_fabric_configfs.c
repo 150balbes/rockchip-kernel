@@ -11,7 +11,6 @@
 *
  ****************************************************************************/
 
-#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/utsname.h>
@@ -830,7 +829,7 @@ static ssize_t target_fabric_tpg_base_enable_store(struct config_item *item,
 	int ret;
 	bool op;
 
-	ret = kstrtobool(page, &op);
+	ret = strtobool(page, &op);
 	if (ret)
 		return ret;
 

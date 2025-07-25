@@ -17,7 +17,6 @@ properties:
   compatible:
     oneOf:
       - enum:
-          - fsl,imx93-flexcan
           - fsl,imx8qm-flexcan
           - fsl,imx8mp-flexcan
           - fsl,imx6q-flexcan

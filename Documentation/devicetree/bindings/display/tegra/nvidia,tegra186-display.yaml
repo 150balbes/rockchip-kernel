@@ -138,6 +138,7 @@ examples:
                  <&bpmp TEGRA186_CLK_NVDISPLAY_DSC>,
                  <&bpmp TEGRA186_CLK_NVDISPLAYHUB>;
         clock-names = "disp", "dsc", "hub";
+        status = "disabled";
 
         power-domains = <&bpmp TEGRA186_POWER_DOMAIN_DISP>;
 
@@ -226,6 +227,7 @@ examples:
         clocks = <&bpmp TEGRA194_CLK_NVDISPLAY_DISP>,
                  <&bpmp TEGRA194_CLK_NVDISPLAYHUB>;
         clock-names = "disp", "hub";
+        status = "disabled";
 
         power-domains = <&bpmp TEGRA194_POWER_DOMAIN_DISP>;
 

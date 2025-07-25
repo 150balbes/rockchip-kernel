@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) Rockchip Electronics Co.Ltd
+ * Copyright (C) Rockchip Electronics Co., Ltd.
  * Author:
  *      Algea Cao <algea.cao@rock-chips.com>
  */
@@ -13,6 +13,7 @@
 #define CONFIG_REG					0xc
 #define CONFIG_CEC					BIT(28)
 #define CONFIG_AUD_UD					BIT(23)
+#define CONFIG_HDCP14					BIT(8)
 #define CORE_TIMESTAMP_HHMM				0x14
 #define CORE_TIMESTAMP_MMDD				0x18
 #define CORE_TIMESTAMP_YYYY				0x1c
@@ -59,6 +60,9 @@
 #define I2CM_ADDR					0xff000
 #define I2CM_SLVADDR					0xfe0
 #define I2CM_WR_MASK					0x1e
+#define I2CM_NBYTES_MASK				(0xf << 20)
+#define I2CM_16BYTES					(0xf << 20)
+#define I2CM_1BYTES					(0 << 20)
 #define I2CM_EXT_READ					BIT(4)
 #define I2CM_SHORT_READ					BIT(3)
 #define I2CM_FM_READ					BIT(2)
@@ -138,6 +142,8 @@
 #define FRAME_COMPOSER_CONFIG7				0x85c
 #define FRAME_COMPOSER_CONFIG8				0x860
 #define FRAME_COMPOSER_CONFIG9				0x864
+#define KEEPOUT_REKEY_CFG				GENMASK(9, 8)
+#define KEEPOUT_REKEY_ALWAYS				(0x2 << 8)
 #define FRAME_COMPOSER_CONTROL0				0x86c
 /* Video Monitor Registers */
 #define VIDEO_MONITOR_CONFIG0				0x880
@@ -153,9 +159,16 @@
 #define HDCP2_BYPASS					BIT(0)
 #define HDCP2LOGIC_ESM_GPIO_IN				0x8e4
 #define HDCP2LOGIC_ESM_GPIO_OUT				0x8e8
+#define HDCP2_AUTHENTICATION_NOT_CAPABLE		(BIT(1) << 4)
+#define HDCP2_AUTHENTICATION_SUCCESS			(BIT(2) << 4)
+#define HDCP2_AUTHENTICATION_FAILED			(BIT(3) << 4)
+#define HDCP2_AUTHENTICATION_LINK_ERR			(BIT(4) << 4)
 /* HDCP14 Registers */
 #define HDCP14_CONFIG0					0x900
+#define HDCP14_OESS_ESSS_OVR_VALUE                      BIT(14)
+#define HDCP14_OESS_ESSS_OVR_EN                         BIT(13)
 #define HDCP14_CONFIG1					0x904
+#define HDCP14_SHA1_MSG_CORRECT_P                       BIT(3)
 #define HDCP14_CONFIG2					0x908
 #define HDCP14_CONFIG3					0x90c
 #define HDCP14_KEY_SEED					0x914
@@ -167,7 +180,10 @@
 #define HDCP14_AN_H					0x92c
 #define HDCP14_AN_L					0x930
 #define HDCP14_STATUS0					0x934
+#define HDCP14_RPT_DEVICE_COUNT                         0xFE00
 #define HDCP14_STATUS1					0x938
+#define HDCP14_RCV_REPEATER                             BIT(6)
+#define HDCP14_RCV_KSV_FIFO_READY                       BIT(5)
 /* Scrambler Registers */
 #define SCRAMB_CONFIG0					0x960
 /* Video Configuration Registers */
@@ -195,6 +211,7 @@
 #define PKTSCHED_PRQUEUE2_CONFIG2			0xa94
 #define PKTSCHED_PKT_CONFIG0				0xa98
 #define PKTSCHED_PKT_CONFIG1				0xa9c
+#define PKTSCHED_VSI_FIELDRATE				BIT(14)
 #define PKTSCHED_DRMI_FIELDRATE				BIT(13)
 #define PKTSCHED_AVI_FIELDRATE				BIT(12)
 #define PKTSCHED_PKT_CONFIG2				0xaa0
@@ -203,6 +220,7 @@
 #define PKTSCHED_DRMI_TX_EN				BIT(17)
 #define PKTSCHED_AUDI_TX_EN				BIT(15)
 #define PKTSCHED_AVI_TX_EN				BIT(13)
+#define PKTSCHED_VSI_TX_EN				BIT(12)
 #define PKTSCHED_EMP_CVTEM_TX_EN			BIT(10)
 #define PKTSCHED_AMD_TX_EN				BIT(8)
 #define PKTSCHED_GCP_TX_EN				BIT(3)
@@ -788,6 +806,7 @@
 #define AVP_1_INT_STATUS				0x3820
 #define AVP_1_INT_MASK_N				0x3824
 #define HDCP14_AUTH_CHG_MASK_N				BIT(6)
+#define HDCP14_KSV_LIST_DONE_MASK_N		        BIT(1)
 #define AVP_1_INT_CLEAR					0x3828
 #define AVP_1_INT_FORCE					0x382c
 #define AVP_2_INT_STATUS				0x3830
@@ -798,6 +817,7 @@
 #define AVP_3_INT_MASK_N				0x3844
 #define AVP_3_INT_CLEAR					0x3848
 #define AVP_3_INT_FORCE					0x384c
+#define HDCP2_ESM_P0_GPIO_OUT_2_CHG_IRQ			BIT(17)
 #define AVP_4_INT_STATUS				0x3850
 #define AVP_4_INT_MASK_N				0x3854
 #define AVP_4_INT_CLEAR					0x3858
@@ -827,5 +847,14 @@
 #define EARCRX_1_INT_MASK_N				0x4824
 #define EARCRX_1_INT_CLEAR				0x4828
 #define EARCRX_1_INT_FORCE				0x482c
+
+#define HDMI_HDCP14_MEM_KSV0				0x4f08
+#define HDMI_HDCP14_MEM_BSTATUS0			0x5958
+#define HDMI_HDCP14_MEM_M0_1				0x5960
+#define HDMI_HDCP14_MEM_M0_7				0x597c
+
+#define SCDC_CONFIG_1					0x31
+#define SCDC_SOURCE_TEST_CONFIG				0x35
+#define SCDC_STATUS_FLAGS_2				0x42
 
 #endif /* __DW_HDMI_QP_H__ */

@@ -91,8 +91,6 @@
 #define DA_EMULATE_ALUA				0
 /* Emulate SCSI2 RESERVE/RELEASE and Persistent Reservations by default */
 #define DA_EMULATE_PR				1
-/* Emulation for REPORT SUPPORTED OPERATION CODES */
-#define DA_EMULATE_RSOC				1
 /* Enforce SCSI Initiator Port TransportID with 'ISID' for PR */
 #define DA_ENFORCE_PR_ISIDS			1
 /* Force SPC-3 PR Activate Persistence across Target Power Loss */
@@ -494,6 +492,7 @@ struct se_cmd {
 	struct se_lun		*se_lun;
 	/* Only used for internal passthrough and legacy TCM fabric modules */
 	struct se_session	*se_sess;
+	struct target_cmd_counter *cmd_cnt;
 	struct se_tmr_req	*se_tmr_req;
 	struct llist_node	se_cmd_list;
 	struct completion	*free_compl;
@@ -619,22 +618,26 @@ static inline struct se_node_acl *fabric_stat_to_nacl(struct config_item *item)
 			acl_fabric_stat_group);
 }
 
-struct se_session {
+struct target_cmd_counter {
+	struct percpu_ref	refcnt;
+	wait_queue_head_t	refcnt_wq;
+	struct completion	stop_done;
 	atomic_t		stopped;
+};
+
+struct se_session {
 	u64			sess_bin_isid;
 	enum target_prot_op	sup_prot_ops;
 	enum target_prot_type	sess_prot_type;
 	struct se_node_acl	*se_node_acl;
 	struct se_portal_group *se_tpg;
 	void			*fabric_sess_ptr;
-	struct percpu_ref	cmd_count;
 	struct list_head	sess_list;
 	struct list_head	sess_acl_list;
 	spinlock_t		sess_cmd_lock;
-	wait_queue_head_t	cmd_count_wq;
-	struct completion	stop_done;
 	void			*sess_cmd_map;
 	struct sbitmap_queue	sess_tag_pool;
+	struct target_cmd_counter *cmd_cnt;
 };
 
 struct se_device;
@@ -692,7 +695,6 @@ struct se_dev_attrib {
 	bool		emulate_caw;
 	bool		emulate_3pc;
 	bool		emulate_pr;
-	bool		emulate_rsoc;
 	enum target_prot_type pi_prot_type;
 	enum target_prot_type hw_pi_prot_type;
 	bool		pi_prot_verify;
@@ -712,6 +714,7 @@ struct se_dev_attrib {
 	u32		unmap_granularity;
 	u32		unmap_granularity_alignment;
 	u32		max_write_same_len;
+	u32		max_bytes_per_io;
 	struct se_device *da_dev;
 	struct config_group da_group;
 };
@@ -867,21 +870,7 @@ struct se_device {
 	struct rcu_head		rcu_head;
 	int			queue_cnt;
 	struct se_device_queue	*queues;
-};
-
-struct target_opcode_descriptor {
-	u8			support:3;
-	u8			serv_action_valid:1;
-	u8			opcode;
-	u16			service_action;
-	u32			cdb_size;
-	u8			specific_timeout;
-	u16			nominal_timeout;
-	u16			recommended_timeout;
-	bool			(*enabled)(struct se_cmd *cmd);
-	void			(*update_usage_bits)(u8 *usage_bits,
-						     struct se_device *dev);
-	u8			usage_bits[];
+	struct mutex		lun_reset_mutex;
 };
 
 struct se_hba {

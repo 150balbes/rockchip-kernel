@@ -28,7 +28,7 @@
 
 #define LIOINTC_INTC_CHIP_START	0x20
 
-#define LIOINTC_REG_INTC_STATUS	(LIOINTC_INTC_CHIP_START + 0x20)
+#define LIOINTC_REG_INTC_STATUS(core)	(LIOINTC_INTC_CHIP_START + 0x20 + (core) * 8)
 #define LIOINTC_REG_INTC_EN_STATUS	(LIOINTC_INTC_CHIP_START + 0x04)
 #define LIOINTC_REG_INTC_ENABLE	(LIOINTC_INTC_CHIP_START + 0x08)
 #define LIOINTC_REG_INTC_DISABLE	(LIOINTC_INTC_CHIP_START + 0x0c)
@@ -167,12 +167,7 @@ static int liointc_domain_xlate(struct irq_domain *d, struct device_node *ctrlr,
 	if (WARN_ON(intsize < 1))
 		return -EINVAL;
 	*out_hwirq = intspec[0] - GSI_MIN_CPU_IRQ;
-
-	if (intsize > 1)
-		*out_type = intspec[1] & IRQ_TYPE_SENSE_MASK;
-	else
-		*out_type = IRQ_TYPE_NONE;
-
+	*out_type = IRQ_TYPE_NONE;
 	return 0;
 }
 
@@ -201,7 +196,7 @@ static int liointc_init(phys_addr_t addr, unsigned long size, int revision,
 		goto out_free_priv;
 
 	for (i = 0; i < LIOINTC_NUM_CORES; i++)
-		priv->core_isr[i] = base + LIOINTC_REG_INTC_STATUS;
+		priv->core_isr[i] = base + LIOINTC_REG_INTC_STATUS(i);
 
 	for (i = 0; i < LIOINTC_NUM_PARENT; i++)
 		priv->handler[i].parent_int_map = parent_int_map[i];
@@ -357,26 +352,6 @@ IRQCHIP_DECLARE(loongson_liointc_2_0, "loongson,liointc-2.0", liointc_of_init);
 #endif
 
 #ifdef CONFIG_ACPI
-static int __init htintc_parse_madt(union acpi_subtable_headers *header,
-					const unsigned long end)
-{
-	struct acpi_madt_ht_pic *htintc_entry = (struct acpi_madt_ht_pic *)header;
-	struct irq_domain *parent = irq_find_matching_fwnode(liointc_handle, DOMAIN_BUS_ANY);
-
-	return htvec_acpi_init(parent, htintc_entry);
-}
-
-static int __init acpi_cascade_irqdomain_init(void)
-{
-	int r;
-
-	r = acpi_table_parse_madt(ACPI_MADT_TYPE_HT_PIC, htintc_parse_madt, 0);
-	if (r < 0)
-		return r;
-
-	return 0;
-}
-
 int __init liointc_acpi_init(struct irq_domain *parent, struct acpi_madt_lio_pic *acpi_liointc)
 {
 	int ret;
@@ -393,12 +368,9 @@ int __init liointc_acpi_init(struct irq_domain *parent, struct acpi_madt_lio_pic
 		pr_err("Unable to allocate domain handle\n");
 		return -ENOMEM;
 	}
-
 	ret = liointc_init(acpi_liointc->address, acpi_liointc->size,
 			   1, domain_handle, NULL);
-	if (ret == 0)
-		ret = acpi_cascade_irqdomain_init();
-	else
+	if (ret)
 		irq_domain_free_fwnode(domain_handle);
 
 	return ret;

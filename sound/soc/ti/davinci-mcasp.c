@@ -869,7 +869,7 @@ static int mcasp_common_hw_param(struct davinci_mcasp *mcasp, int stream,
 	if (mcasp->op_mode == DAVINCI_MCASP_DIT_MODE)
 		max_active_serializers = 1;
 	else
-		max_active_serializers = DIV_ROUND_UP(channels, slots);
+		max_active_serializers = (channels + slots - 1) / slots;
 
 	/* Default configuration */
 	if (mcasp->version < MCASP_VERSION_3)
@@ -1002,7 +1002,8 @@ static int mcasp_i2s_hw_param(struct davinci_mcasp *mcasp, int stream,
 	 */
 	if (mcasp->tdm_mask[stream]) {
 		active_slots = hweight32(mcasp->tdm_mask[stream]);
-		active_serializers = DIV_ROUND_UP(channels, active_slots);
+		active_serializers = (channels + active_slots - 1) /
+			active_slots;
 		if (active_serializers == 1)
 			active_slots = channels;
 		for (i = 0; i < total_slots; i++) {
@@ -1013,7 +1014,7 @@ static int mcasp_i2s_hw_param(struct davinci_mcasp *mcasp, int stream,
 			}
 		}
 	} else {
-		active_serializers = DIV_ROUND_UP(channels, total_slots);
+		active_serializers = (channels + total_slots - 1) / total_slots;
 		if (active_serializers == 1)
 			active_slots = channels;
 		else
@@ -2415,12 +2416,6 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 
 	mcasp_reparent_fck(pdev);
 
-	ret = devm_snd_soc_register_component(&pdev->dev, &davinci_mcasp_component,
-					      &davinci_mcasp_dai[mcasp->op_mode], 1);
-
-	if (ret != 0)
-		goto err;
-
 	ret = davinci_mcasp_get_dma_type(mcasp);
 	switch (ret) {
 	case PCM_EDMA:
@@ -2446,6 +2441,12 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "register PCM failed: %d\n", ret);
 		goto err;
 	}
+
+	ret = devm_snd_soc_register_component(&pdev->dev, &davinci_mcasp_component,
+					      &davinci_mcasp_dai[mcasp->op_mode], 1);
+
+	if (ret != 0)
+		goto err;
 
 no_audio:
 	ret = davinci_mcasp_init_gpiochip(mcasp);

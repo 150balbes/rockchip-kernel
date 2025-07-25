@@ -20,7 +20,6 @@ struct sample {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 4096);
 } ringbuf SEC(".maps");
 
 struct {

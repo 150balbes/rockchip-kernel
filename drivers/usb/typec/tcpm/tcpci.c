@@ -593,6 +593,10 @@ static int tcpci_init(struct tcpc_dev *tcpc)
 	if (time_after(jiffies, timeout))
 		return -ETIMEDOUT;
 
+	ret = tcpci_write16(tcpci, TCPC_FAULT_STATUS, TCPC_FAULT_STATUS_ALL_REG_RST_TO_DEFAULT);
+	if (ret < 0)
+		return ret;
+
 	/* Handle vendor init */
 	if (tcpci->data->init) {
 		ret = tcpci->data->init(tcpci, tcpci->data);
@@ -810,7 +814,8 @@ void tcpci_unregister_port(struct tcpci *tcpci)
 }
 EXPORT_SYMBOL_GPL(tcpci_unregister_port);
 
-static int tcpci_probe(struct i2c_client *client)
+static int tcpci_probe(struct i2c_client *client,
+		       const struct i2c_device_id *i2c_id)
 {
 	struct tcpci_chip *chip;
 	int err;
@@ -870,6 +875,7 @@ MODULE_DEVICE_TABLE(i2c, tcpci_id);
 #ifdef CONFIG_OF
 static const struct of_device_id tcpci_of_match[] = {
 	{ .compatible = "nxp,ptn5110", },
+	{ .compatible = "tcpci", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, tcpci_of_match);
@@ -880,7 +886,7 @@ static struct i2c_driver tcpci_i2c_driver = {
 		.name = "tcpci",
 		.of_match_table = of_match_ptr(tcpci_of_match),
 	},
-	.probe_new = tcpci_probe,
+	.probe = tcpci_probe,
 	.remove = tcpci_remove,
 	.id_table = tcpci_id,
 };

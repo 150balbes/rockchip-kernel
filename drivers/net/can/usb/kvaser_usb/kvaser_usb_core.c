@@ -124,6 +124,7 @@ static const struct kvaser_usb_driver_info kvaser_usb_driver_info_leaf_err_liste
 
 static const struct kvaser_usb_driver_info kvaser_usb_driver_info_leafimx = {
 	.quirks = 0,
+	.family = KVASER_LEAF,
 	.ops = &kvaser_usb_leaf_dev_ops,
 };
 
@@ -536,11 +537,12 @@ static int kvaser_usb_set_bittiming(struct net_device *netdev)
 	struct kvaser_usb *dev = priv->dev;
 	const struct kvaser_usb_dev_ops *ops = dev->driver_info->ops;
 	struct can_bittiming *bt = &priv->can.bittiming;
+
 	struct kvaser_usb_busparams busparams;
 	int tseg1 = bt->prop_seg + bt->phase_seg1;
 	int tseg2 = bt->phase_seg2;
 	int sjw = bt->sjw;
-	int err;
+	int err = -EOPNOTSUPP;
 
 	busparams.bitrate = cpu_to_le32(bt->bitrate);
 	busparams.sjw = (u8)sjw;
@@ -580,6 +582,7 @@ static int kvaser_usb_set_data_bittiming(struct net_device *netdev)
 	struct kvaser_usb *dev = priv->dev;
 	const struct kvaser_usb_dev_ops *ops = dev->driver_info->ops;
 	struct can_bittiming *dbt = &priv->can.data_bittiming;
+
 	struct kvaser_usb_busparams busparams;
 	int tseg1 = dbt->prop_seg + dbt->phase_seg1;
 	int tseg2 = dbt->phase_seg2;

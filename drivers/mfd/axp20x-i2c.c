@@ -22,7 +22,8 @@
 #include <linux/regmap.h>
 #include <linux/slab.h>
 
-static int axp20x_i2c_probe(struct i2c_client *i2c)
+static int axp20x_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct axp20x_dev *axp20x;
 	int ret;
@@ -99,7 +100,7 @@ static struct i2c_driver axp20x_i2c_driver = {
 		.of_match_table	= of_match_ptr(axp20x_i2c_of_match),
 		.acpi_match_table = ACPI_PTR(axp20x_i2c_acpi_match),
 	},
-	.probe_new	= axp20x_i2c_probe,
+	.probe		= axp20x_i2c_probe,
 	.remove		= axp20x_i2c_remove,
 	.id_table	= axp20x_i2c_id,
 };

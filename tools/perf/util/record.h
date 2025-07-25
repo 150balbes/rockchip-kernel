@@ -13,6 +13,7 @@ struct option;
 
 struct record_opts {
 	struct target target;
+	bool	      group;
 	bool	      inherit_stat;
 	bool	      no_buffering;
 	bool	      no_inherit;

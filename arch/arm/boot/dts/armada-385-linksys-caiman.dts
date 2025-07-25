@@ -62,11 +62,11 @@
 };
 
 &gpio_leds {
-	led-power {
+	power {
 		label = "caiman:white:power";
 	};
 
-	led-sata {
+	sata {
 		label = "caiman:white:sata";
 	};
 };

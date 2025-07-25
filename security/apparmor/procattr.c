@@ -17,13 +17,14 @@
 
 
 /**
- * aa_getprocattr - Return the label information for @label
- * @label: the label to print label info about  (NOT NULL)
- * @string: Returns - string containing the label info (NOT NULL)
+ * aa_getprocattr - Return the profile information for @profile
+ * @profile: the profile to print profile info about  (NOT NULL)
+ * @string: Returns - string containing the profile info (NOT NULL)
  *
- * Requires: label != NULL && string != NULL
+ * Requires: profile != NULL
  *
- * Creates a string containing the label information for @label.
+ * Creates a string containing the namespace_name://profile_name for
+ * @profile.
  *
  * Returns: size of string placed in @string else error code on failure
  */

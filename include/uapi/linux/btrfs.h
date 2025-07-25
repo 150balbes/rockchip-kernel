@@ -19,14 +19,8 @@
 
 #ifndef _UAPI_LINUX_BTRFS_H
 #define _UAPI_LINUX_BTRFS_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <linux/types.h>
 #include <linux/ioctl.h>
-#include <linux/fs.h>
 
 #define BTRFS_IOCTL_MAGIC 0x94
 #define BTRFS_VOL_NAME_MAX 255
@@ -187,6 +181,7 @@ struct btrfs_scrub_progress {
 };
 
 #define BTRFS_SCRUB_READONLY	1
+#define BTRFS_SCRUB_SUPPORTED_FLAGS	(BTRFS_SCRUB_READONLY)
 struct btrfs_ioctl_scrub_args {
 	__u64 devid;				/* in */
 	__u64 start;				/* in */
@@ -339,12 +334,6 @@ struct btrfs_ioctl_feature_flags {
  */
 struct btrfs_balance_args {
 	__u64 profiles;
-
-	/*
-	 * usage filter
-	 * BTRFS_BALANCE_ARGS_USAGE with a single value means '0..N'
-	 * BTRFS_BALANCE_ARGS_USAGE_RANGE - range syntax, min..max
-	 */
 	union {
 		__u64 usage;
 		struct {
@@ -561,7 +550,7 @@ struct btrfs_ioctl_search_header {
 	__u64 offset;
 	__u32 type;
 	__u32 len;
-} __attribute__ ((__may_alias__));
+};
 
 #define BTRFS_SEARCH_ARGS_BUFSIZE (4096 - sizeof(struct btrfs_ioctl_search_key))
 /*
@@ -574,10 +563,6 @@ struct btrfs_ioctl_search_args {
 	char buf[BTRFS_SEARCH_ARGS_BUFSIZE];
 };
 
-/*
- * Extended version of TREE_SEARCH ioctl that can return more than 4k of bytes.
- * The allocated size of the buffer is set in buf_size.
- */
 struct btrfs_ioctl_search_args_v2 {
 	struct btrfs_ioctl_search_key key; /* in/out - search parameters */
 	__u64 buf_size;		   /* in - size of buffer
@@ -586,11 +571,10 @@ struct btrfs_ioctl_search_args_v2 {
 	__u64 buf[];                       /* out - found items */
 };
 
-/* With a @src_length of zero, the range from @src_offset->EOF is cloned! */
 struct btrfs_ioctl_clone_range_args {
-	__s64 src_fd;
-	__u64 src_offset, src_length;
-	__u64 dest_offset;
+  __s64 src_fd;
+  __u64 src_offset, src_length;
+  __u64 dest_offset;
 };
 
 /*
@@ -601,6 +585,9 @@ struct btrfs_ioctl_clone_range_args {
  */
 #define BTRFS_DEFRAG_RANGE_COMPRESS 1
 #define BTRFS_DEFRAG_RANGE_START_IO 2
+#define BTRFS_DEFRAG_RANGE_FLAGS_SUPP	(BTRFS_DEFRAG_RANGE_COMPRESS |		\
+					 BTRFS_DEFRAG_RANGE_START_IO)
+
 struct btrfs_ioctl_defrag_range_args {
 	/* start of the defrag operation */
 	__u64 start;
@@ -694,11 +681,8 @@ struct btrfs_ioctl_logical_ino_args {
 	/* struct btrfs_data_container	*inodes;	out   */
 	__u64				inodes;
 };
-
-/*
- * Return every ref to the extent, not just those containing logical block.
- * Requires logical == extent bytenr.
- */
+/* Return every ref to the extent, not just those containing logical block.
+ * Requires logical == extent bytenr. */
 #define BTRFS_LOGICAL_INO_ARGS_IGNORE_OFFSET	(1ULL << 0)
 
 enum btrfs_dev_stat_values {
@@ -1163,9 +1147,5 @@ enum btrfs_err_code {
 				    struct btrfs_ioctl_encoded_io_args)
 #define BTRFS_IOC_ENCODED_WRITE _IOW(BTRFS_IOCTL_MAGIC, 64, \
 				     struct btrfs_ioctl_encoded_io_args)
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* _UAPI_LINUX_BTRFS_H */

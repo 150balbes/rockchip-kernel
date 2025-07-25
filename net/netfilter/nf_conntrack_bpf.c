@@ -191,16 +191,19 @@ BTF_ID(struct, nf_conn___init)
 
 /* Check writes into `struct nf_conn` */
 static int _nf_conntrack_btf_struct_access(struct bpf_verifier_log *log,
-					   const struct bpf_reg_state *reg,
-					   int off, int size, enum bpf_access_type atype,
-					   u32 *next_btf_id, enum bpf_type_flag *flag)
+					   const struct btf *btf,
+					   const struct btf_type *t, int off,
+					   int size, enum bpf_access_type atype,
+					   u32 *next_btf_id,
+					   enum bpf_type_flag *flag)
 {
-	const struct btf_type *ncit, *nct, *t;
+	const struct btf_type *ncit;
+	const struct btf_type *nct;
 	size_t end;
 
-	ncit = btf_type_by_id(reg->btf, btf_nf_conn_ids[1]);
-	nct = btf_type_by_id(reg->btf, btf_nf_conn_ids[0]);
-	t = btf_type_by_id(reg->btf, reg->btf_id);
+	ncit = btf_type_by_id(btf, btf_nf_conn_ids[1]);
+	nct = btf_type_by_id(btf, btf_nf_conn_ids[0]);
+
 	if (t != nct && t != ncit) {
 		bpf_log(log, "only read is supported\n");
 		return -EACCES;
@@ -381,6 +384,8 @@ struct nf_conn *bpf_ct_insert_entry(struct nf_conn___init *nfct_i)
 	struct nf_conn *nfct = (struct nf_conn *)nfct_i;
 	int err;
 
+	if (!nf_ct_is_confirmed(nfct))
+		nfct->timeout += nfct_time_stamp;
 	nfct->status |= IPS_CONFIRMED;
 	err = nf_conntrack_hash_check_insert(nfct);
 	if (err < 0) {

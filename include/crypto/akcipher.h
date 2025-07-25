@@ -43,12 +43,9 @@ struct akcipher_request {
  * struct crypto_akcipher - user-instantiated objects which encapsulate
  * algorithms and core processing logic
  *
- * @reqsize:	Request context size required by algorithm implementation
  * @base:	Common crypto API algorithm data structure
  */
 struct crypto_akcipher {
-	unsigned int reqsize;
-
 	struct crypto_tfm base;
 };
 
@@ -89,6 +86,7 @@ struct crypto_akcipher {
  *		counterpart to @init, used to remove various changes set in
  *		@init.
  *
+ * @reqsize:	Request context size required by algorithm implementation
  * @base:	Common crypto API algorithm data structure
  */
 struct akcipher_alg {
@@ -104,6 +102,7 @@ struct akcipher_alg {
 	int (*init)(struct crypto_akcipher *tfm);
 	void (*exit)(struct crypto_akcipher *tfm);
 
+	unsigned int reqsize;
 	struct crypto_alg base;
 };
 
@@ -156,7 +155,7 @@ static inline struct akcipher_alg *crypto_akcipher_alg(
 
 static inline unsigned int crypto_akcipher_reqsize(struct crypto_akcipher *tfm)
 {
-	return tfm->reqsize;
+	return crypto_akcipher_alg(tfm)->reqsize;
 }
 
 static inline void akcipher_request_set_tfm(struct akcipher_request *req,

@@ -10,7 +10,7 @@
 #include <linux/completion.h>
 #include <linux/bug.h>
 #include <crypto/hash.h>
-#include "messages.h"
+
 #include "ctree.h"
 #include "discard.h"
 #include "disk-io.h"
@@ -22,8 +22,6 @@
 #include "block-group.h"
 #include "qgroup.h"
 #include "misc.h"
-#include "fs.h"
-#include "accessors.h"
 
 /*
  * Structure name                       Path
@@ -250,7 +248,7 @@ static ssize_t btrfs_feature_attr_store(struct kobject *kobj,
 	/*
 	 * We don't want to do full transaction commit from inside sysfs
 	 */
-	set_bit(BTRFS_FS_NEED_TRANS_COMMIT, &fs_info->flags);
+	btrfs_set_pending(fs_info, COMMIT);
 	wake_up_process(fs_info->transaction_kthread);
 
 	return count;
@@ -764,7 +762,7 @@ static ssize_t btrfs_chunk_size_store(struct kobject *kobj,
 	val = min(val, BTRFS_MAX_DATA_CHUNK_SIZE);
 
 	/* Limit stripe size to 10% of available space. */
-	val = min(mult_perc(fs_info->fs_devices->total_rw_bytes, 10), val);
+	val = min(div_factor(fs_info->fs_devices->total_rw_bytes, 1), val);
 
 	/* Must be multiple of 256M. */
 	val &= ~((u64)SZ_256M - 1);
@@ -961,7 +959,7 @@ static ssize_t btrfs_label_store(struct kobject *kobj,
 	/*
 	 * We don't want to do full transaction commit from inside sysfs
 	 */
-	set_bit(BTRFS_FS_NEED_TRANS_COMMIT, &fs_info->flags);
+	btrfs_set_pending(fs_info, COMMIT);
 	wake_up_process(fs_info->transaction_kthread);
 
 	return len;
@@ -1162,16 +1160,16 @@ static ssize_t btrfs_read_policy_show(struct kobject *kobj,
 
 	for (i = 0; i < BTRFS_NR_READ_POLICY; i++) {
 		if (fs_devices->read_policy == i)
-			ret += sysfs_emit_at(buf, ret, "%s[%s]",
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%s[%s]",
 					 (ret == 0 ? "" : " "),
 					 btrfs_read_policy_name[i]);
 		else
-			ret += sysfs_emit_at(buf, ret, "%s%s",
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%s%s",
 					 (ret == 0 ? "" : " "),
 					 btrfs_read_policy_name[i]);
 	}
 
-	ret += sysfs_emit_at(buf, ret, "\n");
+	ret += scnprintf(buf + ret, PAGE_SIZE - ret, "\n");
 
 	return ret;
 }
@@ -1706,6 +1704,10 @@ static ssize_t btrfs_devinfo_scrub_speed_max_store(struct kobject *kobj,
 	unsigned long long limit;
 
 	limit = memparse(buf, &endptr);
+	/* There could be trailing '\n', also catch any typos after the value. */
+	endptr = skip_spaces(endptr);
+	if (*endptr != 0)
+		return -EINVAL;
 	WRITE_ONCE(device->scrub_speed_max, limit);
 	return len;
 }

@@ -14,6 +14,11 @@
 
 struct btrtl_device_info;
 
+struct rtl_chip_type_evt {
+	__u8 status;
+	__u8 type;
+} __packed;
+
 struct rtl_download_cmd {
 	__u8 index;
 	__u8 data[RTL_FRAG_LEN];
@@ -46,27 +51,6 @@ struct rtl_vendor_config {
 	__le16 total_len;
 	struct rtl_vendor_config_entry entry[];
 } __packed;
-
-enum {
-	REALTEK_ALT6_CONTINUOUS_TX_CHIP,
-
-	__REALTEK_NUM_FLAGS,
-};
-
-struct btrealtek_data {
-	DECLARE_BITMAP(flags, __REALTEK_NUM_FLAGS);
-};
-
-#define btrealtek_set_flag(hdev, nr)					\
-	do {								\
-		struct btrealtek_data *realtek = hci_get_priv((hdev));	\
-		set_bit((nr), realtek->flags);				\
-	} while (0)
-
-#define btrealtek_get_flag(hdev)					\
-	(((struct btrealtek_data *)hci_get_priv(hdev))->flags)
-
-#define btrealtek_test_flag(hdev, nr)	test_bit((nr), btrealtek_get_flag(hdev))
 
 #if IS_ENABLED(CONFIG_BT_RTL)
 

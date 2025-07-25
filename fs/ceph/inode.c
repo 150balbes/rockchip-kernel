@@ -126,7 +126,7 @@ const struct inode_operations ceph_file_iops = {
 	.setattr = ceph_setattr,
 	.getattr = ceph_getattr,
 	.listxattr = ceph_listxattr,
-	.get_inode_acl = ceph_get_acl,
+	.get_acl = ceph_get_acl,
 	.set_acl = ceph_set_acl,
 };
 
@@ -362,7 +362,7 @@ static int ceph_fill_fragtree(struct inode *inode,
 	if (nsplits != ci->i_fragtree_nsplits) {
 		update = true;
 	} else if (nsplits) {
-		i = get_random_u32_below(nsplits);
+		i = prandom_u32_max(nsplits);
 		id = le32_to_cpu(fragtree->splits[i].frag);
 		if (!__ceph_find_frag(ci, id))
 			update = true;
@@ -655,9 +655,7 @@ int ceph_fill_file_size(struct inode *inode, int issued,
 			ci->i_truncate_seq = truncate_seq;
 
 			/* the MDS should have revoked these caps */
-			WARN_ON_ONCE(issued & (CEPH_CAP_FILE_EXCL |
-					       CEPH_CAP_FILE_RD |
-					       CEPH_CAP_FILE_WR |
+			WARN_ON_ONCE(issued & (CEPH_CAP_FILE_RD |
 					       CEPH_CAP_FILE_LAZYIO));
 			/*
 			 * If we hold relevant caps, or in the case where we're
@@ -1909,7 +1907,7 @@ static void ceph_do_invalidate_pages(struct inode *inode)
 	mutex_unlock(&ci->i_truncate_mutex);
 out:
 	if (check)
-		ceph_check_caps(ci, 0);
+		ceph_check_caps(ci, 0, NULL);
 }
 
 /*
@@ -1969,7 +1967,7 @@ retry:
 	mutex_unlock(&ci->i_truncate_mutex);
 
 	if (wrbuffer_refs == 0)
-		ceph_check_caps(ci, 0);
+		ceph_check_caps(ci, 0, NULL);
 
 	wake_up_all(&ci->i_cap_wq);
 }
@@ -1991,7 +1989,7 @@ static void ceph_inode_work(struct work_struct *work)
 		__ceph_do_pending_vmtruncate(inode);
 
 	if (test_and_clear_bit(CEPH_I_WORK_CHECK_CAPS, &ci->i_work_mask))
-		ceph_check_caps(ci, 0);
+		ceph_check_caps(ci, 0, NULL);
 
 	if (test_and_clear_bit(CEPH_I_WORK_FLUSH_SNAPS, &ci->i_work_mask))
 		ceph_flush_snaps(ci, NULL);
@@ -2255,7 +2253,7 @@ int ceph_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 	err = __ceph_setattr(inode, attr);
 
 	if (err >= 0 && (attr->ia_valid & ATTR_MODE))
-		err = posix_acl_chmod(&init_user_ns, dentry, attr->ia_mode);
+		err = posix_acl_chmod(&init_user_ns, inode, attr->ia_mode);
 
 	return err;
 }

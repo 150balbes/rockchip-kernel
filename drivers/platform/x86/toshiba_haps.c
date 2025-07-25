@@ -138,12 +138,14 @@ static void toshiba_haps_notify(struct acpi_device *device, u32 event)
 					event, 0);
 }
 
-static void toshiba_haps_remove(struct acpi_device *device)
+static int toshiba_haps_remove(struct acpi_device *device)
 {
 	sysfs_remove_group(&device->dev.kobj, &haps_attr_group);
 
 	if (toshiba_haps)
 		toshiba_haps = NULL;
+
+	return 0;
 }
 
 /* Helper function */

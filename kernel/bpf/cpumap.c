@@ -4,16 +4,13 @@
  * Copyright (c) 2017 Jesper Dangaard Brouer, Red Hat Inc.
  */
 
-/**
- * DOC: cpu map
- * The 'cpumap' is primarily used as a backend map for XDP BPF helper
+/* The 'cpumap' is primarily used as a backend map for XDP BPF helper
  * call bpf_redirect_map() and XDP_REDIRECT action, like 'devmap'.
  *
- * Unlike devmap which redirects XDP frames out to another NIC device,
+ * Unlike devmap which redirects XDP frames out another NIC device,
  * this map type redirects raw XDP frames to another CPU.  The remote
  * CPU will do SKB-allocation and call the normal network stack.
- */
-/*
+ *
  * This is a scalability and isolation mechanism, that allow
  * separating the early driver network XDP layer, from the rest of the
  * netstack, and assigning dedicated CPUs for this stage.  This
@@ -29,6 +26,7 @@
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
 #include <linux/capability.h>
+#include <linux/completion.h>
 #include <trace/events/xdp.h>
 #include <linux/btf_ids.h>
 
@@ -74,6 +72,7 @@ struct bpf_cpu_map_entry {
 	struct rcu_head rcu;
 
 	struct work_struct kthread_stop_wq;
+	struct completion kthread_running;
 };
 
 struct bpf_cpu_map {
@@ -88,6 +87,7 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 {
 	u32 value_size = attr->value_size;
 	struct bpf_cpu_map *cmap;
+	int err = -ENOMEM;
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
@@ -99,31 +99,67 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	    attr->map_flags & ~BPF_F_NUMA_NODE)
 		return ERR_PTR(-EINVAL);
 
-	/* Pre-limit array size based on NR_CPUS, not final CPU check */
-	if (attr->max_entries > NR_CPUS)
-		return ERR_PTR(-E2BIG);
-
 	cmap = bpf_map_area_alloc(sizeof(*cmap), NUMA_NO_NODE);
 	if (!cmap)
 		return ERR_PTR(-ENOMEM);
 
 	bpf_map_init_from_attr(&cmap->map, attr);
 
+	/* Pre-limit array size based on NR_CPUS, not final CPU check */
+	if (cmap->map.max_entries > NR_CPUS) {
+		err = -E2BIG;
+		goto free_cmap;
+	}
+
 	/* Alloc array for possible remote "destination" CPUs */
 	cmap->cpu_map = bpf_map_area_alloc(cmap->map.max_entries *
 					   sizeof(struct bpf_cpu_map_entry *),
 					   cmap->map.numa_node);
-	if (!cmap->cpu_map) {
-		bpf_map_area_free(cmap);
-		return ERR_PTR(-ENOMEM);
-	}
+	if (!cmap->cpu_map)
+		goto free_cmap;
 
 	return &cmap->map;
+free_cmap:
+	bpf_map_area_free(cmap);
+	return ERR_PTR(err);
 }
 
 static void get_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
 {
 	atomic_inc(&rcpu->refcnt);
+}
+
+static void __cpu_map_ring_cleanup(struct ptr_ring *ring)
+{
+	/* The tear-down procedure should have made sure that queue is
+	 * empty.  See __cpu_map_entry_replace() and work-queue
+	 * invoked cpu_map_kthread_stop(). Catch any broken behaviour
+	 * gracefully and warn once.
+	 */
+	void *ptr;
+
+	while ((ptr = ptr_ring_consume(ring))) {
+		WARN_ON_ONCE(1);
+		if (unlikely(__ptr_test_bit(0, &ptr))) {
+			__ptr_clear_bit(0, &ptr);
+			kfree_skb(ptr);
+			continue;
+		}
+		xdp_return_frame(ptr);
+	}
+}
+
+static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
+{
+	if (atomic_dec_and_test(&rcpu->refcnt)) {
+		if (rcpu->prog)
+			bpf_prog_put(rcpu->prog);
+		/* The queue should be empty at this point */
+		__cpu_map_ring_cleanup(rcpu->queue);
+		ptr_ring_cleanup(rcpu->queue, NULL);
+		kfree(rcpu->queue);
+		kfree(rcpu);
+	}
 }
 
 /* called from workqueue, to workaround syscall using preempt_disable */
@@ -140,33 +176,6 @@ static void cpu_map_kthread_stop(struct work_struct *work)
 
 	/* kthread_stop will wake_up_process and wait for it to complete */
 	kthread_stop(rcpu->kthread);
-}
-
-static void __cpu_map_ring_cleanup(struct ptr_ring *ring)
-{
-	/* The tear-down procedure should have made sure that queue is
-	 * empty.  See __cpu_map_entry_replace() and work-queue
-	 * invoked cpu_map_kthread_stop(). Catch any broken behaviour
-	 * gracefully and warn once.
-	 */
-	struct xdp_frame *xdpf;
-
-	while ((xdpf = ptr_ring_consume(ring)))
-		if (WARN_ON_ONCE(xdpf))
-			xdp_return_frame(xdpf);
-}
-
-static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
-{
-	if (atomic_dec_and_test(&rcpu->refcnt)) {
-		if (rcpu->prog)
-			bpf_prog_put(rcpu->prog);
-		/* The queue should be empty at this point */
-		__cpu_map_ring_cleanup(rcpu->queue);
-		ptr_ring_cleanup(rcpu->queue, NULL);
-		kfree(rcpu->queue);
-		kfree(rcpu);
-	}
 }
 
 static void cpu_map_bpf_prog_run_skb(struct bpf_cpu_map_entry *rcpu,
@@ -213,7 +222,7 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 				    void **frames, int n,
 				    struct xdp_cpumap_stats *stats)
 {
-	struct xdp_rxq_info rxq;
+	struct xdp_rxq_info rxq = {};
 	struct xdp_buff xdp;
 	int i, nframes = 0;
 
@@ -294,11 +303,12 @@ static int cpu_map_bpf_prog_run(struct bpf_cpu_map_entry *rcpu, void **frames,
 	return nframes;
 }
 
-
 static int cpu_map_kthread_run(void *data)
 {
 	struct bpf_cpu_map_entry *rcpu = data;
+	unsigned long last_qs = jiffies;
 
+	complete(&rcpu->kthread_running);
 	set_current_state(TASK_INTERRUPTIBLE);
 
 	/* When kthread gives stop order, then rcpu have been disconnected
@@ -322,10 +332,12 @@ static int cpu_map_kthread_run(void *data)
 			if (__ptr_ring_empty(rcpu->queue)) {
 				schedule();
 				sched = 1;
+				last_qs = jiffies;
 			} else {
 				__set_current_state(TASK_RUNNING);
 			}
 		} else {
+			rcu_softirq_qs_periodic(last_qs);
 			sched = cond_resched();
 		}
 
@@ -463,6 +475,7 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 		goto free_ptr_ring;
 
 	/* Setup kthread */
+	init_completion(&rcpu->kthread_running);
 	rcpu->kthread = kthread_create_on_node(cpu_map_kthread_run, rcpu, numa,
 					       "cpumap/%d/map:%d", cpu,
 					       map->id);
@@ -475,6 +488,12 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 	/* Make sure kthread runs on a single CPU */
 	kthread_bind(rcpu->kthread, cpu);
 	wake_up_process(rcpu->kthread);
+
+	/* Make sure kthread has been running, so kthread_stop() will not
+	 * stop the kthread prematurely and all pending frames or skbs
+	 * will be handled by the kthread before kthread_stop() returns.
+	 */
+	wait_for_completion(&rcpu->kthread_running);
 
 	return rcpu;
 
@@ -667,9 +686,9 @@ static int cpu_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 	return 0;
 }
 
-static int cpu_map_redirect(struct bpf_map *map, u64 index, u64 flags)
+static int cpu_map_redirect(struct bpf_map *map, u32 ifindex, u64 flags)
 {
-	return __bpf_xdp_redirect_map(map, index, flags, 0,
+	return __bpf_xdp_redirect_map(map, ifindex, flags, 0,
 				      __cpu_map_lookup_elem);
 }
 

@@ -1,5 +1,5 @@
 /*
- * (C) COPYRIGHT RockChip Limited. All rights reserved.
+ * (C) COPYRIGHT Rockchip Electronics Co., Ltd. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -57,6 +57,13 @@
  */
 
 /*---------------------------------------------------------------------------*/
+#ifndef CONFIG_MALI_BIFROST_DEVFREQ
+static inline void kbase_pm_get_dvfs_metrics(struct kbase_device *kbdev,
+					     struct kbasep_pm_metrics *last,
+					     struct kbasep_pm_metrics *diff)
+{
+}
+#endif
 
 #ifdef CONFIG_REGULATOR
 static int rk_pm_enable_regulator(struct kbase_device *kbdev);
@@ -87,6 +94,7 @@ static void rk_pm_power_off_delay_work(struct work_struct *work)
 	struct rk_context *platform =
 		container_of(to_delayed_work(work), struct rk_context, work);
 	struct kbase_device *kbdev = platform->kbdev;
+	struct rockchip_opp_info *opp_info = &kbdev->opp_info;
 
 	mutex_lock(&platform->lock);
 
@@ -96,12 +104,12 @@ static void rk_pm_power_off_delay_work(struct work_struct *work)
 		return;
 	}
 
-	rockchip_monitor_volt_adjust_lock(kbdev->mdev_info);
+	rockchip_opp_dvfs_lock(opp_info);
 	if (pm_runtime_enabled(kbdev->dev)) {
 		D("to put_sync_suspend mali_dev.");
 		pm_runtime_put_sync_suspend(kbdev->dev);
 	}
-	rockchip_monitor_volt_adjust_unlock(kbdev->mdev_info);
+	rockchip_opp_dvfs_unlock(opp_info);
 
 	rk_pm_disable_clk(kbdev);
 
@@ -111,7 +119,7 @@ static void rk_pm_power_off_delay_work(struct work_struct *work)
 	}
 
 	platform->is_powered = false;
-//	wake_unlock(&platform->wake_lock);
+	wake_unlock(&platform->wake_lock);
 
 	mutex_unlock(&platform->lock);
 }
@@ -143,7 +151,7 @@ static int kbase_platform_rk_init(struct kbase_device *kbdev)
 	}
 	INIT_DEFERRABLE_WORK(&platform->work, rk_pm_power_off_delay_work);
 
-//	wake_lock_init(&platform->wake_lock, WAKE_LOCK_SUSPEND, "gpu");
+	wake_lock_init(&platform->wake_lock, WAKE_LOCK_SUSPEND, "gpu");
 
 	platform->utilisation_period = DEFAULT_UTILISATION_PERIOD_IN_MS;
 
@@ -161,7 +169,7 @@ static int kbase_platform_rk_init(struct kbase_device *kbdev)
 	return 0;
 
 err_sysfs_files:
-//	wake_lock_destroy(&platform->wake_lock);
+	wake_lock_destroy(&platform->wake_lock);
 	destroy_workqueue(platform->power_off_wq);
 err_wq:
 	return ret;
@@ -177,7 +185,7 @@ static void kbase_platform_rk_term(struct kbase_device *kbdev)
 
 	if (platform) {
 		cancel_delayed_work_sync(&platform->work);
-//		wake_lock_destroy(&platform->wake_lock);
+		wake_lock_destroy(&platform->wake_lock);
 		destroy_workqueue(platform->power_off_wq);
 		platform->is_powered = false;
 		platform->kbdev = NULL;
@@ -193,7 +201,7 @@ struct kbase_platform_funcs_conf platform_funcs = {
 
 /*---------------------------------------------------------------------------*/
 
-static int rk_pm_callback_runtime_on(struct kbase_device *kbdev)
+static __maybe_unused int rk_pm_callback_runtime_on(struct kbase_device *kbdev)
 {
 	struct rockchip_opp_info *opp_info = &kbdev->opp_info;
 	int ret = 0;
@@ -201,7 +209,7 @@ static int rk_pm_callback_runtime_on(struct kbase_device *kbdev)
 	if (!kbdev->current_nominal_freq)
 		return 0;
 
-	ret = clk_bulk_prepare_enable(opp_info->num_clks,  opp_info->clks);
+	ret = clk_bulk_prepare_enable(opp_info->nclocks,  opp_info->clocks);
 	if (ret) {
 		dev_err(kbdev->dev, "failed to enable opp clks\n");
 		return ret;
@@ -209,22 +217,21 @@ static int rk_pm_callback_runtime_on(struct kbase_device *kbdev)
 	if (opp_info->data && opp_info->data->set_read_margin)
 		opp_info->data->set_read_margin(kbdev->dev, opp_info,
 						opp_info->target_rm);
-	if (opp_info->scmi_clk) {
-		if (clk_set_rate(opp_info->scmi_clk,
-				 kbdev->current_nominal_freq))
+	if (opp_info->is_scmi_clk) {
+		if (clk_set_rate(opp_info->clk, kbdev->current_nominal_freq))
 			dev_err(kbdev->dev, "failed to restore clk rate\n");
 	}
-	clk_bulk_disable_unprepare(opp_info->num_clks, opp_info->clks);
+	clk_bulk_disable_unprepare(opp_info->nclocks, opp_info->clocks);
 
 	return 0;
 }
 
-static void rk_pm_callback_runtime_off(struct kbase_device *kbdev)
+static __maybe_unused void rk_pm_callback_runtime_off(struct kbase_device *kbdev)
 {
 	struct rockchip_opp_info *opp_info = &kbdev->opp_info;
 
-	if (opp_info->scmi_clk) {
-		if (clk_set_rate(opp_info->scmi_clk, POWER_DOWN_FREQ))
+	if (opp_info->is_scmi_clk) {
+		if (clk_set_rate(opp_info->clk, POWER_DOWN_FREQ))
 			dev_err(kbdev->dev, "failed to set power down rate\n");
 	}
 	opp_info->current_rm = UINT_MAX;
@@ -235,6 +242,7 @@ static int rk_pm_callback_power_on(struct kbase_device *kbdev)
 	int ret = 1; /* Assume GPU has been powered off */
 	int err = 0;
 	struct rk_context *platform = get_rk_context(kbdev);
+	struct rockchip_opp_info *opp_info = &kbdev->opp_info;
 
 	cancel_delayed_work_sync(&platform->work);
 
@@ -264,7 +272,7 @@ static int rk_pm_callback_power_on(struct kbase_device *kbdev)
 		goto out;
 	}
 
-	rockchip_monitor_volt_adjust_lock(kbdev->mdev_info);
+	rockchip_opp_dvfs_lock(opp_info);
 	/* 若 mali_dev 的 runtime_pm 是 enabled 的, 则... */
 	if (pm_runtime_enabled(kbdev->dev)) {
 		D("to resume mali_dev syncly.");
@@ -273,6 +281,7 @@ static int rk_pm_callback_power_on(struct kbase_device *kbdev)
 		 */
 		err = pm_runtime_get_sync(kbdev->dev);
 		if (err < 0) {
+			rockchip_opp_dvfs_unlock(opp_info);
 			E("failed to runtime resume device: %d.", err);
 			ret = err;
 			goto out;
@@ -281,10 +290,10 @@ static int rk_pm_callback_power_on(struct kbase_device *kbdev)
 			ret = 0;
 		}
 	}
-	rockchip_monitor_volt_adjust_unlock(kbdev->mdev_info);
+	rockchip_opp_dvfs_unlock(opp_info);
 
 	platform->is_powered = true;
-//	wake_lock(&platform->wake_lock);
+	wake_lock(&platform->wake_lock);
 
 out:
 	mutex_unlock(&platform->lock);
@@ -301,29 +310,22 @@ static void rk_pm_callback_power_off(struct kbase_device *kbdev)
 			   msecs_to_jiffies(platform->delay_ms));
 }
 
-static int rk_kbase_device_runtime_init(struct kbase_device *kbdev)
+static __maybe_unused int rk_kbase_device_runtime_init(struct kbase_device *kbdev)
 {
 	return 0;
 }
 
-static void rk_kbase_device_runtime_disable(struct kbase_device *kbdev)
+static __maybe_unused void rk_kbase_device_runtime_disable(struct kbase_device *kbdev)
 {
 }
 
 struct kbase_pm_callback_conf pm_callbacks = {
 	.power_on_callback = rk_pm_callback_power_on,
 	.power_off_callback = rk_pm_callback_power_off,
-#ifdef CONFIG_PM
-	.power_runtime_init_callback = rk_kbase_device_runtime_init,
-	.power_runtime_term_callback = rk_kbase_device_runtime_disable,
-	.power_runtime_on_callback = rk_pm_callback_runtime_on,
-	.power_runtime_off_callback = rk_pm_callback_runtime_off,
-#else				/* CONFIG_PM */
-	.power_runtime_init_callback = NULL,
-	.power_runtime_term_callback = NULL,
-	.power_runtime_on_callback = NULL,
-	.power_runtime_off_callback = NULL,
-#endif				/* CONFIG_PM */
+	.power_runtime_init_callback = pm_ptr(rk_kbase_device_runtime_init),
+	.power_runtime_term_callback = pm_ptr(rk_kbase_device_runtime_disable),
+	.power_runtime_on_callback = pm_ptr(rk_pm_callback_runtime_on),
+	.power_runtime_off_callback = pm_ptr(rk_pm_callback_runtime_off),
 };
 
 /*---------------------------------------------------------------------------*/
@@ -452,7 +454,7 @@ static ssize_t utilisation_show(struct device *dev,
 	unsigned long period_in_us = platform->utilisation_period * 1000;
 	u32 utilisation;
 	struct kbasep_pm_metrics metrics_when_start;
-	struct kbasep_pm_metrics metrics_diff; /* between start and end. */
+	struct kbasep_pm_metrics metrics_diff = {}; /* between start and end. */
 	u32 total_time = 0;
 	u32 busy_time = 0;
 
@@ -506,6 +508,79 @@ static void kbase_platform_rk_remove_sysfs_files(struct device *dev)
 	device_remove_file(dev, &dev_attr_utilisation);
 }
 
+static int rk3576_gpu_set_read_margin(struct device *dev,
+				      struct rockchip_opp_info *opp_info,
+				      u32 rm)
+{
+	if (!opp_info->grf || !opp_info->volt_rm_tbl)
+		return 0;
+	if (rm == opp_info->current_rm || rm == UINT_MAX)
+		return 0;
+
+	dev_dbg(dev, "set rm to %d\n", rm);
+	regmap_write(opp_info->grf, 0x3c, 0x001c0000 | (rm << 2));
+	regmap_write(opp_info->grf, 0x40, 0x001c0000 | (rm << 2));
+	regmap_write(opp_info->grf, 0x48, 0x001c0000 | (rm << 2));
+
+	opp_info->current_rm = rm;
+
+	return 0;
+}
+
+static int rk3588_gpu_get_soc_info(struct device *dev, struct device_node *np,
+			       int *bin, int *process)
+{
+	int ret = 0;
+	u8 value = 0;
+
+	if (!bin)
+		return 0;
+
+	if (of_property_match_string(np, "nvmem-cell-names",
+				     "specification_serial_number") >= 0) {
+		ret = rockchip_nvmem_cell_read_u8(np,
+						  "specification_serial_number",
+						  &value);
+		if (ret) {
+			dev_err(dev,
+				"Failed to get specification_serial_number\n");
+			return ret;
+		}
+		/* RK3588M */
+		if (value == 0xd)
+			*bin = 1;
+		/* RK3588J */
+		else if (value == 0xa)
+			*bin = 2;
+	}
+	if (*bin < 0)
+		*bin = 0;
+	dev_info(dev, "bin=%d\n", *bin);
+
+	return ret;
+}
+
+static int rk3588_gpu_set_soc_info(struct device *dev, struct device_node *np,
+				   struct rockchip_opp_info *opp_info)
+{
+	int bin = opp_info->bin;
+
+	if (opp_info->volt_sel < 0)
+		return 0;
+	if (bin < 0)
+		bin = 0;
+
+	if (!of_property_read_bool(np, "rockchip,supported-hw"))
+		return 0;
+
+	/* SoC Version */
+	opp_info->supported_hw[0] = BIT(bin);
+	/* Speed Grade */
+	opp_info->supported_hw[1] = BIT(opp_info->volt_sel);
+
+	return 0;
+}
+
 static int rk3588_gpu_set_read_margin(struct device *dev,
 				      struct rockchip_opp_info *opp_info,
 				      u32 rm)
@@ -541,11 +616,52 @@ static int rk3588_gpu_set_read_margin(struct device *dev,
 	return 0;
 }
 
+static int gpu_opp_config_regulators(struct device *dev,
+				     struct dev_pm_opp *old_opp,
+				     struct dev_pm_opp *new_opp,
+				     struct regulator **regulators,
+				     unsigned int count)
+{
+	struct kbase_device *kbdev = dev_get_drvdata(dev);
+
+	return rockchip_opp_config_regulators(dev, old_opp, new_opp, regulators,
+					      count, &kbdev->opp_info);
+}
+
+static int gpu_opp_config_clks(struct device *dev, struct opp_table *opp_table,
+			       struct dev_pm_opp *opp, void *data,
+			       bool scaling_down)
+{
+	struct kbase_device *kbdev = dev_get_drvdata(dev);
+
+	return rockchip_opp_config_clks(dev, opp_table, opp, data, scaling_down,
+					&kbdev->opp_info);
+}
+
+static const struct rockchip_opp_data rk3576_gpu_opp_data = {
+	.set_read_margin = rk3576_gpu_set_read_margin,
+	.set_soc_info = rockchip_opp_set_low_length,
+	.config_regulators = gpu_opp_config_regulators,
+	.config_clks = gpu_opp_config_clks,
+};
+
 static const struct rockchip_opp_data rk3588_gpu_opp_data = {
+	.get_soc_info = rk3588_gpu_get_soc_info,
+	.set_soc_info = rk3588_gpu_set_soc_info,
 	.set_read_margin = rk3588_gpu_set_read_margin,
+	.config_regulators = gpu_opp_config_regulators,
+	.config_clks = gpu_opp_config_clks,
+};
+
+static const struct rockchip_opp_data rockchip_gpu_opp_data = {
+	.config_clks = gpu_opp_config_clks,
 };
 
 static const struct of_device_id rockchip_mali_of_match[] = {
+	{
+		.compatible = "rockchip,rk3576",
+		.data = (void *)&rk3576_gpu_opp_data,
+	},
 	{
 		.compatible = "rockchip,rk3588",
 		.data = (void *)&rk3588_gpu_opp_data,
@@ -555,10 +671,18 @@ static const struct of_device_id rockchip_mali_of_match[] = {
 
 int kbase_platform_rk_init_opp_table(struct kbase_device *kbdev)
 {
+	struct rockchip_opp_info *info = &kbdev->opp_info;
+
+	info->data = &rockchip_gpu_opp_data;
 	rockchip_get_opp_data(rockchip_mali_of_match, &kbdev->opp_info);
 
 	return rockchip_init_opp_table(kbdev->dev, &kbdev->opp_info,
-				       "gpu_leakage", "mali");
+				       "clk_mali", "mali");
+}
+
+void kbase_platform_rk_uninit_opp_table(struct kbase_device *kbdev)
+{
+	rockchip_uninit_opp_table(kbdev->dev, &kbdev->opp_info);
 }
 
 int kbase_platform_rk_enable_regulator(struct kbase_device *kbdev)

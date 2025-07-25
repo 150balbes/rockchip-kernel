@@ -269,11 +269,15 @@ static void tps6586x_irq_sync_unlock(struct irq_data *data)
 	mutex_unlock(&tps6586x->irq_lock);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int tps6586x_irq_set_wake(struct irq_data *irq_data, unsigned int on)
 {
 	struct tps6586x *tps6586x = irq_data_get_irq_chip_data(irq_data);
 	return irq_set_irq_wake(tps6586x->irq, on);
 }
+#else
+#define tps6586x_irq_set_wake NULL
+#endif
 
 static struct irq_chip tps6586x_irq_chip = {
 	.name = "tps6586x",
@@ -281,7 +285,7 @@ static struct irq_chip tps6586x_irq_chip = {
 	.irq_bus_sync_unlock = tps6586x_irq_sync_unlock,
 	.irq_disable = tps6586x_irq_disable,
 	.irq_enable = tps6586x_irq_enable,
-	.irq_set_wake = pm_sleep_ptr(tps6586x_irq_set_wake),
+	.irq_set_wake = tps6586x_irq_set_wake,
 };
 
 static int tps6586x_irq_map(struct irq_domain *h, unsigned int virq,
@@ -495,7 +499,8 @@ static void tps6586x_print_version(struct i2c_client *client, int version)
 	dev_info(&client->dev, "Found %s, VERSIONCRC is %02x\n", name, version);
 }
 
-static int tps6586x_i2c_probe(struct i2c_client *client)
+static int tps6586x_i2c_probe(struct i2c_client *client,
+					const struct i2c_device_id *id)
 {
 	struct tps6586x_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct tps6586x *tps6586x;
@@ -619,7 +624,7 @@ static struct i2c_driver tps6586x_driver = {
 		.of_match_table = of_match_ptr(tps6586x_of_match),
 		.pm	= &tps6586x_pm_ops,
 	},
-	.probe_new	= tps6586x_i2c_probe,
+	.probe		= tps6586x_i2c_probe,
 	.remove		= tps6586x_i2c_remove,
 	.id_table	= tps6586x_id_table,
 };

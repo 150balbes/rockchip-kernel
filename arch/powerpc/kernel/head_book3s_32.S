@@ -18,8 +18,6 @@
 
 #include <linux/init.h>
 #include <linux/pgtable.h>
-#include <linux/linkage.h>
-
 #include <asm/reg.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
@@ -842,7 +840,7 @@ __secondary_start:
 	lwz	r1,TASK_STACK(r1)
 
 	/* stack */
-	addi	r1,r1,THREAD_SIZE-STACK_FRAME_MIN_SIZE
+	addi	r1,r1,THREAD_SIZE-STACK_FRAME_OVERHEAD
 	li	r0,0
 	tophys(r3,r1)
 	stw	r0,0(r3)
@@ -879,7 +877,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
  * Load stuff into the MMU.  Intended to be called with
  * IR=0 and DR=0.
  */
-SYM_FUNC_START_LOCAL(early_hash_table)
+early_hash_table:
 	sync			/* Force all PTE updates to finish */
 	isync
 	tlbia			/* Clear all TLB entries */
@@ -890,9 +888,8 @@ SYM_FUNC_START_LOCAL(early_hash_table)
 	ori	r6, r6, 3	/* 256kB table */
 	mtspr	SPRN_SDR1, r6
 	blr
-SYM_FUNC_END(early_hash_table)
 
-SYM_FUNC_START_LOCAL(load_up_mmu)
+load_up_mmu:
 	sync			/* Force all PTE updates to finish */
 	isync
 	tlbia			/* Clear all TLB entries */
@@ -921,7 +918,6 @@ BEGIN_MMU_FTR_SECTION
 	LOAD_BAT(7,r3,r4,r5)
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 	blr
-SYM_FUNC_END(load_up_mmu)
 
 _GLOBAL(load_segment_registers)
 	li	r0, NUM_USER_SEGMENTS /* load up user segment register values */
@@ -970,7 +966,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
 	lis	r1,init_thread_union@ha
 	addi	r1,r1,init_thread_union@l
 	li	r0,0
-	stwu	r0,THREAD_SIZE-STACK_FRAME_MIN_SIZE(r1)
+	stwu	r0,THREAD_SIZE-STACK_FRAME_OVERHEAD(r1)
 /*
  * Do early platform-specific initialization,
  * and set up the MMU.
@@ -1032,7 +1028,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
  * this makes sure it's done.
  *  -- Cort
  */
-SYM_FUNC_START_LOCAL(clear_bats)
+clear_bats:
 	li	r10,0
 
 	mtspr	SPRN_DBAT0U,r10
@@ -1076,7 +1072,6 @@ BEGIN_MMU_FTR_SECTION
 	mtspr	SPRN_IBAT7L,r10
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 	blr
-SYM_FUNC_END(clear_bats)
 
 _GLOBAL(update_bats)
 	lis	r4, 1f@h
@@ -1113,16 +1108,15 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 	mtspr	SPRN_SRR1, r6
 	rfi
 
-SYM_FUNC_START_LOCAL(flush_tlbs)
+flush_tlbs:
 	lis	r10, 0x40
 1:	addic.	r10, r10, -0x1000
 	tlbie	r10
 	bgt	1b
 	sync
 	blr
-SYM_FUNC_END(flush_tlbs)
 
-SYM_FUNC_START_LOCAL(mmu_off)
+mmu_off:
  	addi	r4, r3, __after_mmu_off - _start
 	mfmsr	r3
 	andi.	r0,r3,MSR_DR|MSR_IR		/* MMU enabled? */
@@ -1134,10 +1128,9 @@ SYM_FUNC_START_LOCAL(mmu_off)
 	mtspr	SPRN_SRR1,r3
 	sync
 	rfi
-SYM_FUNC_END(mmu_off)
 
 /* We use one BAT to map up to 256M of RAM at _PAGE_OFFSET */
-SYM_FUNC_START_LOCAL(initial_bats)
+initial_bats:
 	lis	r11,PAGE_OFFSET@h
 	tophys(r8,r11)
 #ifdef CONFIG_SMP
@@ -1153,10 +1146,9 @@ SYM_FUNC_START_LOCAL(initial_bats)
 	mtspr	SPRN_IBAT0U,r11
 	isync
 	blr
-SYM_FUNC_END(initial_bats)
 
 #ifdef CONFIG_BOOTX_TEXT
-SYM_FUNC_START_LOCAL(setup_disp_bat)
+setup_disp_bat:
 	/*
 	 * setup the display bat prepared for us in prom.c
 	 */
@@ -1172,11 +1164,10 @@ SYM_FUNC_START_LOCAL(setup_disp_bat)
 	mtspr	SPRN_DBAT3L,r8
 	mtspr	SPRN_DBAT3U,r11
 	blr
-SYM_FUNC_END(setup_disp_bat)
 #endif /* CONFIG_BOOTX_TEXT */
 
 #ifdef CONFIG_PPC_EARLY_DEBUG_CPM
-SYM_FUNC_START_LOCAL(setup_cpm_bat)
+setup_cpm_bat:
 	lis	r8, 0xf000
 	ori	r8, r8,	0x002a
 	mtspr	SPRN_DBAT1L, r8
@@ -1186,11 +1177,10 @@ SYM_FUNC_START_LOCAL(setup_cpm_bat)
 	mtspr	SPRN_DBAT1U, r11
 
 	blr
-SYM_FUNC_END(setup_cpm_bat)
 #endif
 
 #ifdef CONFIG_PPC_EARLY_DEBUG_USBGECKO
-SYM_FUNC_START_LOCAL(setup_usbgecko_bat)
+setup_usbgecko_bat:
 	/* prepare a BAT for early io */
 #if defined(CONFIG_GAMECUBE)
 	lis	r8, 0x0c00
@@ -1209,7 +1199,6 @@ SYM_FUNC_START_LOCAL(setup_usbgecko_bat)
 	mtspr	SPRN_DBAT1L, r8
 	mtspr	SPRN_DBAT1U, r11
 	blr
-SYM_FUNC_END(setup_usbgecko_bat)
 #endif
 
 	.data

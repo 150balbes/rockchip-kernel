@@ -51,7 +51,7 @@ static inline void *opa_vnic_dev_priv(const struct net_device *dev)
 	return oparn->dev_priv;
 }
 
-/* opa_vnic skb meta data structure */
+/* opa_vnic skb meta data structrue */
 struct opa_vnic_skb_mdata {
 	u8 vl;
 	u8 entropy;

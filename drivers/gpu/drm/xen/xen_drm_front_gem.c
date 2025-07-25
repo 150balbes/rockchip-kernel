@@ -12,6 +12,7 @@
 #include <linux/scatterlist.h>
 #include <linux/shmem_fs.h>
 
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_prime.h>
 #include <drm/drm_probe_helper.h>

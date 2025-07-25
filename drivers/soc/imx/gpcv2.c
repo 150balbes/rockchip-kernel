@@ -755,7 +755,6 @@ static const struct imx_pgc_domain imx8mm_pgc_domains[] = {
 	[IMX8MM_POWER_DOMAIN_OTG1] = {
 		.genpd = {
 			.name = "usb-otg1",
-			.flags = GENPD_FLAG_ACTIVE_WAKEUP,
 		},
 		.bits  = {
 			.pxx = IMX8MM_OTG1_SW_Pxx_REQ,
@@ -767,7 +766,6 @@ static const struct imx_pgc_domain imx8mm_pgc_domains[] = {
 	[IMX8MM_POWER_DOMAIN_OTG2] = {
 		.genpd = {
 			.name = "usb-otg2",
-			.flags = GENPD_FLAG_ACTIVE_WAKEUP,
 		},
 		.bits  = {
 			.pxx = IMX8MM_OTG2_SW_Pxx_REQ,
@@ -1234,7 +1232,6 @@ static const struct imx_pgc_domain imx8mn_pgc_domains[] = {
 	[IMX8MN_POWER_DOMAIN_OTG1] = {
 		.genpd = {
 			.name = "usb-otg1",
-			.flags = GENPD_FLAG_ACTIVE_WAKEUP,
 		},
 		.bits  = {
 			.pxx = IMX8MN_OTG1_SW_Pxx_REQ,

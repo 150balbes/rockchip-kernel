@@ -67,7 +67,7 @@
 	 * full-duplex SPI transactions are not supported by ASPEED SPI
 	 * Controllers.
 	 */
-	spi_gpio: spi {
+	spi_gpio: spi-gpio {
 		status = "okay";
 		compatible = "spi-gpio";
 		#address-cells = <1>;
