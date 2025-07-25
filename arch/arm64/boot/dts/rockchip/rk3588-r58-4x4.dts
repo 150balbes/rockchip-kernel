@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "rk3588-blueberry-r58-4X4.dts"
+
+/ {
+	model = "RK3588 R58_4X4 Board";
+	compatible = "rockchip,rk3588-R58-4X4-v10-linux", "rockchip,rk3588";
+};
