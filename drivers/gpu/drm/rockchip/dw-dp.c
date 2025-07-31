@@ -270,6 +270,18 @@
 
 #define DPTX_MAX_STREAMS			4
 
+
+//fox.luo@2024.03.20 set fixed resolution
+static const struct drm_display_mode dw_dp_default_modes[] = {
+      /* 16 - 1920x1080@60Hz 16:9 */
+      { DRM_MODE("1920x1080", DRM_MODE_TYPE_DRIVER, 148500, 1920, 2008,
+             2052, 2200, 0, 1080, 1084, 1089, 1125, 0,
+             DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC),
+        .picture_aspect_ratio = HDMI_PICTURE_ASPECT_16_9, },
+};
+
+
+
 enum {
 	RK3576_DP,
 	RK3588_DP,
@@ -1441,7 +1453,9 @@ static int dw_dp_connector_get_modes(struct drm_connector *connector)
 	struct dw_dp *dp = connector_to_dp(connector);
 	struct drm_display_info *di = &connector->display_info;
 	struct edid *edid;
+	struct drm_display_mode *mode;
 	int num_modes = 0;
+	int i;
 
 	if (dp->right && dp->right->next_bridge) {
 		struct drm_bridge *bridge = dp->right->next_bridge;
@@ -1462,7 +1476,21 @@ static int dw_dp_connector_get_modes(struct drm_connector *connector)
 		edid = drm_bridge_get_edid(&dp->bridge, connector);
 		if (edid) {
 			drm_connector_update_edid_property(connector, edid);
-			num_modes = drm_add_edid_modes(connector, edid);
+			//fox.luo@2024.03.20 set fixed resolution
+			//num_modes = drm_add_edid_modes(connector, edid);
+			for (i = 0; i < ARRAY_SIZE(dw_dp_default_modes); i++) {
+			       const struct drm_display_mode *ptr =
+			               &dw_dp_default_modes[i];
+
+			       mode = drm_mode_duplicate(connector->dev, ptr);
+			       if (mode) {
+			               if (!i)
+			                       mode->type = DRM_MODE_TYPE_PREFERRED;
+			               drm_mode_probed_add(connector, mode);
+			               num_modes++;
+
+			       }
+			}			
 			dw_dp_update_hdr_property(connector);
 			kfree(edid);
 		}
